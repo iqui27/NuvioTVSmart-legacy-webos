@@ -536,7 +536,32 @@ function getStreamDescriptionLines(stream = {}) {
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => !looksLikeReleaseFilename(line, stream))
+    .map((line) => stripSizeAndBitrateSegments(line))
+    .filter(Boolean)
     .slice(0, 12);
+}
+
+/**
+ * O tamanho e o bitrate saem do card por pedido explicito: as badges ja dizem
+ * container, resolucao e faixa dinamica, e o numero de GB nunca decide a escolha.
+ *
+ * Mas a linha que os carrega tambem carrega os idiomas
+ * (`3.56 GB | 4.4 Mbps |⚑ English | Latino`), que sao o unico lugar onde o
+ * idioma aparece. Por isso a linha nao e descartada — apenas os segmentos de
+ * tamanho e de bitrate sao removidos dela, e o resto e preservado como veio.
+ */
+function stripSizeAndBitrateSegments(line = "") {
+  const SIZE = /^\d+(?:[.,]\d+)?\s*(?:[KMGT]i?B|bytes?)$/i;
+  const BITRATE = /^\d+(?:[.,]\d+)?\s*(?:[KMG]?bps|[KMG]bit\/s)$/i;
+  const parts = String(line || "").split(/\s*[|·]\s*/);
+  if (parts.length < 2) {
+    return String(line || "").trim();
+  }
+  const kept = parts.filter((part) => {
+    const token = part.trim();
+    return Boolean(token) && !SIZE.test(token) && !BITRATE.test(token);
+  });
+  return kept.length ? kept.join(" | ").trim() : "";
 }
 
 /**
