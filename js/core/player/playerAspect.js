@@ -1,18 +1,27 @@
 /**
- * `objectFit` here is read ONLY on webOS. Every other platform forces
- * `object-fit: fill` and produces the mode with `transform: scale()` — see
- * applyAspectMode in playerScreen.js, where `canTransformVideo` is false for
- * webOS precisely because that path is unavailable there.
+ * Modos de proporcao.
  *
- * Which is why six of the seven modes used to be `contain`: on this TV that made
- * Fit, Crop, Slight Zoom, Cinema Zoom, Fit Height and Fit Width render
- * identically, and picking "Crop" did nothing about a letterboxed source.
+ * MEDIDO no aparelho (OLED65C9, webOS 4.10) e nao suposto: `transform: scale()`
+ * FUNCIONA no plano de video desta TV. O codigo anterior desligava esse caminho
+ * com `canTransformVideo = !Environment.isWebOS()` — por decreto, sem medicao — e
+ * era o unico capaz de recortar barra preta. Com ele desligado, os graus de zoom
+ * abaixo eram inalcancaveis no webOS e todos os modos caiam em object-fit.
  *
- * The webOS-reachable set is what object-fit itself offers — contain, cover,
- * fill. The DEGREE of zoom cannot be expressed: transform is out, and resizing
- * the video element is out too, because webOS only suppresses its screensaver
- * while that element covers the whole viewport. So the zoom modes map to the
- * nearest honest behaviour (crop to fill) rather than to nothing at all.
+ * Por que object-fit nunca resolveu, e a razao de o zoom ser obrigatorio: a barra
+ * de um filme widescreen esta EMBUTIDA no quadro. Um 2.39:1 entregue como
+ * 3840x2160 tem proporcao de quadro 1.778, identica a da tela — logo `cover` e
+ * `contain` produzem exatamente a mesma imagem, e nenhum valor de object-fit
+ * corta nada. Cortar exige ampliar e deixar o excesso sair da viewport.
+ *
+ * Os fatores nao sao arbitrarios: sao 16/9 dividido pela proporcao do filme.
+ *   2.35:1 -> 1.778/2.35 = 0.757  => 1.32
+ *   2.39:1 -> 1.778/2.39 = 0.744  => 1.34
+ *   2.76:1 -> 1.778/2.76 = 0.644  => 1.55
+ * ULTRA_ZOOM existe porque CINEMA_ZOOM (1.33) deixa barra visivel em 2.76:1,
+ * observado na TV.
+ *
+ * `objectFit` continua sendo lido no webOS para o caso sem zoom; o grau vem do
+ * transform, via resolveAspectScale.
  */
 export const ASPECT_MODE_IDS = Object.freeze([
   "ORIGINAL",
@@ -20,6 +29,7 @@ export const ASPECT_MODE_IDS = Object.freeze([
   "STRETCH",
   "SLIGHT_ZOOM",
   "CINEMA_ZOOM",
+  "ULTRA_ZOOM",
   "VERTICAL_STRETCH",
   "HORIZONTAL_STRETCH"
 ]);
@@ -56,6 +66,12 @@ export const ASPECT_MODE_DEFINITIONS = Object.freeze([
     labelKey: "player_aspect_mode_cinema_zoom",
     fallbackLabel: "Cinema Zoom",
     objectFit: "cover"
+  }),
+  Object.freeze({
+    id: "ULTRA_ZOOM",
+    labelKey: "player_aspect_mode_ultra_zoom",
+    fallbackLabel: "Ultra Zoom",
+    objectFit: "contain"
   }),
   Object.freeze({
     id: "VERTICAL_STRETCH",
@@ -155,7 +171,9 @@ export function resolveAspectScale(mode, viewAspect, videoAspect) {
     case "SLIGHT_ZOOM":
       return { scaleX: 1.15, scaleY: 1.15 };
     case "CINEMA_ZOOM":
-      return { scaleX: 1.33, scaleY: 1.33 };
+      return { scaleX: 1.34, scaleY: 1.34 };
+    case "ULTRA_ZOOM":
+      return { scaleX: 1.55, scaleY: 1.55 };
     case "VERTICAL_STRETCH":
       if (safeVideoAspect > safeViewAspect) {
         const uniformScale = safeVideoAspect / safeViewAspect;

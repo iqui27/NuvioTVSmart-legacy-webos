@@ -1471,6 +1471,7 @@
     <string name="player_aspect_tunneling_unavailable">Unavailable during tunneled playback</string>
     <string name="player_aspect_mode_slight_zoom">Slight Zoom</string>
     <string name="player_aspect_mode_cinema_zoom">Cinema Zoom</string>
+    <string name="player_aspect_mode_ultra_zoom">Ultra Zoom</string>
     <string name="audio_dialog_title">Audio</string>
     <string name="audio_dialog_tab_tracks">Audio</string>
     <string name="audio_dialog_tab_mix">Mix</string>

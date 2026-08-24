@@ -1396,6 +1396,7 @@
     <string name="player_aspect_tunneling_unavailable">Indisponível durante reprodução via hardware (Tunneling)</string>
     <string name="player_aspect_mode_slight_zoom">Zoom leve</string>
     <string name="player_aspect_mode_cinema_zoom">Zoom cinema</string>
+    <string name="player_aspect_mode_ultra_zoom">Zoom ultra</string>
     <string name="audio_dialog_title">Áudio</string>
     <string name="audio_dialog_tab_tracks">Áudio</string>
     <string name="audio_dialog_tab_mix">Mixagem</string>

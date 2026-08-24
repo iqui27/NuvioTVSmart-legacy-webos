@@ -19531,7 +19531,11 @@ export const PlayerScreen = {
     if (video) {
       const rect = this.calculateAspectRect(mode.id, video);
       const usingTizenAvPlay = Boolean(Environment.isTizen() && PlayerController.isUsingAvPlay?.());
-      const canTransformVideo = !Environment.isWebOS() && !usingTizenAvPlay;
+      // `transform: scale()` no plano de video foi MEDIDO nesta TV (OLED65C9,
+      // webOS 4.10) e funciona. Excluir o webOS aqui era suposicao, e como o
+      // transform e o unico caminho que recorta barra embutida, ela deixava
+      // Crop, Slight Zoom e Cinema Zoom sem efeito nenhum no aparelho.
+      const canTransformVideo = !usingTizenAvPlay;
       const videoRect = usingTizenAvPlay ? rect.displayRect : rect;
       video.style.position = "fixed";
       if (Environment.isWebOS()) {
