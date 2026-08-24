@@ -1,8 +1,16 @@
 name: Release TV Artifacts
 
+# Pipeline de release do UPSTREAM, desativado no gatilho automatico nesta branch.
+#
+# Motivos: exige o secret NUVIO_LOCAL_PROPERTIES e falha em toda release
+# publicada sem ele; builda tambem artefatos Tizen, que nao sao alvo deste fork;
+# e produziria um segundo IPK, concorrendo com o que .github/workflows/legacy-tv.yml
+# ja gera no push da tag.
+#
+# Mantido no repositorio (em vez de apagado) para nao conflitar a cada merge do
+# upstream, e continua executavel a mao por workflow_dispatch se algum dia o
+# secret existir.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
