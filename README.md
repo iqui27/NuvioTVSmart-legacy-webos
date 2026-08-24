@@ -41,10 +41,78 @@
 > | `app.bundle.js`                  | 2,395,432 bytes          | 1,986,869 bytes |
 > | core-js bundle                   | 170,926 bytes            | 64,545 bytes    |
 >
+> ### Startup, measured on the C9 with the 0.3.42 merge
+>
+> Taken with `globalThis.__NUVIO_DEBUG_HOME_PERF__ = true`, which turns on the
+> per-stage probes.
+>
+> | stage                                  | before        | now    |
+> | -------------------------------------- | ------------- | ------ |
+> | `installed-addons` (addon manifests)   | 906ms         | 26ms   |
+> | profile activation, six local steps    | not attributed| 19ms   |
+> | `Router.navigate` → home mounted       | —             | 1440ms |
+> | Enter on the profile → home on screen  | —             | 1459ms |
+> | `startup-sync-await`                   | 2641ms        | gone   |
+>
+> The manifest cache is upstream's, and it is a clear win — that row is why this
+> fork takes their implementation instead of ours. The `startup-sync-await` stage
+> no longer exists: home renders from local state and the cloud pull lands in
+> place afterwards.
+>
+> Two numbers that are **not** bottlenecks, measured so nobody chases them:
+> `watch-progress-recent` (3082ms) and `watch-progress-all` (2437ms) run inside
+> the startup-sync gate and only appear in the stage report about 6s *after* the
+> first paint — they are network wait off the critical path, not CPU.
+>
+> ### Installing on an older LG
+>
+> This is the real barrier, and it has nothing to do with the app: LG requires
+> Developer Mode to side-load an IPK.
+>
+> 1. Install **Developer Mode** from the LG Content Store, sign in with an LG
+>    developer account, and turn Dev Mode **on**. The TV reboots.
+> 2. Note the **passphrase** the Developer Mode app shows — it rotates when the
+>    session is renewed.
+> 3. On your computer: `npm i -g @webos-tools/cli`, then
+>    `ares-setup-device` to add the TV (`prisoner@<tv-ip>:9922`) and
+>    `ares-novacom --device <name> --getkey` to fetch the key.
+> 4. `ares-install -d <name> NuvioTV-webOS-<version>.ipk`
+> 5. `ares-launch -d <name> space.nuvio.webos`
+>
+> **The dev session expires** (about 50 hours, extendable in the Developer Mode
+> app). When it lapses the app stops launching until you renew it — that is LG's
+> restriction, not a bug in this build.
+>
+> ### Known state
+>
+> Verified on an OLED65C9 (webOS 4.10.0): home, search, detail, source list,
+> playback including 4K, Dolby Vision from MP4 sources, audio and subtitle track
+> menus naming the language, Trakt sync, watch progress and watched state.
+>
+> Limitations that are the platform, not the build: **Dolby Vision only engages
+> from an MP4 container** — the same release in MKV plays as HDR10, which is why
+> the source list ranks MP4 first and labels the container. Tested on exactly one
+> model so far; reports from other webOS 3.x/4.x sets are welcome.
+>
+> ### Building and the release gates
+>
 > Building requires your own `local.properties` — copy
 > `local.example.properties` and fill it in. Optional build flags:
 > `NUVIO_UI_SCALE` (global UI scale, e.g. `0.8`), `NUVIO_BUILD_LABEL`,
-> `NUVIO_IPK_NAME`. Run `npm run check:legacy-css` before releasing.
+> `NUVIO_IPK_NAME`.
+>
+> Three checks run in CI, and each one exists because the matching defect reached
+> the TV without any build step noticing:
+>
+> | command                     | catches                                                                                            |
+> | --------------------------- | -------------------------------------------------------------------------------------------------- |
+> | `npm run check:no-undef`    | identifier used and never declared — esbuild bundles it happily, `ReferenceError` fires at runtime |
+> | `npm run check:legacy-regex`| post-ES2017 regex in `dist/`; a literal with an unsupported flag becomes `new RegExp(src, flags)`  |
+> | `npm run check:legacy-css`  | fallback coverage report (informational — it exits 0 on purpose)                                    |
+>
+> The first one matters more than it sounds: `Router` catches a screen mount
+> failure and downgrades it to `console.warn`, so an undeclared identifier in the
+> home screen produced an **empty home with no visible error at all**.
 
 ---
 
