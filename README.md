@@ -1,8 +1,15 @@
 > ## ⚠️ Unofficial modified build — legacy LG webOS
 >
 > **This is not the official Nuvio TV.** It is a modified fork, maintained by a
-> third party, with one purpose: to keep Nuvio running on **LG TVs with webOS 4.x
-> and older** (C9, C8, B7 and earlier).
+> third party, with one purpose: to keep Nuvio running on **LG TVs with webOS 4.x**
+> (2018 and 2019 sets — C9, C8, B9, B8).
+>
+> **webOS 3.x and older are NOT supported**, and the app refuses to start there on
+> purpose: the floor in `scripts/compatibilityPolicy.mjs` is webOS 4.0.0 /
+> Chromium 53, while webOS 3.x ships Chromium 38 — a different engine that this
+> build's output does not even parse. Supporting it would mean retargeting the
+> bundle and widening the polyfill and CSS fallback sets, and I have no webOS 3.x
+> set to verify against. If you own one and want to test, open an issue.
 >
 > Upstream Nuvio TV **0.3.42 requires webOS 5.0.0+ and Chromium 68+**, and its
 > boot guard stops the app before it starts on anything older. On an OLED65C9
@@ -92,7 +99,7 @@
 > Limitations that are the platform, not the build: **Dolby Vision only engages
 > from an MP4 container** — the same release in MKV plays as HDR10, which is why
 > the source list ranks MP4 first and labels the container. Tested on exactly one
-> model so far; reports from other webOS 3.x/4.x sets are welcome.
+> model so far; reports from other webOS 4.x sets are welcome.
 >
 > ### Building and the release gates
 >

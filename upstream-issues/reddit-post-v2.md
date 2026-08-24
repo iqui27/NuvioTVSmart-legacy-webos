@@ -64,7 +64,7 @@ Every one of the findings above needed someone looking at the screen.
 
 ---
 
-I keep an unofficial fork that lowers the supported floor back to webOS 3.x/4.x,
+I keep an unofficial fork that lowers the supported floor back to webOS 4.x,
 which is where all of this came from. It is not affiliated with the Nuvio project
 and everything good in it belongs to the original authors — please support them.
 Bugs go to my tracker, not theirs, unless they reproduce on the official build.

@@ -4,7 +4,7 @@
 custom ports", que é o que isto é. Sem ela o post entra na fila errada.
 
 **Título sugerido:**
-[Unofficial Fork] 0.3.42 build for LG webOS 3.x/4.x (C9, C8, B7 and older) — the
+[Unofficial Fork] 0.3.42 build for LG webOS 4.x (2018-2019 sets) — the
 platforms the official build dropped
 
 **Checado contra as regras do sub (2026-08-24):**
@@ -70,7 +70,7 @@ step by step is in the README.
 
 ## Caveats, honestly
 
-- Tested on exactly one model — my C9 65". Reports from other webOS 3.x/4.x sets
+- Tested on exactly one model — my C9 65". Reports from other webOS 4.x sets
   are what I need most.
 - It is a fork, so it trails official versions by however long the merge takes.
 - Defects I found that are not specific to old hardware are being reported
