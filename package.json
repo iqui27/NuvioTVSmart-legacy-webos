@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/iqui27/NuvioTVSmart-legacy-webos.git"
   },
-  "homepage": "https://github.com/NuvioMedia/NuvioWeb",
+  "homepage": "https://github.com/NuvioMedia/NuvioTVSmart",
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "prepare": "husky || true",

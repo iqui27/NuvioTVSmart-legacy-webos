@@ -3,7 +3,7 @@
 Required by the GNU General Public License v3.0, §5(a): a modified work must
 carry prominent notices stating that it was changed, and the date of the change.
 
-- **Upstream project:** [NuvioMedia/NuvioWeb](https://github.com/NuvioMedia/NuvioWeb)
+- **Upstream project:** [NuvioMedia/NuvioTVSmart](https://github.com/NuvioMedia/NuvioTVSmart)
 - **Base version:** upstream tag `0.3.42` (merged 2026-08-24)
 - **Earlier base:** upstream tag `0.3.38-beta` (commit `0d74fc6`)
 - **Modified by:** hrocha
