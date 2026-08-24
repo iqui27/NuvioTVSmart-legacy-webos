@@ -1,3 +1,52 @@
+> ## ⚠️ Unofficial modified build — legacy LG webOS
+>
+> **This is not the official Nuvio TV.** It is a modified fork, maintained by a
+> third party, with one purpose: to keep Nuvio running on **LG TVs with webOS 4.x
+> and older** (C9, C8, B7 and earlier).
+>
+> Upstream Nuvio TV **0.3.42 requires webOS 5.0.0+ and Chromium 68+**, and its
+> boot guard stops the app before it starts on anything older. On an OLED65C9
+> (webOS 4.10.0, Chromium 53) the official build shows "TV not supported" and
+> exits. This fork lowers that floor and supplies what the older engine and its
+> Node 0.12 service runtime actually need.
+>
+> - **Original project:** [NuvioMedia/NuvioWeb](https://github.com/NuvioMedia/NuvioWeb) — please star and support the upstream authors.
+> - **Base version of this fork:** upstream `0.3.42`.
+> - **What was changed and when:** [CHANGES.md](./CHANGES.md) (required by GPLv3 §5a).
+> - **Platform notes measured on real hardware:** [LEGACY-WEBOS.md](./LEGACY-WEBOS.md).
+> - **Report bugs here, not upstream.** If you can reproduce a problem on the
+>   official build, then it belongs upstream.
+>
+> "Nuvio", the logo and the wordmark belong to the original authors. The GPL
+> covers the code, **not** the name or the branding — they appear here only to
+> identify the project this is derived from.
+>
+> ### Which build do I want?
+>
+> | Your TV                               | Use                                                                     |
+> | ------------------------------------- | ----------------------------------------------------------------------- |
+> | webOS 5.0+ (2020 and newer)           | the [official release](https://github.com/NuvioMedia/NuvioWeb/releases) |
+> | webOS 4.x or older (2019 and earlier) | this fork                                                               |
+>
+> ### Measured on an LG OLED65C9
+>
+> |                                  | upstream 0.3.38 baseline | this fork       |
+> | -------------------------------- | ------------------------ | --------------- |
+> | runs at all on webOS 4.x         | 0.3.42 refuses to start  | yes             |
+> | worst frame, cold home traversal | 2988ms                   | 267ms           |
+> | total jank, cold traversal       | 8719ms                   | 3183ms          |
+> | jank with rows warm              | —                        | 0               |
+> | jank during playback             | —                        | 0               |
+> | `app.bundle.js`                  | 2,395,432 bytes          | 1,986,869 bytes |
+> | core-js bundle                   | 170,926 bytes            | 64,545 bytes    |
+>
+> Building requires your own `local.properties` — copy
+> `local.example.properties` and fill it in. Optional build flags:
+> `NUVIO_UI_SCALE` (global UI scale, e.g. `0.8`), `NUVIO_BUILD_LABEL`,
+> `NUVIO_IPK_NAME`. Run `npm run check:legacy-css` before releasing.
+
+---
+
 <div align="center">
 
   <img src="assets/brand/app_logo_wordmark.png" alt="Nuvio" width="300" />

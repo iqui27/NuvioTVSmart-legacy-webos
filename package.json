@@ -3,6 +3,13 @@
   "private": true,
   "type": "module",
   "version": "0.3.42",
+  "license": "GPL-3.0",
+  "author": "hrocha",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hrocha/NuvioWeb.git"
+  },
+  "homepage": "https://github.com/NuvioMedia/NuvioWeb",
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "prepare": "husky || true",

@@ -36,3 +36,8 @@ export const SIMKL_CLIENT_ID = String(runtimeEnv.SIMKL_CLIENT_ID || "").trim();
 export const SIMKL_API_URL = "https://api.simkl.com";
 export const SIMKL_APP_NAME = String(runtimeEnv.SIMKL_APP_NAME || "nuvio").trim() || "nuvio";
 export const PREMIUMIZE_CLIENT_ID = String(runtimeEnv.PREMIUMIZE_CLIENT_ID || "").trim();
+
+// Rotulo deste build. Vazio num build do upstream; preenchido nos artefatos deste
+// fork, porque o appinfo.json so aceita versao numerica x.y.z e nao tem onde
+// dizer que a build e modificada.
+export const BUILD_LABEL = String(runtimeEnv.NUVIO_BUILD_LABEL || "").trim();

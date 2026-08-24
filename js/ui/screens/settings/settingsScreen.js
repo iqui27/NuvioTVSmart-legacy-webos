@@ -59,6 +59,7 @@ import { TizenCapabilities } from "../../../platform/tizen/tizenCapabilities.js"
 import { isFastHorizontalNavigationEnabled } from "../../../platform/sharedKeys.js";
 import { CW_DISPLAY_SNAPSHOT_KEY, CW_ENRICHMENT_CACHE_KEY } from "../home/homeConstants.js";
 import { I18n } from "../../../i18n/index.js";
+import { BUILD_LABEL } from "../../../config.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
 import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
 import { TraktAuthService } from "../../../data/repository/traktAuthService.js";
@@ -773,10 +774,12 @@ function clamp(value, min, max) {
 function formatSettingsVersionLabel(value) {
   const normalized = String(value || "").trim();
   const shortMatch = normalized.match(/^(\d+\.\d+)\.0$/);
-  if (shortMatch) {
-    return shortMatch[1];
-  }
-  return normalized || "0.0.0";
+  const base = shortMatch ? shortMatch[1] : normalized || "0.0.0";
+  // O appinfo.json do webOS aceita apenas x.y.z numerico, entao a versao nao pode
+  // carregar o rotulo do fork. Este e o unico lugar visivel onde ele cabe, e a
+  // razao de existir: quem ve esta tela precisa saber que nao esta num build
+  // oficial antes de reportar um problema ao projeto original.
+  return BUILD_LABEL ? `${base} · ${BUILD_LABEL}` : base;
 }
 
 function t(key, params = {}, fallback = key) {

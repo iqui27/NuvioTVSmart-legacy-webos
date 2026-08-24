@@ -21,7 +21,12 @@ export const ENV_PROPERTY_KEYS = [
   "TRAKT_CLIENT_SECRET",
   "SIMKL_CLIENT_ID",
   "SIMKL_APP_NAME",
-  "PREMIUMIZE_CLIENT_ID"
+  "PREMIUMIZE_CLIENT_ID",
+  // Rotulo do build, nao credencial. O webOS so aceita versao x.y.z numerica no
+  // appinfo.json, entao "0.3.42+legacy.1" nao instala — este e o lugar onde o
+  // rotulo pode viver e ser exibido em Ajustes. Vem de process.env, nao de
+  // local.properties: e identidade de build, e local.properties e config local.
+  "NUVIO_BUILD_LABEL"
 ];
 
 const DEFAULT_ENV_VALUES = {
@@ -43,7 +48,8 @@ const DEFAULT_ENV_VALUES = {
   TRAKT_CLIENT_SECRET: "",
   SIMKL_CLIENT_ID: "",
   SIMKL_APP_NAME: "nuvio",
-  PREMIUMIZE_CLIENT_ID: ""
+  PREMIUMIZE_CLIENT_ID: "",
+  NUVIO_BUILD_LABEL: ""
 };
 
 async function pathExists(filePath) {
@@ -120,12 +126,30 @@ export async function resolveLocalPropertiesSource({ rootDir, sourcePath = "" } 
   return "";
 }
 
+/**
+ * Chaves que o ambiente pode sobrescrever. Deliberadamente restrito: nenhuma
+ * credencial entra por aqui, so identidade de build, para que um `export` no
+ * shell nunca possa trocar a chave do Supabase de um artefato.
+ */
+const ENVIRONMENT_OVERRIDABLE_KEYS = ["NUVIO_BUILD_LABEL"];
+
+function applyEnvironmentOverrides(properties = {}) {
+  const merged = { ...properties };
+  ENVIRONMENT_OVERRIDABLE_KEYS.forEach((key) => {
+    const value = String(process.env[key] || "").trim();
+    if (value) {
+      merged[key] = value;
+    }
+  });
+  return merged;
+}
+
 export async function readEnvProperties({ rootDir, sourcePath = "" } = {}) {
   const resolvedSourcePath = await resolveLocalPropertiesSource({ rootDir, sourcePath });
   if (!resolvedSourcePath) {
     return {
       sourcePath: "",
-      env: normalizeEnvProperties({})
+      env: normalizeEnvProperties(applyEnvironmentOverrides({}))
     };
   }
   if (/\.js$/i.test(resolvedSourcePath)) {
@@ -136,7 +160,7 @@ export async function readEnvProperties({ rootDir, sourcePath = "" } = {}) {
   const properties = parseProperties(await readFile(resolvedSourcePath, "utf8"));
   return {
     sourcePath: resolvedSourcePath,
-    env: normalizeEnvProperties(properties)
+    env: normalizeEnvProperties(applyEnvironmentOverrides(properties))
   };
 }
 
