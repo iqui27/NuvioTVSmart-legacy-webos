@@ -4024,7 +4024,7 @@ export const MetaDetailsScreen = {
         <div class="series-episode-thumb">
           <div class="series-episode-image${shouldBlur ? " is-blurred" : ""}"${episode.thumbnail ? ` data-thumb="${escapeHtml(episode.thumbnail)}"` : ""}></div>
           <div class="series-episode-overlay"></div>
-          ${isWatched ? `<div class="series-episode-status complete">${renderWatchedBadgeGlyph()}</div>` : progressRatio < 0.02 ? `<div class="series-episode-status idle"></div>` : ""}
+          ${isWatched ? `<div class="series-episode-status complete"><span class="series-episode-watched-mark">${renderWatchedBadgeGlyph()}</span><span class="series-episode-watched-label">${escapeHtml(t("episodes_cd_watched", {}, "Watched").toUpperCase())}</span></div>` : progressRatio < 0.02 ? `<div class="series-episode-status idle"></div>` : ""}
           ${isUnavailable ? `<div class="series-episode-unavailable">${escapeHtml(t("episodes_unavailable", {}, "Unavailable").toUpperCase())}</div>` : ""}
           <div class="series-episode-copy">
             <div class="series-episode-badge">${escapeHtml(t("episodes_episode", {}, "Episode").toUpperCase())} ${Number(episode.episode || 0)}</div>

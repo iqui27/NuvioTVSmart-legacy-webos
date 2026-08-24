@@ -22619,26 +22619,72 @@ html.no-css-grid .player-subtitle-option-copy > * + * {
    (linhas ~21462 a ~21708) independentemente da posicao no arquivo.
    --------------------------------------------------------------------------- */
 .series-episode-card.watched .series-episode-image {
-  opacity: 0.28;
+  opacity: 0.42;
 }
 
 .series-episode-card.watched .series-episode-copy {
   opacity: 0.6;
 }
 
+/* O estado assistido agora tem tres partes: a arte escurecida, a marca central e
+   a palavra embaixo dela. O texto existe porque a marca sozinha e ambigua a tres
+   metros — um circulo com tique pode ser "disponivel", "baixado" ou "concluido",
+   e so a palavra fecha a leitura.
+
+   O status ocupa a miniatura inteira (top/right/bottom/left em vez de `inset`,
+   que o Chromium 53 nao entende) e centra por flex. Isso substitui a margem
+   negativa de -44px, que dependia de altura fixa e quebraria ao empilhar o
+   rotulo sob a marca. Continua sem `transform` de proposito: `.is-blurred` e o
+   foco ja usam transform neste mesmo elemento. */
 .series-episode-card.watched .series-episode-status.complete {
-  top: 50%;
-  left: 50%;
-  margin: -44px 0 0 -44px;
-  width: 88px;
-  height: 88px;
-  background: rgba(255, 255, 255, 0.92);
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  margin: 0;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: #f3f5f8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.series-episode-card.watched .series-episode-watched-mark {
+  width: 84px;
+  height: 84px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
   color: #101216;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .series-episode-card.watched .series-episode-status.complete .series-watched-badge-svg {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
+}
+
+/* `margin-top` e nao `gap`: o fallback `no-flex-gap` cobre os containers que o
+   PostCSS conhece, e aqui a margem custa o mesmo e vale em qualquer engine. */
+.series-episode-card.watched .series-episode-watched-label {
+  margin-top: 14px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #f3f5f8;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.75);
+}
+
+/* O escurecimento vem do overlay, nao so da opacidade da arte: com a marca e o
+   texto por cima, arte clara sem uma camada solida deixava os dois ilegiveis. */
+.series-episode-card.watched .series-episode-overlay {
+  background: rgba(8, 9, 12, 0.62);
 }
 
 /* O foco continua sendo sagrado: um card escurecido que esta focado precisa
