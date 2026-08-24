@@ -2456,22 +2456,57 @@ export const ProfileSelectionScreen = {
         (node) => String(node.dataset.profileId || "") === String(profileId)
       ) || null;
     profileCard?.classList?.add("is-activating");
+    // Marcos por etapa da ativacao de perfil. Existem porque medir "de fora"
+    // (por CDP, cronometrando do Enter ate o primeiro log da home) atribuiu a
+    // este trecho um custo de ~6,2s que ele nao tem: aquele tempo era latencia
+    // do proprio harness ate a tecla ser processada.
+    //
+    // O que estes marcos medem no C9 (webOS 4.10): as seis etapas locais somam
+    // 19ms — setActiveProfile 1ms, I18n.init 3ms, getAccess 0ms, tema+i18n 5ms,
+    // resolveExperienceRoute 9ms — e `Router.navigate` responde por 1440ms de um
+    // total de 1459ms, praticamente todo ele o mount da home.
+    //
+    // Usa a mesma flag do resto (`__NUVIO_DEBUG_HOME_PERF__`), lida em runtime,
+    // entao custa zero quando desligada.
+    const perfAtivo = Boolean(globalThis.__NUVIO_DEBUG_HOME_PERF__);
+    const marcoInicio = perfAtivo ? Date.now() : 0;
+    let marcoAnterior = marcoInicio;
+    const marcar = (etapa) => {
+      if (!perfAtivo) {
+        return;
+      }
+      const agora = Date.now();
+      try {
+        console.info(`[profile-perf] ${etapa}`, {
+          ms: agora - marcoAnterior,
+          acumulado: agora - marcoInicio
+        });
+      } catch (_) {}
+      marcoAnterior = agora;
+    };
     try {
       await ProfileManager.setActiveProfile(profileId);
+      marcar("setActiveProfile");
       StartupSyncService.enableProfileScopedSync();
       detailWatchedEnrichmentService.invalidateAllCache();
+      marcar("enableProfileScopedSync+invalidateCache");
       await I18n.init();
+      marcar("I18n.init");
       const memberAccess = await MemberAccessRepository.getAccess().catch(() =>
         MemberAccessRepository.getCurrentAccess()
       );
+      marcar("MemberAccessRepository.getAccess");
       ThemeManager.apply({ enforceAccess: true, access: memberAccess });
       I18n.apply();
+      marcar("ThemeManager.apply+I18n.apply");
       const experienceRoute = await resolveExperienceRoute(profileId);
+      marcar("resolveExperienceRoute");
       await Router.navigate(
         experienceRoute,
         experienceRoute === "home" ? { forceReload: true } : {},
         experienceRoute === "home" ? {} : { replaceHistory: true, skipStackPush: true }
       );
+      marcar("Router.navigate");
       void StartupSyncService.requestSyncNow({
         notifyPullCompleted: experienceRoute === "home"
       }).catch((error) => {
