@@ -17,8 +17,13 @@ export async function resolveExperienceRoute(profileId) {
     return "experienceModeSelection";
   }
   if (experience.mode === "ESSENTIAL" && !experience.addonSetupSkipped) {
-    const addons = await addonRepository.getInstalledAddons().catch(() => []);
-    if (!addons.length) return "essentialAddonSetup";
+    const cachedAddons = addonRepository.getCachedInstalledAddons();
+    const hasConfiguredAddon = addonRepository
+      .getInstalledAddonUrls()
+      .some((url) => addonRepository.isAddonEnabled(url));
+    if (!cachedAddons.length && !hasConfiguredAddon) {
+      return "essentialAddonSetup";
+    }
   }
   return "home";
 }

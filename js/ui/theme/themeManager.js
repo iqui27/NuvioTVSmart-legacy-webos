@@ -22,6 +22,16 @@ function toRgbChannels(hex, fallback = "255 255 255") {
   return `${parseInt(normalized.slice(0, 2), 16)} ${parseInt(normalized.slice(2, 4), 16)} ${parseInt(normalized.slice(4, 6), 16)}`;
 }
 
+function toLegacyRgbChannels(hex, fallback = "255, 255, 255") {
+  const value = String(hex || "").trim();
+  const match = value.match(/^#([0-9a-f]{6})$/i);
+  if (!match) {
+    return fallback;
+  }
+  const normalized = match[1];
+  return `${parseInt(normalized.slice(0, 2), 16)}, ${parseInt(normalized.slice(2, 4), 16)}, ${parseInt(normalized.slice(4, 6), 16)}`;
+}
+
 /**
  * Pure function — no DOM access. Returns a CSS string for legacy engines that
  * do not support CSS custom properties (e.g. Chromium 38 / webOS 3.x).
@@ -161,6 +171,7 @@ export const ThemeManager = {
     }
     const derivedColors = {
       "--bg-color-rgb": toRgbChannels(colors["--bg-color"], "13 13 13"),
+      "--bg-color-rgb-legacy": toLegacyRgbChannels(colors["--bg-color"], "13, 13, 13"),
       "--bg-elevated-rgb": toRgbChannels(colors["--bg-elevated"], "26 26 26"),
       "--card-bg-rgb": toRgbChannels(colors["--card-bg"], "34 34 34"),
       "--secondary-color-rgb": toRgbChannels(colors["--secondary-color"], "245 245 245"),

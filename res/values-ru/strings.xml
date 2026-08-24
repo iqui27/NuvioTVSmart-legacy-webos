@@ -1129,7 +1129,7 @@
     <string name="layout_selection_subtitle">Выберите макет вашего главного экрана</string>
     <string name="layout_selection_continue">Продолжить</string>
     <string name="update_title">Обновление приложения</string>
-    <string name="update_installer_required">Используйте Nuvio WebTV Installer, чтобы обновить приложение на телевизоре.</string>
+    <string name="update_installer_required">Используйте Nuvio TV Installer, чтобы обновить приложение на телевизоре.</string>
     <string name="update_release_notes">Что нового</string>
     <string name="update_release_notes_unavailable">Описание выпуска недоступно.</string>
     <string name="update_downloading">Скачивание обновления</string>

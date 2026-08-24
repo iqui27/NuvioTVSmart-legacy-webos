@@ -1025,7 +1025,7 @@
     <string name="layout_selection_subtitle">ホーム画面のレイアウトを選択</string>
     <string name="layout_selection_continue">続ける</string>
     <string name="update_title">アプリのアップデート</string>
-    <string name="update_installer_required">テレビのアプリを更新するには Nuvio WebTV Installer を使用してください。</string>
+    <string name="update_installer_required">テレビのアプリを更新するには Nuvio TV Installer を使用してください。</string>
     <string name="update_release_notes">新着情報</string>
     <string name="update_release_notes_unavailable">リリースの説明はありません。</string>
     <string name="update_downloading">アップデートをダウンロード中</string>

@@ -211,10 +211,10 @@
     <string name="detail_more_like_this_powered_by_trakt">Trakt tarafından desteklenmektedir</string>
     <string name="detail_comments_title">Yorumlar</string>
     <string name="detail_comments_subtitle">Trakt incelemeleri</string>
-    <string name="detail_comments_subtitle_episode">Bölüm %1$d</string>
+    <string name="detail_comments_subtitle_episode">S%1$dE%2$d için Trakt incelemeleri</string>
     <string name="detail_comments_mode_show">Dizi Yorumları</string>
     <string name="detail_comments_mode_episode">Bölüm Yorumları</string>
-    <string name="detail_comments_mode_episode_change">Bölüm Seç...</string>
+    <string name="detail_comments_mode_episode_change">Bölümü Değiştir (%1$s)</string>
     <string name="detail_comments_episode_picker_title">Bölüm Seçin</string>
     <string name="detail_comments_episode_picker_subtitle">Yorumlarını görmek istediğiniz bölümü seçin</string>
     <string name="detail_section_network">Kanal</string>
@@ -665,10 +665,10 @@
     <string name="autoplay_stream_selection">Otomatik Kaynak Seçimi</string>
     <string name="autoplay_next_episode">Sonraki Bölümü Otomatik Oynat</string>
     <string name="autoplay_next_episode_sub">Ekran çıktığında sonraki bölümü otomatik olarak başlat.</string>
-    <string name="autoplay_prefer_binge_group">Binge Grubunu Tercih Et (Sonraki Bölüm)</string>
+    <string name="autoplay_prefer_binge_group">Kesintisiz İzleme Grubunu Tercih Et (Sonraki Bölüm)</string>
     <string name="autoplay_prefer_binge_group_sub">Normal otomatik oynatma kurallarından önce aynı kaynak profilini (aynı eklenti/kalite grubu) deneyin.</string>
-    <string name="autoplay_reuse_binge_group">Ardışık İzleme Grubunu Koru</string>
-    <string name="autoplay_reuse_binge_group_sub">Oturumlar arasında son ardışık izleme grubunu hatırla ve yeniden kullan (İzlemeye Devam Et, Detaylar vb.).</string>
+    <string name="autoplay_reuse_binge_group">Kesintisiz İzleme Grubunu Koru</string>
+    <string name="autoplay_reuse_binge_group_sub">Oturumlar arasında son kesintisiz izleme grubunu hatırla ve yeniden kullan (İzlemeye Devam Et, Detaylar vb.).</string>
     <string name="autoplay_threshold_pct">Yüzde</string>
     <string name="autoplay_threshold_min">Bitişten önceki dakika</string>
     <string name="autoplay_threshold_mode">Sonraki Bölüm Eşiği Mantığı</string>
@@ -1091,7 +1091,7 @@
     <string name="profile_addons">eklentiler</string>
     <string name="profile_plugins">uzantılar</string>
     <string name="profile_choose_avatar">Profil Resmi Seçin</string>
-    <string name="profile_custom_avatar_web_panel_note">Özel avatar URL\'leri Nuvio web panelinden yapılandırılabilir.</string>
+    <string name="profile_custom_avatar_web_panel_note">Özel avatar URL\'leri Nuvio hesap panelinden yapılandırılabilir.</string>
     <string name="profile_avatar_none_selected">Görsel seçilmedi</string>
     <string name="profile_avatar_focus_hint">İsmini görmek için resmin üzerine gelin</string>
     <string name="profile_avatar_category_all">Hepsi</string>
@@ -1134,7 +1134,7 @@
     <string name="profile_pin_overlay_set_support">Bu PIN, profil açılmadan önce her seferinde istenecek.</string>
     <string name="profile_pin_overlay_confirm_support">Kurulumu tamamlamak için aynı 4 rakamı tekrar girin.</string>
     <string name="profile_pin_overlay_mismatch">PINler eşleşmedi. Tekrar deneyin.</string>
-    <string name="profile_pin_overlay_forgot_hint">PIN mi unuttunuz? Nuvio web sitesinden sıfırlayabilirsiniz.</string>
+    <string name="profile_pin_overlay_forgot_hint">PIN mi unuttunuz? Nuvio hesap sayfasından sıfırlayabilirsiniz.</string>
     <string name="profile_pin_overlay_back_hint">İptal etmek için geri tuşuna basın</string>
     <string name="essential_addon_setup_title">Eklentileri ayarla</string>
     <string name="essential_addon_setup_subtitle">Yayın başlatmak için bir eklenti kurun. Daha fazlasını Eklentiler bölümünden ekleyebilirsiniz.</string>
@@ -1378,7 +1378,7 @@
     <string name="still_watching_exit">Çık</string>
     <string name="still_watching_countdown">%1$d saniye içinde duruyor</string>
     <string name="still_watching_setting_title">Hâlâ izliyor musun?</string>
-    <string name="still_watching_setting_sub">Ardışık otomatik oynatılan bölümlerden sonra sor.</string>
+    <string name="still_watching_setting_sub">Art arda otomatik oynatılan bölümlerden sonra sor.</string>
     <string name="still_watching_threshold_title">Bölüm Eşiği</string>
     <string name="still_watching_threshold_sub">Sorulmadan önce otomatik oynatılan bölüm sayısı.</string>
     <string name="skip_intro">İntroyu Atla</string>
@@ -1462,8 +1462,8 @@
     <string name="library_syncing_library">Kütüphane senkronize ediliyor\u2026</string>
     <string name="library_type_all">Tümü</string>
     <string name="library_type_items">içerik bulundu</string>
-    <string name="library_empty_local_title">Henüz içerik eklemediniz</string>
-    <string name="library_empty_trakt_title">Bu listede içerik görünmüyor</string>
+    <string name="library_empty_local_title">Henüz %1$s yok</string>
+    <string name="library_empty_trakt_title">Bu listede %1$s yok</string>
     <string name="library_empty_local_subtitle">İçerik eklemek için içerik detaylarındaki + tuşunu kullanın</string>
     <string name="library_empty_trakt_subtitle">İçerikleri izleme listenize eklemek için içerik detaylarındaki + tuşunu kullanın</string>
     <string name="library_empty_trakt_not_auth_title">Trakt bağlı değil</string>
@@ -1596,7 +1596,7 @@
     <string name="layout_selection_subtitle">Ana sayfa düzeninizi seçin</string>
     <string name="layout_selection_continue">Devam Et</string>
     <string name="update_title">Güncelleme</string>
-    <string name="update_installer_required">TV’nizdeki uygulamayı güncellemek için Nuvio WebTV Installer’ı kullanın.</string>
+    <string name="update_installer_required">TV’nizdeki uygulamayı güncellemek için Nuvio TV Installer’ı kullanın.</string>
     <string name="update_release_notes">Yenilikler</string>
     <string name="update_release_notes_unavailable">Sürüm açıklaması mevcut değil.</string>
     <string name="update_downloading">İndiriliyor</string>
@@ -2696,4 +2696,17 @@
     <string name="player_error_tizen_p2p_unsupported">Torrent/P2P oynatma bu TV'de desteklenmiyor.</string>
     <string name="player_tizen_mkv_subtitles_unavailable">Bu TV'nin web oynatıcısı gömülü MKV altyazılarını sunmuyor.</string>
     <string name="player_tizen_mkv_audio_unavailable">Bu TV'nin web oynatıcısı gömülü MKV ses parçalarını sunmuyor.</string>
+    <string name="layout_cw_enabled">İzlemeye Devam Et\'i Göster</string>
+    <string name="layout_cw_enabled_sub">Ana ekranda İzlemeye Devam Et satırını gösterir.</string>
+    <string name="supporters_level_supporter">Destekçi</string>
+    <string name="supporters_level_supporter_plus">Destekçi+</string>
+    <string name="supporters_since">%1$s tarihinden beri Nuvio'yu destekliyor</string>
+    <string name="supporters_since_unknown">Nuvio'yu gururla destekliyor</string>
+    <string name="profile_editor_tab_avatar">Avatar</string>
+    <string name="profile_editor_tab_background">Arka Plan</string>
+    <string name="profile_choose_background">Profil Arka Planını Seçin</string>
+    <string name="profile_background_member_note">Özel arka plan URL'leri Nuvio hesap panelinden yapılandırılabilir.</string>
+    <string name="profile_background_normal">Normal</string>
+    <string name="profile_background_custom">Özel</string>
+    <string name="profile_avatar_category_supporter">Destekçi</string>
 </resources>

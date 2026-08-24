@@ -7,6 +7,7 @@
 :root {
   --bg-color: #0d0d0d;
   --bg-color-rgb: 13 13 13;
+  --bg-color-rgb-legacy: 13, 13, 13;
   --bg-elevated: #1a1a1a;
   --bg-elevated-rgb: 26 26 26;
   --card-bg: #222222;

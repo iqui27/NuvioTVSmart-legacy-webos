@@ -237,7 +237,7 @@ jobs:
             }
 
             const packagingChanged = installerImpactChecked.some((line) =>
-              /Tizen `\.wgt` packaging changed|webOS `\.ipk` packaging changed|App identifiers or metadata changed|local\.properties|sync:tizen|sync:webos|Nuvio WebTV Installer compatibility changed|webOS Homebrew metadata support changed/i.test(line)
+              /Tizen `\.wgt` packaging changed|webOS `\.ipk` packaging changed|App identifiers or metadata changed|local\.properties|sync:tizen|sync:webos|Nuvio TV Installer compatibility changed|webOS Homebrew metadata support changed/i.test(line)
             );
 
             const testingContent = [

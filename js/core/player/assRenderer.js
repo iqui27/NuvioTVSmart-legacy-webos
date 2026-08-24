@@ -25,6 +25,27 @@ function clearContainer(container) {
   }
 }
 
+function debugAssRender(stage, details = {}) {
+  if (!globalThis.__NUVIO_DEBUG_ASS__) {
+    return;
+  }
+  try {
+    console.info(`[Nuvio ASS] ${stage}`, details);
+  } catch (_) {
+    // Debug logging must never affect playback.
+  }
+}
+
+function hasRawAssControlText(container) {
+  const text = String(container?.textContent || "");
+  return (
+    // Require the SSA field shape so legitimate cue text that merely starts
+    /(?:^|\n)\s*(?:Dialogue|Comment)\s*:\s*(?:\d+|Marked\s*=\s*\d+)\s*,\s*\d+:\d{1,2}:\d{1,2}[.,]/i.test(
+      text
+    ) || /(?:^|\n)\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(text)
+  );
+}
+
 export function createAssRenderer({
   body,
   video,
@@ -81,7 +102,44 @@ export function createAssRenderer({
         };
       }
       try {
-        instance = new AssConstructor(String(body), video, { container, resampling });
+        const sourceBody = String(body)
+          .replace(/^\uFEFF/, "")
+          .replace(/\0/g, "");
+        const hasEvents = /^\s*\[Events\]\s*$/im.test(sourceBody);
+        const dialogueCount = (sourceBody.match(/^\s*Dialogue\s*:/gim) || []).length;
+        debugAssRender("construct", {
+          token,
+          length: sourceBody.length,
+          hasEvents,
+          dialogueCount
+        });
+        // ass.js only parses Dialogue rows inside an [Events] section. A
+        // headerless body would construct an empty renderer and report ok,
+        // so reject it here and let the caller fall back to VTT.
+        if (!hasEvents || !dialogueCount) {
+          clearContainer(container);
+          return {
+            ok: false,
+            error: "ass-renderer-empty-script",
+            detail: "ASS body lacks an [Events] section with Dialogue rows"
+          };
+        }
+        instance = new AssConstructor(sourceBody, video, { container, resampling });
+        debugAssRender("constructed", {
+          token,
+          childCount: Number(container.childNodes?.length || 0),
+          text: String(container.textContent || "").slice(0, 240)
+        });
+        if (hasRawAssControlText(container)) {
+          instance.destroy?.();
+          instance = null;
+          clearContainer(container);
+          return {
+            ok: false,
+            error: "ass-renderer-raw-control-text",
+            detail: "ass.js exposed ASS control fields as visible text"
+          };
+        }
       } catch (error) {
         instance = null;
         clearContainer(container);

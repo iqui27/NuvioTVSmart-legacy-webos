@@ -1469,7 +1469,7 @@
     <string name="layout_selection_subtitle">உங்கள் முகப்புத்திரை வடிவமைப்பை தேர்ந்தெடுக்கவும்</string>
     <string name="layout_selection_continue">தொடர்க</string>
     <string name="update_title">செயலி புதுப்பிப்பு</string>
-    <string name="update_installer_required">உங்கள் டிவியில் செயலியைப் புதுப்பிக்க Nuvio WebTV Installer-ஐப் பயன்படுத்தவும்.</string>
+    <string name="update_installer_required">உங்கள் டிவியில் செயலியைப் புதுப்பிக்க Nuvio TV Installer-ஐப் பயன்படுத்தவும்.</string>
     <string name="update_release_notes">புதியவை</string>
     <string name="update_release_notes_unavailable">வெளியீட்டு விளக்கம் கிடைக்கவில்லை.</string>
     <string name="update_downloading">புதுப்பிப்பு பதிவிறக்கப்படுகிறது</string>

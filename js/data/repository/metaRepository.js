@@ -16,6 +16,9 @@ class MetaRepository {
   }
 
   async getMeta(addonBaseUrl, type, id) {
+    // Direct addon lookups already have an addon-specific contract. Preserve
+    // the requested type here; the all-addons path selects the canonical type
+    // only when the candidate does not advertise the requested one.
     const normalizedType = String(type || "").trim();
     const normalizedId = String(id || "").trim();
     const cacheKey = `${addonRepository.canonicalizeUrl(addonBaseUrl)}:${normalizedType}:${normalizedId}`;
@@ -103,7 +106,7 @@ class MetaRepository {
           "meta",
           requestedType,
           id,
-          { allowIdTypeFallback: true, caseInsensitive: true }
+          { caseInsensitive: true }
         );
         if (ownerType) {
           addCandidate(addon, ownerType);
@@ -168,14 +171,19 @@ class MetaRepository {
   inferCanonicalType(type, id) {
     const normalizedType = String(type || "").trim();
     const lowerType = normalizedType.toLowerCase();
-    const known = new Set(["movie", "series", "channel", "tv", "anime"]);
+    // `tv` is Nuvio's internal synonym for episodic content. Metadata addons
+    // advertise that resource as `series`; live TV remains `channel`.
+    if (lowerType === "tv") {
+      return "series";
+    }
+    const known = new Set(["movie", "series", "channel", "anime"]);
     if (known.has(lowerType)) {
       return normalizedType;
     }
     const normalizedId = String(id || "").toLowerCase();
     if (normalizedId.includes(":movie:")) return "movie";
     if (normalizedId.includes(":series:")) return "series";
-    if (normalizedId.includes(":tv:")) return "tv";
+    if (normalizedId.includes(":tv:")) return "series";
     if (normalizedId.includes(":anime:")) return "anime";
     return normalizedType;
   }

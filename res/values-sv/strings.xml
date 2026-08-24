@@ -903,7 +903,7 @@
     <string name="layout_selection_subtitle">Välj din hemskärmslayout</string>
     <string name="layout_selection_continue">Fortsätt</string>
     <string name="update_title">Appuppdatering</string>
-    <string name="update_installer_required">Använd Nuvio WebTV Installer för att uppdatera appen på TV:n.</string>
+    <string name="update_installer_required">Använd Nuvio TV Installer för att uppdatera appen på TV:n.</string>
     <string name="update_release_notes">Nyheter</string>
     <string name="update_release_notes_unavailable">Ingen versionsbeskrivning är tillgänglig.</string>
     <string name="update_downloading">Laddar ner uppdatering</string>

@@ -1,5 +1,6 @@
 import { SavedLibraryStore } from "../local/savedLibraryStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
+import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
 
 function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
@@ -38,7 +39,13 @@ function queueSavedLibraryCloudSync(profileId = activeProfileId(), delayMs = 500
           }
         });
       savedLibrarySyncInFlightByProfile.set(profileKey, pushPromise);
-      await pushPromise;
+      const didPush = await pushPromise;
+      if (!didPush) {
+        const retryDelayMs = getSyncBackoffRemainingMs();
+        if (retryDelayMs > 0) {
+          queueSavedLibraryCloudSync(profileId, Math.max(5000, retryDelayMs));
+        }
+      }
     };
     void runPush();
   }, delayMs);

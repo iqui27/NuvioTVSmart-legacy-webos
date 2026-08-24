@@ -1753,7 +1753,7 @@
     <string name="layout_selection_subtitle">Escolhe o esquema da tua página inicial</string>
     <string name="layout_selection_continue">Continuar</string>
     <string name="update_title">Atualização da App</string>
-    <string name="update_installer_required">Utilize o Nuvio WebTV Installer para atualizar a app na TV.</string>
+    <string name="update_installer_required">Utilize o Nuvio TV Installer para atualizar a app na TV.</string>
     <string name="update_release_notes">Novidades</string>
     <string name="update_release_notes_unavailable">Não está disponível uma descrição da versão.</string>
     <string name="update_downloading">A transferir atualização</string>
@@ -2433,7 +2433,6 @@
     <string name="playback_net_connection_count_sub">Número de ligações TCP paralelas. Valores mais altos aumentam o uso de memória e o débito, mas com ganhos cada vez menores.</string>
     <string name="playback_net_chunk_size">Tamanho dos blocos</string>
     <string name="playback_net_chunk_size_sub">Tamanho de cada bloco transferido por ligação. Blocos maiores reduzem o overhead, mas utilizam mais memória.</string>
-    <string name="common_beta">Beta</string>
     <string name="contributor_role_app_maintainer">Responsável pela manutenção desta app</string>
     <string name="settings.layout.groups.continueWatching.title">Continuar a ver</string>
     <string name="settings.layout.groups.continueWatching.subtitle">Configurar episódios seguintes e ordenação</string>

@@ -51,9 +51,8 @@ jobs:
       - name: Write release local properties
         env:
           NUVIO_LOCAL_PROPERTIES: ${{ secrets.NUVIO_LOCAL_PROPERTIES }}
-          WEBOS_LOCAL_PROPERTIES: ${{ secrets.WEBOS_LOCAL_PROPERTIES }}
         run: |
-          LOCAL_PROPERTIES="${NUVIO_LOCAL_PROPERTIES:-$WEBOS_LOCAL_PROPERTIES}"
+          LOCAL_PROPERTIES="$NUVIO_LOCAL_PROPERTIES"
           if [ -z "${LOCAL_PROPERTIES//[[:space:]]/}" ]; then
             echo "::error::NUVIO_LOCAL_PROPERTIES secret is required to build release artifacts with runtime env."
             exit 1
@@ -175,10 +174,8 @@ jobs:
       - name: Write release local properties
         env:
           NUVIO_LOCAL_PROPERTIES: ${{ secrets.NUVIO_LOCAL_PROPERTIES }}
-          TIZEN_LOCAL_PROPERTIES: ${{ secrets.TIZEN_LOCAL_PROPERTIES }}
-          WEBOS_LOCAL_PROPERTIES: ${{ secrets.WEBOS_LOCAL_PROPERTIES }}
         run: |
-          LOCAL_PROPERTIES="${NUVIO_LOCAL_PROPERTIES:-${TIZEN_LOCAL_PROPERTIES:-$WEBOS_LOCAL_PROPERTIES}}"
+          LOCAL_PROPERTIES="$NUVIO_LOCAL_PROPERTIES"
           if [ -z "${LOCAL_PROPERTIES//[[:space:]]/}" ]; then
             echo "::error::NUVIO_LOCAL_PROPERTIES secret is required to build release artifacts with runtime env."
             exit 1
@@ -188,9 +185,9 @@ jobs:
         run: npm ci
 
       # The GitHub release WGT is the installer input, not the Seller Office
-      # package. NuvioWebTVInstaller signs it locally with the certificate
+      # package. The Nuvio TV Installer signs it locally with the certificate
       # associated with the target TV DUID before vd_appinstall.
-      - name: Package unsigned Tizen WGT for WebTV Installer
+      - name: Package unsigned Tizen WGT for Nuvio TV Installer
         env:
           NUVIO_REQUIRE_LOCAL_PROPERTIES: "1"
           TIZEN_INCLUDE_ENGINEFS_SERVICE: "1"
@@ -234,7 +231,7 @@ jobs:
       - name: Check out installer repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.INSTALLER_REPO || 'NuvioMedia/NuvioWebTVInstaller' }}
+          repository: ${{ vars.INSTALLER_REPO || 'NuvioMedia/NuvioTVSmart-Installer' }}
           token: ${{ secrets.REPO_DISPATCH_TOKEN || github.token }}
 
       - name: Set up Node.js
@@ -260,7 +257,7 @@ jobs:
             Write-Error "Expected Windows installer .exe was not created"
             exit 1
           }
-          $targetFile = "Nuvio-WebTV-Installer-Windows-$env:TAG_NAME.exe"
+          $targetFile = "NuvioTVSmart-Installer-Windows-$env:TAG_NAME.exe"
           Move-Item -Force -Path $asset.FullName -Destination $targetFile
           "installer_name=$targetFile" >> $env:GITHUB_OUTPUT
 
@@ -285,7 +282,7 @@ jobs:
       - name: Check out installer repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.INSTALLER_REPO || 'NuvioMedia/NuvioWebTVInstaller' }}
+          repository: ${{ vars.INSTALLER_REPO || 'NuvioMedia/NuvioTVSmart-Installer' }}
           token: ${{ secrets.REPO_DISPATCH_TOKEN || github.token }}
 
       - name: Set up Node.js
@@ -310,7 +307,7 @@ jobs:
             echo "Expected macOS .app was not created" >&2
             exit 1
           fi
-          TARGET_FILE="Nuvio-WebTV-Installer-macOS-${TAG_NAME}.zip"
+          TARGET_FILE="NuvioTVSmart-Installer-macOS-${TAG_NAME}.zip"
           ditto -c -k --keepParent "$APP_PATH" "$TARGET_FILE"
           echo "installer_name=$TARGET_FILE" >> "$GITHUB_OUTPUT"
 
@@ -334,7 +331,7 @@ jobs:
       - name: Check out installer repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.INSTALLER_REPO || 'NuvioMedia/NuvioWebTVInstaller' }}
+          repository: ${{ vars.INSTALLER_REPO || 'NuvioMedia/NuvioTVSmart-Installer' }}
           token: ${{ secrets.REPO_DISPATCH_TOKEN || github.token }}
 
       - name: Set up Node.js
@@ -359,7 +356,7 @@ jobs:
             echo "Expected Linux AppImage was not created" >&2
             exit 1
           fi
-          TARGET_FILE="Nuvio-WebTV-Installer-Linux-${TAG_NAME}.AppImage"
+          TARGET_FILE="NuvioTVSmart-Installer-Linux-${TAG_NAME}.AppImage"
           mv "$APPIMAGE_PATH" "$TARGET_FILE"
           chmod +x "$TARGET_FILE"
           echo "installer_name=$TARGET_FILE" >> "$GITHUB_OUTPUT"

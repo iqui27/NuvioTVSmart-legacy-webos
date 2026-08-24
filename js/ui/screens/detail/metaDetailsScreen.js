@@ -33,6 +33,7 @@ import {
 import { toTraktImageUrl } from "../../../core/trakt/traktImageUrl.js";
 import { Environment } from "../../../platform/environment.js";
 import { Platform } from "../../../platform/index.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import {
   TMDB_API_KEY,
   TRAKT_API_URL,
@@ -40,6 +41,7 @@ import {
   YOUTUBE_PROXY_URL
 } from "../../../config.js";
 import { I18n } from "../../../i18n/index.js";
+import { localizedGenreLabel } from "../../../i18n/genreLabels.js";
 import { NuvioDialog } from "../../components/nuvioDialog.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { resolveMovieStreamIdentity } from "./movieStreamIdentity.js";
@@ -72,6 +74,7 @@ const EPISODE_VIRTUALIZATION_MIN_WINDOW = 20;
 const EPISODE_VIRTUALIZATION_OVERSCAN = 8;
 const EPISODE_VIRTUALIZATION_DEFAULT_CARD_WIDTH = 540;
 const EPISODE_VIRTUALIZATION_DEFAULT_GAP = 34;
+const RTL_DETAIL_LANGUAGES = new Set(["ar", "he"]);
 // Match Android TV's LazyRow behavior: one focus step per key event and only
 // throttle native repeat events. Do not schedule a second move after keydown;
 // Samsung remotes can deliver keyup late or not at all.
@@ -82,8 +85,26 @@ function t(key, params = {}, fallback = key) {
   return I18n.t(key, params, { fallback });
 }
 
+function isRtlDetailLocale(locale = I18n.getLocale()) {
+  const language = String(locale || "")
+    .trim()
+    .toLowerCase()
+    .split(/[-_]/, 1)[0];
+  return RTL_DETAIL_LANGUAGES.has(language);
+}
+
+// Superconjunto das duas condicoes de proposito. O upstream passou a decidir por
+// getTvRuntimePerformanceProfile().isPerformanceConstrained, mas nao da para
+// assumir que isso e verdade nesta TV: no build oficial 0.3.42 o boot-guard barra
+// o webOS 4 antes de aplicar as classes de performance, entao o valor nunca foi
+// observado aqui. Manter o teste de plataforma garante `eager` em qualquer TV, e o
+// teste do upstream cobre os aparelhos fracos que ele identifica fora disso.
 function detailImageLoadingMode() {
-  return Environment.isTizen() || Environment.isWebOS() ? "eager" : "lazy";
+  return Environment.isTizen() ||
+    Environment.isWebOS() ||
+    getTvRuntimePerformanceProfile().isPerformanceConstrained
+    ? "eager"
+    : "lazy";
 }
 
 // Returns the first value that is a non-negative integer (number or numeric
@@ -3107,12 +3128,13 @@ export const MetaDetailsScreen = {
   renderSeriesLayout(meta) {
     const backdrop = meta.background || meta.poster || "";
     const heroMarkup = this.renderSeriesHeroMarkup(meta);
+    const detailDirectionClass = isRtlDetailLocale() ? " detail-rtl" : "";
     if (!this.selectedRatingSeason || !this.seriesRatingsBySeason?.[this.selectedRatingSeason]) {
       this.selectedRatingSeason = this.selectedSeason || this.episodes?.[0]?.season || 1;
     }
 
     this.container.innerHTML = `
-      <div class="series-detail-shell${this.getTrailerShellStateClasses()}">
+      <div class="series-detail-shell${detailDirectionClass}${this.getTrailerShellStateClasses()}">
         <div class="series-detail-backdrop" data-backdrop-url="${escapeAttribute(backdrop || "")}"${backdrop ? ` style="background-image:url('${backdrop.replace(/'/g, "%27")}')"` : ""}></div>
         <div class="detail-trailer-layer"></div>
         <div class="detail-trailer-loading-spinner" aria-hidden="true">${renderLoadingIndicator({ className: "player-loading-spinner-ring" })}</div>
@@ -3250,7 +3272,7 @@ export const MetaDetailsScreen = {
 
   renderHeroMetaRows(meta) {
     const hasExternalRatings = hasMdbListRatings(meta?.mdbListRatings);
-    const genresText = normalizeGenreList(meta).join(" • ");
+    const genresText = normalizeGenreList(meta).map(localizedGenreLabel).join(" • ");
     const yearText = formatMovieReleaseDate(meta);
     const imdbValue = resolveImdbRating(meta);
     const imdbText =
@@ -3345,11 +3367,13 @@ export const MetaDetailsScreen = {
   renderCompanySections(meta = {}) {
     const production = this.renderCompanyLogosSection(
       meta.productionCompanies || meta.production_companies || [],
-      t("detail.productionCompanies", {}, "Production")
+      t("detail.productionCompanies", {}, "Production"),
+      "company"
     );
     const networks = this.renderCompanyLogosSection(
       meta.networks || [],
-      t("detail.networks", {}, "Network")
+      t("detail.networks", {}, "Network"),
+      "network"
     );
     if (meta.type === "series" || meta.type === "tv") {
       return `${networks}${production}`;
@@ -3437,9 +3461,10 @@ export const MetaDetailsScreen = {
   renderMovieLayout(meta) {
     const backdrop = meta.background || meta.poster || "";
     const heroMarkup = this.renderMovieHeroMarkup(meta);
+    const detailDirectionClass = isRtlDetailLocale() ? " detail-rtl" : "";
 
     this.container.innerHTML = `
-      <div class="series-detail-shell movie-detail-shell${this.getTrailerShellStateClasses()}">
+      <div class="series-detail-shell movie-detail-shell${detailDirectionClass}${this.getTrailerShellStateClasses()}">
         <div class="series-detail-backdrop" data-backdrop-url="${escapeAttribute(backdrop || "")}"${backdrop ? ` style="background-image:url('${backdrop.replace(/'/g, "%27")}')"` : ""}></div>
         <div class="detail-trailer-layer"></div>
         <div class="detail-trailer-loading-spinner" aria-hidden="true">${renderLoadingIndicator({ className: "player-loading-spinner-ring" })}</div>
@@ -4972,6 +4997,22 @@ export const MetaDetailsScreen = {
     });
   },
 
+  openTmdbEntityFromNode(node) {
+    const entityId = String(node?.dataset?.tmdbId || "").trim();
+    if (!/^\d+$/.test(entityId) || Number(entityId) <= 0) {
+      // Keep cards without a TMDB id focusable, as on Android TV, but make
+      // Enter a safe no-op instead of guessing an entity from its name.
+      return false;
+    }
+    Router.navigate("tmdbEntityBrowse", {
+      entityKind: node.dataset.entityKind || "company",
+      entityId,
+      entityName: node.dataset.companyName || "",
+      sourceType: this.meta?.type || this.params?.itemType || "tv"
+    });
+    return true;
+  },
+
   moveEpisodeFocus(direction) {
     if (direction !== "left" && direction !== "right") {
       return false;
@@ -5674,7 +5715,7 @@ export const MetaDetailsScreen = {
     return this.renderPreviewRail(this.moreLikeThisItems, this.params?.itemType || "movie");
   },
 
-  renderCompanyLogosSection(rawCompanies = [], title = "Studios") {
+  renderCompanyLogosSection(rawCompanies = [], title = "Studios", entityKind = "company") {
     const toLogo = (logo) => {
       const value = String(logo || "").trim();
       if (!value) {
@@ -5691,7 +5732,8 @@ export const MetaDetailsScreen = {
     const companies = rawCompanies
       .map((entry) => ({
         name: entry?.name || "",
-        logo: toLogo(entry?.logo || entry?.logoPath || entry?.logo_path || "")
+        logo: toLogo(entry?.logo || entry?.logoPath || entry?.logo_path || ""),
+        tmdbId: Number(entry?.tmdbId || entry?.tmdb_id || entry?.id || 0) || null
       }))
       .filter((entry) => entry.logo || entry.name);
     if (!companies.length) {
@@ -5702,7 +5744,12 @@ export const MetaDetailsScreen = {
       .map(
         (company) => `
       <article class="detail-company-card focusable"
-               data-company-name="${escapeHtml(company.name || "")}">
+               data-action="openTmdbEntity"
+               data-entity-kind="${escapeHtml(entityKind)}"
+               data-tmdb-id="${escapeHtml(company.tmdbId || "")}"
+               data-company-key="${escapeHtml(`${entityKind}:${company.tmdbId || company.name || ""}`)}"
+               data-company-name="${escapeHtml(company.name || "")}"
+               aria-label="${escapeHtml(company.name || title || "Company")}">
         ${company.logo ? `<img src="${company.logo}" alt="${escapeHtml(company.name || "Company")}" loading="lazy" decoding="async" />` : `<span>${escapeHtml(company.name || "")}</span>`}
       </article>
     `
@@ -5976,6 +6023,12 @@ export const MetaDetailsScreen = {
     }
     if (target.matches(".detail-company-card.focusable")) {
       const companyName = String(target.dataset.companyName || "");
+      const companyKey = String(target.dataset.companyKey || "");
+      if (companyKey) {
+        return {
+          selector: `.detail-company-card[data-company-key="${escapeSelectorValue(companyKey)}"]`
+        };
+      }
       return companyName
         ? {
             selector: `.detail-company-card[data-company-name="${escapeSelectorValue(companyName)}"]`
@@ -6001,18 +6054,14 @@ export const MetaDetailsScreen = {
   },
 
   isPerformanceConstrained() {
-    return Boolean(globalThis.document?.body?.classList?.contains("performance-constrained"));
+    return Boolean(
+      getTvRuntimePerformanceProfile().isPerformanceConstrained ||
+      globalThis.document?.body?.classList?.contains("performance-constrained")
+    );
   },
 
   isLegacyTvRuntime() {
-    if (Environment.isTizen()) {
-      return true;
-    }
-    if (!Environment.isWebOS()) {
-      return false;
-    }
-    const webOsMajor = Number(Platform.getWebOsMajorVersion?.() || 0);
-    return webOsMajor > 0 && webOsMajor <= 5;
+    return Boolean(getTvRuntimePerformanceProfile().isLegacyTvRuntime);
   },
 
   shouldSuppressTrailerAutoplay() {
@@ -7169,7 +7218,7 @@ export const MetaDetailsScreen = {
           <div class="series-stream-left">
             ${this.meta?.logo ? `<img src="${this.meta.logo}" class="series-stream-logo" alt="logo" />` : `<div class="series-stream-heading">${this.meta?.name || "Movie"}</div>`}
             <div class="series-stream-episode">${this.meta?.name || ""}</div>
-            <div class="series-stream-episode-title">${Array.isArray(this.meta?.genres) ? this.meta.genres.slice(0, 3).join(" • ") : ""}</div>
+            <div class="series-stream-episode-title">${Array.isArray(this.meta?.genres) ? this.meta.genres.slice(0, 3).map(localizedGenreLabel).join(" • ") : ""}</div>
           </div>
           <div class="series-stream-right">
             <div class="series-stream-filters">${filterTabs}</div>
@@ -9049,6 +9098,11 @@ export const MetaDetailsScreen = {
       return;
     }
 
+    if (action === "openTmdbEntity") {
+      this.openTmdbEntityFromNode(current);
+      return;
+    }
+
     if (action === "toggleLibrary") {
       await this.toggleLibraryFromHero();
       return;
@@ -9191,6 +9245,9 @@ export const MetaDetailsScreen = {
         preserveSource: true
       });
       return true;
+    }
+    if (action === "openTmdbEntity") {
+      return this.openTmdbEntityFromNode(actionTarget);
     }
     return false;
   },

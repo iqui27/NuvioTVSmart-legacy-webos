@@ -14,6 +14,7 @@ import { detailWatchedEnrichmentService } from "../../data/repository/detailWatc
 import { resolveExperienceRoute } from "./experienceModeRouting.js";
 import { Platform } from "../../platform/index.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../platform/legacyDom.js";
+import { getTvRuntimePerformanceProfile } from "../../platform/tvRuntimePerformance.js";
 
 const PINNED_AVATAR_CATEGORIES = ["anime", "animation", "tv", "movie", "gaming"];
 const DEFAULT_PROFILE_COLOR = "#f5f5f5";
@@ -37,7 +38,7 @@ const PROFILE_PIN_TEXT = {
   supportVerifyChange: "Enter the current 4-digit PIN before setting a new one.",
   supportVerifyRemove: "Enter the current 4-digit PIN to remove this lock.",
   mismatch: "PINs did not match. Enter a new PIN again.",
-  forgot: "Forgot PIN? Reset it from your Nuvio account on nuvio website.",
+  forgot: "Forgot PIN? Reset it from your Nuvio account page.",
   back: "Press back to cancel",
   verifying: "Verifying…",
   saving: "Saving…",
@@ -1520,8 +1521,7 @@ export const ProfileSelectionScreen = {
     }
 
     if (
-      Platform.isTizen() ||
-      Platform.isWebOS() ||
+      getTvRuntimePerformanceProfile().isPerformanceConstrained ||
       globalThis.document?.body?.classList?.contains("performance-constrained")
     ) {
       this._bgCurrentColor = targetColor;
@@ -2467,18 +2467,14 @@ export const ProfileSelectionScreen = {
       ThemeManager.apply({ enforceAccess: true, access: memberAccess });
       I18n.apply();
       const experienceRoute = await resolveExperienceRoute(profileId);
-      const shouldWaitForHomeSync = experienceRoute === "home" && StartupSyncService.started;
       await Router.navigate(
         experienceRoute,
-        experienceRoute === "home"
-          ? {
-              forceReload: true,
-              ...(shouldWaitForHomeSync ? { waitForFreshContinueWatching: true } : {})
-            }
-          : {},
+        experienceRoute === "home" ? { forceReload: true } : {},
         experienceRoute === "home" ? {} : { replaceHistory: true, skipStackPush: true }
       );
-      void StartupSyncService.requestSyncNow().catch((error) => {
+      void StartupSyncService.requestSyncNow({
+        notifyPullCompleted: experienceRoute === "home"
+      }).catch((error) => {
         console.warn("Profile background sync failed", error);
       });
     } catch (error) {

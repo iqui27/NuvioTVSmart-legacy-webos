@@ -225,7 +225,7 @@
     <string name="audio_decoder_prefer_app_desc">Używaj dekoderów FFmpeg gdy dostępne. Lepsza obsługa formatów, ale wyższe użycie CPU.</string>
     <string name="audio_decoder_controls">Kontroluje czy używane są dekodery sprzętowe czy programowe (FFmpeg) dla audio i wideo</string>
     <string name="audio_enable_downmix_title">Włącz downmix</string>
-    <string name="audio_enable_downmix_subtitle">Używa ścieżki downmix FFmpeg. Po wyłączeniu audio podąża za poprzednią ścieżką Android/urządzenia.</string>
+    <string name="audio_enable_downmix_subtitle">Używa ścieżki downmix FFmpeg. Wymaga opcji Preferuj dekodery aplikacji (FFmpeg). Po wyłączeniu audio korzysta z poprzedniej ścieżki Android/urządzenia.</string>
     <string name="audio_maintain_original_audio_on_downmix_title">Zachowaj oryginalne audio przy downmix</string>
     <string name="audio_maintain_original_audio_on_downmix_subtitle">Po wyłączeniu normalizacja downmix może zmniejszyć ogólną głośność.</string>
     <string name="audio_number_of_channels">Liczba kanałów</string>
@@ -890,7 +890,7 @@
     <string name="layout_selection_subtitle">Wybierz układ ekranu głównego</string>
     <string name="layout_selection_continue">Kontynuuj</string>
     <string name="update_title">Aktualizacja aplikacji</string>
-    <string name="update_installer_required">Użyj Nuvio WebTV Installer, aby zaktualizować aplikację na telewizorze.</string>
+    <string name="update_installer_required">Użyj Nuvio TV Installer, aby zaktualizować aplikację na telewizorze.</string>
     <string name="update_release_notes">Co nowego</string>
     <string name="update_release_notes_unavailable">Opis wydania jest niedostępny.</string>
     <string name="update_downloading">Pobieranie aktualizacji</string>
@@ -2718,4 +2718,17 @@
     <string name="player_error_tizen_p2p_unsupported">Odtwarzanie Torrent/P2P nie jest obsługiwane na tym telewizorze.</string>
     <string name="player_tizen_mkv_subtitles_unavailable">Wbudowane napisy MKV nie są udostępniane przez odtwarzacz webowy tego telewizora.</string>
     <string name="player_tizen_mkv_audio_unavailable">Wbudowane ścieżki audio MKV nie są udostępniane przez odtwarzacz webowy tego telewizora.</string>
+    <string name="layout_cw_enabled">Pokaż Kontynuuj oglądanie</string>
+    <string name="layout_cw_enabled_sub">Pokaż rząd Kontynuuj oglądanie na ekranie głównym.</string>
+    <string name="profile_editor_tab_avatar">Awatar</string>
+    <string name="profile_editor_tab_background">Tło</string>
+    <string name="profile_choose_background">Wybierz tło profilu</string>
+    <string name="profile_background_member_note">Niestandardowe adresy URL tła można skonfigurować z panelu Nuvio.</string>
+    <string name="profile_background_normal">Normalne</string>
+    <string name="profile_background_custom">Niestandardowe</string>
+    <string name="profile_avatar_category_supporter">Supporter</string>
+    <string name="supporters_level_supporter">Supporter</string>
+    <string name="supporters_level_supporter_plus">Supporter+</string>
+    <string name="supporters_since">Wspiera Nuvio od %1$s</string>
+    <string name="supporters_since_unknown">Z dumą wspiera Nuvio</string>
 </resources>

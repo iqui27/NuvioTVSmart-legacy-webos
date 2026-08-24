@@ -32,10 +32,15 @@ import { StartupSyncService } from "../../../core/profile/startupSyncService.js"
 import { AvatarRepository } from "../../../data/remote/supabase/avatarRepository.js";
 import { MemberAccessRepository } from "../../../data/remote/supabase/memberAccessRepository.js";
 import { Platform } from "../../../platform/index.js";
+import {
+  getTvHeroTransitionMode,
+  getTvRuntimePerformanceProfile
+} from "../../../platform/tvRuntimePerformance.js";
 import { isFastHorizontalNavigationEnabled } from "../../../platform/sharedKeys.js";
 import { LocalStore } from "../../../core/storage/localStore.js";
 import { TMDB_API_KEY, YOUTUBE_PROXY_URL } from "../../../config.js";
 import { I18n } from "../../../i18n/index.js";
+import { localizedGenreLabel } from "../../../i18n/genreLabels.js";
 import {
   buildWatchedTitleIdSet,
   isTitleItemWatched,
@@ -79,8 +84,6 @@ import {
   CW_ENRICHMENT_CACHE_MAX_AGE_MS,
   CW_ENTER_DELAY_MS,
   CW_HOLD_DELAY_MS,
-  CW_INITIAL_RESOLVE_BUDGET_MS,
-  CW_INITIAL_RESOLVE_BUDGET_TV_MS,
   CW_MAX_ENRICHMENT_CONCURRENCY,
   CW_MAX_NEXT_UP_CONCURRENCY,
   CW_MAX_NEXT_UP_LOOKUPS,
@@ -99,7 +102,9 @@ import {
   HERO_ROTATE_INTERVAL_MS,
   HOME_BACKGROUND_RENDER_DELAY_LEGACY_MS,
   HOME_BACKGROUND_RENDER_DELAY_MS,
+  HOME_ADDON_MANIFEST_TIMEOUT_MS,
   HOME_INITIAL_CATALOG_LOAD,
+  HOME_LEGACY_HERO_BACKDROP_CROSSFADE_MS,
   HOME_LAYOUT_SEQUENCE,
   HOME_LOADING_ROW_ITEMS_CONSTRAINED,
   HOME_LOADING_ROW_ITEMS_DEFAULT,
@@ -117,6 +122,11 @@ import {
   HOME_ROW_TIMEOUT_MS
 } from "./homeConstants.js";
 import { mergeRefreshedHomeRows } from "./homeRowMerge.js";
+import {
+  findHomeFocusIdentityMatch,
+  getHomeFocusIdentity,
+  shouldApplyLateContinueWatchingFocus
+} from "./homeFocusPolicy.js";
 import { resolveNextUpCandidates } from "./nextUpCandidateResolver.js";
 import {
   getContinueWatchingRenderItems,
@@ -146,6 +156,10 @@ export { escapeAttribute, escapeHtml, formatCatalogRowTitle } from "./homeUtils.
 
 const MODERN_SIDEBAR_PILL_AUTO_COLLAPSE_MS = 4000;
 const CW_RELEASE_ALERT_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000;
+
+function isDirectionalKeyCode(code) {
+  return code >= 37 && code <= 40;
+}
 const HOME_LAZY_IMAGE_SELECTOR =
   ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src]";
 const HOME_LAZY_IMAGE_ROW_SELECTOR =
@@ -655,6 +669,27 @@ function preloadImageSource(src) {
   const preload = new Promise((resolve) => {
     const image = new Image();
     let settled = false;
+    const settleLoadedImage = () => {
+      if (Number(image.naturalWidth || 0) <= 0) {
+        finish(false);
+        return;
+      }
+      if (typeof image.decode !== "function") {
+        finish(true);
+        return;
+      }
+      try {
+        const decoded = image.decode();
+        if (decoded && typeof decoded.then === "function") {
+          decoded.then(() => finish(true)).catch(() => finish(false));
+        } else {
+          finish(true);
+        }
+      } catch (_) {
+        // Some older WebKit/Chromium builds expose decode but cannot call it.
+        finish(true);
+      }
+    };
     const finish = (loaded) => {
       if (settled) {
         return;
@@ -665,12 +700,12 @@ function preloadImageSource(src) {
     };
     // Older TV engines can leave image requests pending without load/error.
     const timeoutId = setTimeout(() => finish(false), HERO_IMAGE_PRELOAD_TIMEOUT_MS);
-    image.onload = () => finish(true);
+    image.onload = settleLoadedImage;
     image.onerror = () => finish(false);
     image.decoding = "async";
     image.src = normalized;
     if (image.complete) {
-      finish(Number(image.naturalWidth || 0) > 0);
+      settleLoadedImage();
     }
   });
   heroImagePreloadCache.set(normalized, preload);
@@ -687,12 +722,21 @@ function preloadImageSource(src) {
   return preload;
 }
 
-function preloadModernHeroAssets(hero) {
-  const display = buildModernHeroPresentation(hero);
+function preloadHeroAssets(hero, layoutMode = "modern") {
+  const display =
+    layoutMode === "modern"
+      ? buildModernHeroPresentation(hero)
+      : buildHeroDisplayModel(hero, layoutMode);
   return Promise.all([preloadImageSource(display?.backdrop), preloadImageSource(display?.logo)]);
 }
 
-function animateModernHeroBackdropSwap(backdrop, nextSrc, nextAlt = "") {
+function animateHeroBackdropSwap(
+  backdrop,
+  nextSrc,
+  nextAlt = "",
+  durationMs = HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS,
+  options = {}
+) {
   if (!(backdrop instanceof HTMLImageElement)) {
     return;
   }
@@ -700,6 +744,7 @@ function animateModernHeroBackdropSwap(backdrop, nextSrc, nextAlt = "") {
   const normalizedSrc = String(nextSrc || "").trim();
   const normalizedAlt = String(nextAlt || "featured").trim() || "featured";
   const currentSrc = String(backdrop.getAttribute("src") || "").trim();
+  const transitionMode = options?.transitionMode || "crossfade";
   const token = Number(backdrop.heroBackdropTransitionToken || 0) + 1;
   backdrop.heroBackdropTransitionToken = token;
 
@@ -726,8 +771,36 @@ function animateModernHeroBackdropSwap(backdrop, nextSrc, nextAlt = "") {
   }
 
   if (currentSrc === normalizedSrc) {
+    finalize();
     backdrop.setAttribute("alt", normalizedAlt);
     backdrop.classList.remove("placeholder");
+    return;
+  }
+
+  if (transitionMode === "single-layer") {
+    preloadImageSource(normalizedSrc).then((loaded) => {
+      if (Number(backdrop.heroBackdropTransitionToken || 0) !== token) {
+        return;
+      }
+      if (!loaded) {
+        finalize();
+        backdrop.setAttribute("src", normalizedSrc);
+        backdrop.setAttribute("alt", normalizedAlt);
+        backdrop.classList.remove("placeholder");
+        return;
+      }
+      backdrop.classList.add("home-hero-backdrop-transition-enter");
+      backdrop.classList.remove("placeholder");
+      backdrop.setAttribute("src", normalizedSrc);
+      backdrop.setAttribute("alt", normalizedAlt);
+      requestAnimationFrame(() => {
+        if (Number(backdrop.heroBackdropTransitionToken || 0) !== token) {
+          return;
+        }
+        backdrop.classList.add("is-visible");
+        setTimeout(() => finalize(), durationMs);
+      });
+    });
     return;
   }
 
@@ -770,13 +843,19 @@ function animateModernHeroBackdropSwap(backdrop, nextSrc, nextAlt = "") {
         ghost?.classList?.add("is-fading-out");
         setTimeout(() => {
           finalize();
-        }, HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS);
+        }, durationMs);
       });
     });
   });
 }
 
-function animateModernHeroLogoSwap(logoNode, nextSrc, nextAlt = "") {
+function animateHeroLogoSwap(
+  logoNode,
+  nextSrc,
+  nextAlt = "",
+  durationMs = HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS,
+  options = {}
+) {
   if (!(logoNode instanceof HTMLImageElement)) {
     return;
   }
@@ -784,6 +863,7 @@ function animateModernHeroLogoSwap(logoNode, nextSrc, nextAlt = "") {
   const normalizedSrc = String(nextSrc || "").trim();
   const normalizedAlt = String(nextAlt || "logo").trim() || "logo";
   const currentSrc = String(logoNode.getAttribute("src") || "").trim();
+  const transitionMode = options?.transitionMode || "crossfade";
   const token = Number(logoNode.heroLogoTransitionToken || 0) + 1;
   logoNode.heroLogoTransitionToken = token;
 
@@ -808,7 +888,33 @@ function animateModernHeroLogoSwap(logoNode, nextSrc, nextAlt = "") {
   }
 
   if (currentSrc === normalizedSrc) {
+    finalize();
     logoNode.setAttribute("alt", normalizedAlt);
+    return;
+  }
+
+  if (transitionMode === "single-layer") {
+    preloadImageSource(normalizedSrc).then((loaded) => {
+      if (Number(logoNode.heroLogoTransitionToken || 0) !== token) {
+        return;
+      }
+      if (!loaded) {
+        finalize();
+        logoNode.setAttribute("src", normalizedSrc);
+        logoNode.setAttribute("alt", normalizedAlt);
+        return;
+      }
+      logoNode.classList.add("home-hero-logo-transition-enter");
+      logoNode.setAttribute("src", normalizedSrc);
+      logoNode.setAttribute("alt", normalizedAlt);
+      requestAnimationFrame(() => {
+        if (Number(logoNode.heroLogoTransitionToken || 0) !== token) {
+          return;
+        }
+        logoNode.classList.add("is-visible");
+        setTimeout(() => finalize(), durationMs);
+      });
+    });
     return;
   }
 
@@ -849,7 +955,7 @@ function animateModernHeroLogoSwap(logoNode, nextSrc, nextAlt = "") {
         ghost?.classList?.add("is-fading-out");
         setTimeout(() => {
           finalize();
-        }, HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS);
+        }, durationMs);
       });
     });
   });
@@ -1093,13 +1199,6 @@ function buildYoutubeEmbedUrl(videoId, { muted = true } = {}) {
       proxyUrl.searchParams.set("playsinline", "1");
       proxyUrl.searchParams.set("rel", "0");
       proxyUrl.searchParams.set("cc_load_policy", "0");
-      if (Platform.isWebOS()) {
-        // Home previews do not need the controllable IFrame API. On webOS it
-        // commonly reaches the same direct-embed fallback only after the
-        // proxy watchdog expires, keeping the trailer hidden for several
-        // seconds after the focused poster has already expanded.
-        proxyUrl.searchParams.set("direct", "1");
-      }
       proxyUrl.searchParams.set("_cb", `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
       return proxyUrl.toString();
     } catch (_) {
@@ -1256,7 +1355,7 @@ async function resolveTrailerMetaWithTmdbFallback(meta = {}, itemType = "movie")
 
 function getContinueWatchingMetaTimeout(timeoutMs) {
   const requestedTimeout = Math.max(500, Number(timeoutMs || 0) || CW_META_TIMEOUT_MS);
-  if (Platform.isWebOS() || Platform.isTizen()) {
+  if (getTvRuntimePerformanceProfile().isPerformanceConstrained) {
     return Math.max(requestedTimeout, CW_META_TIMEOUT_TV_MS);
   }
   return requestedTimeout;
@@ -1420,6 +1519,24 @@ function resolveNextUpReleaseState(item = {}) {
   };
 }
 
+function refreshContinueWatchingReleaseState(item = {}) {
+  if (!item?.isNextUp) {
+    return item;
+  }
+  const releaseTimestamp = parseEpisodeReleaseDateForContinueWatching(
+    firstNonEmpty(item?.released, item?.releaseInfo)
+  );
+  if (releaseTimestamp == null) {
+    return item;
+  }
+  const releaseState = resolveNextUpReleaseState(item);
+  return {
+    ...item,
+    ...releaseState,
+    airDateLabel: releaseState.hasAired ? null : buildNextUpAirDateStatus(item)
+  };
+}
+
 function parseEpisodeReleaseCalendarDateForContinueWatching(released) {
   const raw = String(released || "").trim();
   if (!raw) {
@@ -1578,7 +1695,13 @@ function shouldShowNextUpEpisodeForContinueWatching(
   if (isSeasonRollover && releaseTime == null) {
     return false;
   }
-  if (releaseTime == null || releaseTime <= Date.now()) {
+  // Android treats an episode without a release date as unaired. Keep the
+  // same setting gate so missing metadata cannot make an upcoming episode
+  // appear as an already aired Next Up item.
+  if (releaseTime == null) {
+    return showUnairedNextUp;
+  }
+  if (releaseTime <= Date.now()) {
     return true;
   }
   if (!showUnairedNextUp) {
@@ -1947,9 +2070,9 @@ function getCachedContinueWatchingEnrichment(item = {}) {
 function applyCachedContinueWatchingEnrichment(item = {}) {
   const cached = getCachedContinueWatchingEnrichment(item);
   if (!cached) {
-    return item;
+    return refreshContinueWatchingReleaseState(item);
   }
-  return {
+  return refreshContinueWatchingReleaseState({
     ...item,
     ...cached,
     contentId: item.contentId,
@@ -1962,7 +2085,7 @@ function applyCachedContinueWatchingEnrichment(item = {}) {
     progressPercent: item.progressPercent,
     updatedAt: item.updatedAt,
     source: item.source
-  };
+  });
 }
 
 function saveContinueWatchingEnrichment(item = {}) {
@@ -2003,7 +2126,7 @@ function saveContinueWatchingEnrichment(item = {}) {
     episodeDescription: normalized.episodeDescription,
     continueWatchingMetaResolved: true
   };
-  const enrichmentCacheLimit = Platform.isTizen() || Platform.isWebOS() ? 50 : 200;
+  const enrichmentCacheLimit = getTvRuntimePerformanceProfile().isPerformanceConstrained ? 50 : 200;
   const entries = Object.entries(cache)
     .sort(([, left], [, right]) => Number(right?.cachedAt || 0) - Number(left?.cachedAt || 0))
     .slice(0, enrichmentCacheLimit);
@@ -2023,14 +2146,16 @@ function readContinueWatchingDisplaySnapshot(scopeKey) {
   if (Date.now() - Number(entry.savedAt || 0) > CW_DISPLAY_SNAPSHOT_MAX_AGE_MS) {
     return [];
   }
-  return entry.items.filter((item) => {
-    if (!isCloudContinueWatchingItem(item)) {
-      return true;
-    }
-    return Boolean(
-      CloudLibraryPlaybackProgressStore.findForContinueWatching(item.contentId, item.videoId)
-    );
-  });
+  return entry.items
+    .map((item) => refreshContinueWatchingReleaseState(item))
+    .filter((item) => {
+      if (!isCloudContinueWatchingItem(item)) {
+        return true;
+      }
+      return Boolean(
+        CloudLibraryPlaybackProgressStore.findForContinueWatching(item.contentId, item.videoId)
+      );
+    });
 }
 
 function writeContinueWatchingDisplaySnapshot(scopeKey, items = []) {
@@ -2080,7 +2205,10 @@ function buildContinueWatchingSignature(items = []) {
         position,
         duration,
         normalized.progressStatus || "",
-        normalized.progressFraction ?? ""
+        normalized.progressFraction ?? "",
+        normalized.hasAired === false ? "upcoming" : "aired",
+        normalized.isReleaseAlert ? "release-alert" : "",
+        normalized.airDateLabel || ""
       ].join("|");
     })
     .join("::");
@@ -2149,7 +2277,9 @@ function buildHeroDisplayModel(hero, layoutMode) {
   }
   const year = extractYear(hero);
   const imdb = hideHomeHeroRatings() ? null : resolveImdbRating(hero);
-  const genres = Array.isArray(hero?.genres) ? hero.genres.filter(Boolean).slice(0, 3) : [];
+  const genres = Array.isArray(hero?.genres)
+    ? hero.genres.filter(Boolean).slice(0, 3).map(localizedGenreLabel)
+    : [];
   const typeLabel = formatContentTypeLabel(hero?.type || hero?.apiType || "movie", "movie");
   const isContinueWatchingHero = hero?.heroSource === "continueWatching";
   const metaPrimary = [];
@@ -2228,7 +2358,9 @@ export function buildModernHeroPresentation(hero) {
   }
 
   const isSeries = String(normalized.type || normalized.apiType || "").toLowerCase() === "series";
-  const genres = Array.isArray(normalized.genres) ? normalized.genres.filter(Boolean) : [];
+  const genres = Array.isArray(normalized.genres)
+    ? normalized.genres.filter(Boolean).map(localizedGenreLabel)
+    : [];
   const contentTypeText = formatContentTypeLabel(
     normalized.type || normalized.apiType || "movie",
     "movie"
@@ -2467,7 +2599,7 @@ function renderContinueWatchingCard(item, index, options = {}) {
   const uniqueCardImageSources = uniqueNonEmptyValues(cardImageSources);
   const cardImage = uniqueCardImageSources[0] || "";
   const fallbackQueue = encodeHeroBackdropFallbacks(uniqueCardImageSources.slice(1));
-  const deferContinueImage = Platform.isTizen() || Platform.isWebOS();
+  const deferContinueImage = getTvRuntimePerformanceProfile().isPerformanceConstrained;
   const continueImageAttrs = cardImage
     ? buildLazyImageAttributes(cardImage, { defer: deferContinueImage })
     : "";
@@ -2778,14 +2910,14 @@ function shouldDeferHomeRowImages(rowIndex = 0, rowKey = "", focusedRowKey = "")
   if (focused && String(rowKey || "") === focused) {
     return false;
   }
-  const eagerRows = Platform.isWebOS() || Platform.isTizen() ? 3 : 5;
+  const eagerRows = getTvRuntimePerformanceProfile().isPerformanceConstrained ? 3 : 5;
   return safeRowIndex >= eagerRows;
 }
 
 function buildLazyImageAttributes(src = "", { defer = false, highPriority = false } = {}) {
   const safeSrc = escapeAttribute(src);
   const priority = highPriority ? ' fetchpriority="high"' : "";
-  const loadingMode = Platform.isWebOS() || Platform.isTizen() ? "eager" : "lazy";
+  const loadingMode = getTvRuntimePerformanceProfile().isPerformanceConstrained ? "eager" : "lazy";
   if (defer) {
     return `data-src="${safeSrc}" loading="${loadingMode}" decoding="async"${priority}`;
   }
@@ -3088,6 +3220,7 @@ export const HomeScreen = {
       mainScrollTop: viewport.scrollTop,
       rowKey,
       itemIndex,
+      itemIdentity: getHomeFocusIdentity(focused),
       focusKind,
       trackStates
     };
@@ -3154,6 +3287,7 @@ export const HomeScreen = {
       mainScrollTop: viewport.scrollTop,
       rowKey: String(section?.dataset?.rowKey || ""),
       itemIndex,
+      itemIdentity: getHomeFocusIdentity(node),
       focusKind,
       trackStates
     };
@@ -3233,7 +3367,11 @@ export const HomeScreen = {
     });
 
     const nodes = this.getNavigationRowNodes(focusState.rowKey);
-    const target = nodes[focusState.itemIndex] || nodes[0] || null;
+    const target =
+      findHomeFocusIdentityMatch(nodes, focusState.itemIdentity) ||
+      nodes[focusState.itemIndex] ||
+      nodes[0] ||
+      null;
     if (!target) {
       return false;
     }
@@ -3367,7 +3505,11 @@ export const HomeScreen = {
       : this.container.querySelector(
           ".home-main .home-continue-card.focusable, .home-main .home-poster-card.focusable"
         );
-    const target = targetNodes[focusState.itemIndex] || targetNodes[0] || fallback;
+    const target =
+      findHomeFocusIdentityMatch(targetNodes, focusState.itemIdentity) ||
+      targetNodes[focusState.itemIndex] ||
+      targetNodes[0] ||
+      fallback;
     if (!target) {
       return false;
     }
@@ -3411,7 +3553,11 @@ export const HomeScreen = {
       target = this.container.querySelector(".home-hero-card.focusable");
     } else if (focusState.rowKey) {
       const rowNodes = this.getNavigationRowNodes(focusState.rowKey);
-      target = rowNodes[focusState.itemIndex] || rowNodes[0] || null;
+      target =
+        findHomeFocusIdentityMatch(rowNodes, focusState.itemIdentity) ||
+        rowNodes[focusState.itemIndex] ||
+        rowNodes[0] ||
+        null;
     }
 
     if (this.isRestoringFocusFromBack && focusState.rowKey) {
@@ -3830,14 +3976,7 @@ export const HomeScreen = {
   },
 
   isLegacyTvRuntime() {
-    if (Platform.isTizen()) {
-      return true;
-    }
-    if (!Platform.isWebOS()) {
-      return false;
-    }
-    const webOsMajor = Number(Platform.getWebOsMajorVersion?.() || 0);
-    return webOsMajor > 0 && webOsMajor <= 5;
+    return Boolean(getTvRuntimePerformanceProfile().isLegacyTvRuntime);
   },
 
   shouldSuppressAutomaticTrailerPlayback() {
@@ -3845,7 +3984,7 @@ export const HomeScreen = {
   },
 
   getFocusedPosterTrailerDelayMs() {
-    if (Platform.isTizen()) {
+    if (Platform.isTizen() && this.isPerformanceConstrained()) {
       return 1600;
     }
     // The configured focused-poster delay already settles focus before this
@@ -3861,15 +4000,18 @@ export const HomeScreen = {
   },
 
   isPerformanceConstrained() {
-    return Boolean(globalThis.document?.body?.classList?.contains("performance-constrained"));
+    return Boolean(
+      getTvRuntimePerformanceProfile().isPerformanceConstrained ||
+      globalThis.document?.body?.classList?.contains("performance-constrained")
+    );
   },
 
-  // Constrained TVs (all webOS/Tizen, plus low-end) cannot afford the animated
+  // Constrained TV generations (plus low-end devices) cannot afford the animated
   // spring scroll on every focus move: each move runs a ~440ms rAF loop writing
   // scrollTop/scrollLeft per frame, which stacks into seconds of input lag. Snap
-  // focus scrolling instead, matching the classic layout and Tizen behaviour.
+  // focus scrolling instead for the constrained runtime profile.
   shouldUseImmediateFocusScroll() {
-    return Boolean(Platform.isTizen() || this.isPerformanceConstrained());
+    return this.isPerformanceConstrained();
   },
 
   hasCollectionHomeRows() {
@@ -3880,7 +4022,7 @@ export const HomeScreen = {
     if (this.isLegacyTvRuntime()) {
       return HOME_MAX_ITEMS_PER_ROW_LEGACY_TV;
     }
-    if (Platform.isWebOS() && this.hasCollectionHomeRows()) {
+    if (this.isPerformanceConstrained() && this.hasCollectionHomeRows()) {
       return this.collections.length > 2
         ? HOME_MAX_ITEMS_PER_ROW_LEGACY_TV
         : HOME_MAX_ITEMS_PER_ROW_CONSTRAINED;
@@ -3901,7 +4043,7 @@ export const HomeScreen = {
     if (this.isLegacyTvRuntime()) {
       return CW_RENDER_BATCH_ITEMS_LEGACY_TV;
     }
-    if (Platform.isWebOS() || Platform.isTizen() || this.isPerformanceConstrained()) {
+    if (this.isPerformanceConstrained()) {
       return CW_RENDER_BATCH_ITEMS_CONSTRAINED;
     }
     return CW_RENDER_BATCH_ITEMS_DEFAULT;
@@ -3911,7 +4053,7 @@ export const HomeScreen = {
     if (this.isLegacyTvRuntime()) {
       return HOME_LOADING_ROW_ITEMS_LEGACY_TV;
     }
-    if (Platform.isWebOS() && this.hasCollectionHomeRows()) {
+    if (this.isPerformanceConstrained() && this.hasCollectionHomeRows()) {
       return HOME_LOADING_ROW_ITEMS_LEGACY_TV;
     }
     return this.isPerformanceConstrained()
@@ -3926,18 +4068,8 @@ export const HomeScreen = {
       }
       return 5;
     }
-    if (Platform.isWebOS()) {
-      if (this.hasCollectionHomeRows()) {
-        return 4;
-      }
-      const webOsMajor = Number(Platform.getWebOsMajorVersion?.() || 0);
-      if (webOsMajor > 0 && webOsMajor <= 5) {
-        return 4;
-      }
-      return Math.min(HOME_INITIAL_CATALOG_LOAD, 6);
-    }
-    if (Platform.isTizen()) {
-      return Math.min(HOME_INITIAL_CATALOG_LOAD, 6);
+    if (Platform.isWebOS() && this.hasCollectionHomeRows()) {
+      return 4;
     }
     return HOME_INITIAL_CATALOG_LOAD;
   },
@@ -3946,18 +4078,8 @@ export const HomeScreen = {
     if (this.isPerformanceConstrained()) {
       return this.isLegacyTvRuntime() ? 2 : 4;
     }
-    if (Platform.isWebOS()) {
-      if (this.hasCollectionHomeRows()) {
-        return 4;
-      }
-      const webOsMajor = Number(Platform.getWebOsMajorVersion?.() || 0);
-      if (webOsMajor > 0 && webOsMajor <= 5) {
-        return 4;
-      }
-      return 8;
-    }
-    if (Platform.isTizen()) {
-      return 8;
+    if (Platform.isWebOS() && this.hasCollectionHomeRows()) {
+      return 4;
     }
     return 0;
   },
@@ -3975,8 +4097,7 @@ export const HomeScreen = {
 
   shouldUseImmediateHorizontalScrollForNode(node) {
     return Boolean(
-      node?.matches?.(".home-continue-card.focusable") &&
-      (Platform.isWebOS() || this.isPerformanceConstrained() || this.isLegacyTvRuntime())
+      node?.matches?.(".home-continue-card.focusable") && this.isPerformanceConstrained()
     );
   },
 
@@ -4139,6 +4260,108 @@ export const HomeScreen = {
     this.requestRender({ delayMs: this.getBackgroundRenderDelay() });
   },
 
+  ensureStartupSyncSubscription() {
+    if (this.unsubscribeStartupSyncPullCompleted) {
+      return;
+    }
+    this.unsubscribeStartupSyncPullCompleted = StartupSyncService.subscribeToPullCompleted(
+      ({ profileId } = {}) => {
+        if (Router.getCurrent() !== "home") {
+          return;
+        }
+        const activeProfileId = String(ProfileManager.getActiveProfileId() || "");
+        if (profileId && String(profileId) !== activeProfileId) {
+          return;
+        }
+        void this.requestHomeBackgroundRefresh({
+          preserveReturnState: true,
+          reason: "startup-sync"
+        }).catch((error) => {
+          console.warn("Home post-sync refresh failed", error);
+        });
+      }
+    );
+  },
+
+  ensureAddonManifestSubscriptions() {
+    if (!this.unsubscribeAddonManifestChanges) {
+      this.unsubscribeAddonManifestChanges = addonRepository.onManifestCacheChanged(() => {
+        if (Router.getCurrent() !== "home") {
+          return;
+        }
+        void this.requestHomeBackgroundRefresh({
+          preserveReturnState: true,
+          reason: "manifest-cache"
+        }).catch((error) => {
+          console.warn("Home post-manifest refresh failed", error);
+        });
+      });
+    }
+    if (!this.unsubscribeInstalledAddonChanges) {
+      this.unsubscribeInstalledAddonChanges = addonRepository.onInstalledAddonsChanged(() => {
+        if (Router.getCurrent() !== "home") {
+          return;
+        }
+        void this.requestHomeBackgroundRefresh({
+          preserveReturnState: true,
+          reason: "addon-state"
+        }).catch((error) => {
+          console.warn("Home addon-state refresh failed", error);
+        });
+      });
+    }
+  },
+
+  requestHomeBackgroundRefresh({ preserveReturnState = true, reason = "background" } = {}) {
+    this.homeBackgroundRefreshPending = true;
+    this.homeBackgroundRefreshPreserveReturnState = Boolean(
+      this.homeBackgroundRefreshPreserveReturnState || preserveReturnState
+    );
+    this.homeBackgroundRefreshReason = String(reason || "background");
+
+    if (this.isInitialHomeLoading) {
+      return Promise.resolve(false);
+    }
+    if (this.homeBackgroundRefreshPromise) {
+      return this.homeBackgroundRefreshPromise;
+    }
+
+    // A post-sync refresh can begin while the initial catalog/CW load still
+    // has child promises in flight. Invalidate that older load before the new
+    // refresh captures its token, otherwise a slow stale response can win
+    // after the freshly synchronized data has been rendered.
+    this.homeLoadToken = (this.homeLoadToken || 0) + 1;
+
+    let refreshPromise = null;
+    refreshPromise = (async () => {
+      let didRefresh = false;
+      while (this.homeBackgroundRefreshPending && Router.getCurrent() === "home") {
+        const shouldPreserveReturnState = Boolean(this.homeBackgroundRefreshPreserveReturnState);
+        const refreshReason = this.homeBackgroundRefreshReason;
+        this.homeBackgroundRefreshPending = false;
+        this.homeBackgroundRefreshPreserveReturnState = false;
+        this.homeBackgroundRefreshReason = "";
+        await this.loadData({
+          background: true,
+          preserveReturnState: shouldPreserveReturnState,
+          refreshManifests: refreshReason !== "manifest-cache"
+        });
+        didRefresh = true;
+        logHomePerf("backgroundRefresh", {
+          reason: refreshReason,
+          preserveReturnState: shouldPreserveReturnState
+        });
+      }
+      return didRefresh;
+    })().finally(() => {
+      if (this.homeBackgroundRefreshPromise === refreshPromise) {
+        this.homeBackgroundRefreshPromise = null;
+      }
+    });
+    this.homeBackgroundRefreshPromise = refreshPromise;
+    return refreshPromise;
+  },
+
   stopHeroRotation() {
     if (this.heroRotateTimer) {
       clearInterval(this.heroRotateTimer);
@@ -4196,7 +4419,26 @@ export const HomeScreen = {
     const total = this.heroCandidates.length;
     this.heroIndex = (Number(this.heroIndex || 0) + step + total) % total;
     this.heroItem = this.heroCandidates[this.heroIndex];
-    this.applyHeroToDom();
+    if (this.layoutMode === "modern") {
+      this.applyHeroToDom();
+      return;
+    }
+
+    // Android's legacy/grid HeroCarousel keeps the current scene alive while
+    // the next slide is prepared. Coalesce repeated D-pad navigation so a
+    // slow TV never commits an intermediate poster/logo from a held button.
+    const sceneToken = (this.pendingHeroSceneToken = Number(this.pendingHeroSceneToken || 0) + 1);
+    const pendingHero = this.heroItem;
+    const pendingHeroIdentity = buildHeroIdentity(pendingHero);
+    void preloadHeroAssets(pendingHero, this.layoutMode).then(() => {
+      if (
+        Number(this.pendingHeroSceneToken || 0) !== sceneToken ||
+        buildHeroIdentity(this.heroItem) !== pendingHeroIdentity
+      ) {
+        return;
+      }
+      this.applyHeroToDom();
+    });
   },
 
   applyHeroToDom() {
@@ -4221,15 +4463,22 @@ export const HomeScreen = {
     heroNode.dataset.itemTitle = hero?.name || "Untitled";
     heroNode.classList.toggle("is-hero-meta-enriching", Boolean(hero?.heroMetaEnriching));
     heroNode.classList.remove("is-hero-focus-pending");
+    const heroCrossfadeMs =
+      this.layoutMode === "modern"
+        ? HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS
+        : HOME_LEGACY_HERO_BACKDROP_CROSSFADE_MS;
+    const heroTransitionMode = getTvHeroTransitionMode();
 
     const backdrop = heroNode.querySelector(".home-hero-backdrop");
     if (backdrop) {
       const src = display.backdrop || "";
-      if (this.layoutMode === "modern" && backdrop instanceof HTMLImageElement) {
+      if (backdrop instanceof HTMLImageElement) {
         const shouldFreezeBackdrop =
           Boolean(hero?.heroMetaEnriching) && String(backdrop.getAttribute("src") || "").trim();
         if (!shouldFreezeBackdrop) {
-          animateModernHeroBackdropSwap(backdrop, src, display.title || "featured");
+          animateHeroBackdropSwap(backdrop, src, display.title || "featured", heroCrossfadeMs, {
+            transitionMode: heroTransitionMode
+          });
         } else {
           backdrop.setAttribute("alt", display.title || "featured");
         }
@@ -4247,7 +4496,9 @@ export const HomeScreen = {
     const brandNode = heroNode.querySelector(".home-hero-brand");
     if (display.logo) {
       if (logoNode) {
-        animateModernHeroLogoSwap(logoNode, display.logo, display.title || "logo");
+        animateHeroLogoSwap(logoNode, display.logo, display.title || "logo", heroCrossfadeMs, {
+          transitionMode: heroTransitionMode
+        });
       } else if (brandNode) {
         brandNode.insertAdjacentHTML(
           "afterbegin",
@@ -4258,7 +4509,7 @@ export const HomeScreen = {
           insertedLogo?.classList?.add("is-visible");
           setTimeout(
             () => insertedLogo?.classList?.remove("home-hero-logo-transition-enter", "is-visible"),
-            HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS
+            heroCrossfadeMs
           );
         });
       }
@@ -4471,6 +4722,10 @@ export const HomeScreen = {
     this.focusWithoutAutoScroll(target, { suppressDelegatedFocus });
     this.scheduleHomeLazyImageHydration(target);
     return target;
+  },
+
+  markUserInteractionSinceHomePaint() {
+    this.hasUserInteractedSinceHomePaint = true;
   },
 
   getInitialFocusSelector() {
@@ -5842,7 +6097,7 @@ export const HomeScreen = {
       if (buildHeroIdentity(focusedHero) !== scheduledHeroIdentity) {
         return;
       }
-      void preloadModernHeroAssets(focusedHero);
+      void preloadHeroAssets(focusedHero, "modern");
     }, preloadDelay);
     this.heroFocusDelayTimer = setTimeout(() => {
       if (Number(this.heroFocusToken || 0) !== focusToken) {
@@ -5879,7 +6134,7 @@ export const HomeScreen = {
         // Commit the hero as one scene. Updating the copy before the matching
         // backdrop/logo are ready lets a fast D-pad sequence show new text over
         // the previous movie's artwork on slower TV engines.
-        await preloadModernHeroAssets(latestHero);
+        await preloadHeroAssets(latestHero, "modern");
         if (Number(this.heroFocusToken || 0) !== focusToken) {
           return;
         }
@@ -6524,8 +6779,9 @@ export const HomeScreen = {
   },
 
   collapseFocusedPoster(node = this.expandedPosterNode, options = {}) {
-    // Avoid overlapping flex-size transitions that leave stale poster layers on TV runtimes.
-    const instant = Boolean(options?.instant || Platform.isTizen() || Platform.isWebOS());
+    // Avoid overlapping flex-size transitions that leave stale poster layers on
+    // constrained TV generations and low-end devices.
+    const instant = Boolean(options?.instant || this.isPerformanceConstrained());
     const preserveHeroMedia = Boolean(options?.preserveHeroMedia);
     const excludeNode = options?.excludeNode instanceof HTMLElement ? options.excludeNode : null;
     const targets = new Set();
@@ -7772,10 +8028,7 @@ export const HomeScreen = {
       return;
     }
 
-    if (
-      (direction === "up" || direction === "down") &&
-      (Platform.isTizen() || Platform.isWebOS() || this.isPerformanceConstrained())
-    ) {
+    if ((direction === "up" || direction === "down") && this.isPerformanceConstrained()) {
       if (this._mainClassicVertRaf) {
         cancelAnimationFrame(this._mainClassicVertRaf);
       }
@@ -8324,6 +8577,7 @@ export const HomeScreen = {
         if (!target || !this.container?.contains(target)) {
           return;
         }
+        this.markUserInteractionSinceHomePaint();
         const action = String(target.dataset.action || "");
         if (action === "openDetail" || action === "openCollectionFolder") {
           this.openDetailFromNode(target);
@@ -8338,6 +8592,11 @@ export const HomeScreen = {
         }
       };
     }
+    if (!this.boundHomeMouseDownHandler) {
+      this.boundHomeMouseDownHandler = () => {
+        this.markUserInteractionSinceHomePaint();
+      };
+    }
     if (!this.boundHomeMouseOverHandler) {
       this.boundHomeMouseOverHandler = (event) => {
         const target = event?.target?.closest?.(".home-main .home-content-card.focusable");
@@ -8349,6 +8608,7 @@ export const HomeScreen = {
         if (this.sidebarExpanded || this.isSidebarFocusActive()) {
           return;
         }
+        this.markUserInteractionSinceHomePaint();
         this.setFocusedNode(target, { suppressDelegatedFocus: true });
         if (this.isMainNode(target)) {
           this.lastMainFocus = target;
@@ -8365,6 +8625,7 @@ export const HomeScreen = {
         if (!(target instanceof HTMLElement) || !main?.contains(target)) {
           return;
         }
+        this.markUserInteractionSinceHomePaint();
         // LG Magic Remote wheel events scroll the hovered element natively.
         // Consume them while the sidebar owns navigation so the background
         // remains fixed, matching Android TV's blocked content input.
@@ -8384,11 +8645,13 @@ export const HomeScreen = {
     if (this.boundHomeEventContainer) {
       this.boundHomeEventContainer.removeEventListener("focusin", this.boundHomeFocusInHandler);
       this.boundHomeEventContainer.removeEventListener("click", this.boundHomeClickHandler);
+      this.boundHomeEventContainer.removeEventListener("mousedown", this.boundHomeMouseDownHandler);
       this.boundHomeEventContainer.removeEventListener("mouseover", this.boundHomeMouseOverHandler);
       this.boundHomeEventContainer.removeEventListener("wheel", this.boundHomeWheelHandler);
     }
     this.container.addEventListener("focusin", this.boundHomeFocusInHandler);
     this.container.addEventListener("click", this.boundHomeClickHandler);
+    this.container.addEventListener("mousedown", this.boundHomeMouseDownHandler);
     this.container.addEventListener("mouseover", this.boundHomeMouseOverHandler);
     this.container.addEventListener("wheel", this.boundHomeWheelHandler, { passive: false });
     this.boundHomeEventContainer = this.container;
@@ -8429,12 +8692,6 @@ export const HomeScreen = {
   async mount(params = {}, navigationContext = {}) {
     const mountStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
     const isBackNavigation = Boolean(navigationContext?.isBackNavigation);
-    // Startup-only Home flags can be retained in the route stack when the
-    // user opens Detail. Do not replay them when returning to the rendered TV
-    // Home, otherwise Back is mistaken for a new cold Home load.
-    const waitForFreshContinueWatching = Boolean(
-      params?.waitForFreshContinueWatching && !isBackNavigation
-    );
     this.container = document.getElementById("home");
     const restoredRouteFocusState =
       navigationContext?.isBackNavigation && navigationContext?.restoredState?.layoutMode
@@ -8446,6 +8703,7 @@ export const HomeScreen = {
     const returnFocusState = restoredRouteFocusState || storedReturnFocusState;
     ScreenUtils.show(this.container);
     this.ensureDelegatedEventsBound();
+    this.ensureAddonManifestSubscriptions();
     this.sidebarExpanded = false;
     this.sidebarOpenedByBack = false;
     this.pillIconOnly = Boolean(
@@ -8559,9 +8817,10 @@ export const HomeScreen = {
       this.scheduleHomeTruncationUpdate();
       this.scheduleHomeLazyImageHydration();
       this.scheduleReturnFocusRestore();
-      this.loadData({
-        background: true,
-        preserveReturnState: true
+      this.ensureStartupSyncSubscription();
+      this.requestHomeBackgroundRefresh({
+        preserveReturnState: true,
+        reason: "route-resume"
       }).catch((error) => {
         console.warn("Home background refresh failed", error);
       });
@@ -8587,11 +8846,12 @@ export const HomeScreen = {
     if (this.hasLoadedOnce && Array.isArray(this.rows) && this.rows.length) {
       this.homeLoadToken = (this.homeLoadToken || 0) + 1;
       this.render();
-      this.loadData({
-        background: true,
+      this.ensureStartupSyncSubscription();
+      this.requestHomeBackgroundRefresh({
         preserveReturnState: Boolean(
           navigationContext?.isBackNavigation || returnFocusState?.layoutMode
-        )
+        ),
+        reason: "route-return"
       }).catch((error) => {
         console.warn("Home background refresh failed", error);
       });
@@ -8607,7 +8867,9 @@ export const HomeScreen = {
 
     this.homeLoadToken = (this.homeLoadToken || 0) + 1;
     this.hasAppliedInitialContinueWatchingFocus = false;
+    this.hasUserInteractedSinceHomePaint = false;
     this.isInitialHomeLoading = true;
+    this.ensureStartupSyncSubscription();
     this.layoutPrefs = LayoutPreferences.get();
     this.layoutMode = String(this.layoutPrefs.homeLayout || "classic").toLowerCase();
     this.rows = [];
@@ -8628,7 +8890,15 @@ export const HomeScreen = {
     this.heroItem = null;
     this.sidebarProfile = await getLocalSidebarProfileState().catch(() => null);
     this.render();
-    await this.loadData({ background: false, waitForFreshContinueWatching });
+    await this.loadData({ background: false });
+    if (this.homeBackgroundRefreshPending) {
+      void this.requestHomeBackgroundRefresh({
+        preserveReturnState: true,
+        reason: this.homeBackgroundRefreshReason || "post-initial-load"
+      }).catch((error) => {
+        console.warn("Home deferred background refresh failed", error);
+      });
+    }
     logHomePerf("mount", {
       ms: Number((homePerfNow() - mountStart).toFixed(2)),
       route: "home",
@@ -8640,7 +8910,7 @@ export const HomeScreen = {
   async loadData({
     background = false,
     preserveReturnState = false,
-    waitForFreshContinueWatching = false
+    refreshManifests = true
   } = {}) {
     const loadStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
     if (isHomePerfDebugEnabled()) {
@@ -8768,10 +9038,19 @@ export const HomeScreen = {
     // slow addon or Trakt call never blocks catalog rows. The section paints
     // instantly from the snapshot hydrated in mount().
 
+    // Corpo do upstream (cache de manifest com stale-while-revalidate) dentro da
+    // nossa instrumentacao, que e o que permite medir installed-addons e decidir
+    // por dado entre a implementacao deles e a nossa.
     const addons = await measureHomeLoadStageAsync("installed-addons", () =>
-      addonRepository.getInstalledAddons()
+      refreshManifests
+        ? addonRepository.getInstalledAddons({
+            staleWhileRevalidate: true,
+            timeoutMs: HOME_ADDON_MANIFEST_TIMEOUT_MS
+          })
+        : addonRepository.getInstalledAddons({ cacheOnly: true })
     );
     this.collections = measureHomeLoadStage("collections-store", () => CollectionsStore.get());
+
     const catalogDescriptors = [];
 
     measureHomeLoadStage("catalogs-normalized", () => {
@@ -8886,12 +9165,20 @@ export const HomeScreen = {
     } else if (
       !background &&
       this.layoutMode === "modern" &&
+      this.layoutPrefs?.continueWatchingEnabled !== false &&
       this.continueWatchingHydratedFromSnapshot &&
       this.continueWatchingDisplay?.length
     ) {
       // CW already painted instantly from the snapshot — focus it on this render.
       // Fresh data reconciles fire-and-forget below.
-      if (!this.suppressInitialContinueWatchingFocus) {
+      if (
+        shouldApplyLateContinueWatchingFocus({
+          background,
+          hasUserInteracted: this.hasUserInteractedSinceHomePaint,
+          suppressInitialFocus: this.suppressInitialContinueWatchingFocus,
+          hasAppliedInitialFocus: this.hasAppliedInitialContinueWatchingFocus
+        })
+      ) {
         this.forceInitialContinueWatchingFocus = true;
       }
     }
@@ -9027,15 +9314,6 @@ export const HomeScreen = {
         });
     }
 
-    if (waitForInitialContinueWatching) {
-      setTimeout(() => {
-        if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
-          return;
-        }
-        releaseInitialHomeAfterContinueWatching();
-      }, initialContinueWatchingBudgetMs);
-    }
-
     {
       (async () => {
         const [allProgress, continueWatching] = await Promise.all([
@@ -9089,14 +9367,12 @@ export const HomeScreen = {
         if (!shouldShowLoading) {
           if (suppressContinueWatchingLoading && (progressAllError || recentProgressError)) {
             this.continueWatchingLoading = false;
-            releaseInitialHomeAfterContinueWatching();
             return;
           }
           if (preserveContinueWatching) {
             const nextSignature = "";
             if (nextSignature === previousContinueWatchingSignature) {
               this.continueWatchingLoading = false;
-              releaseInitialHomeAfterContinueWatching();
               return;
             }
           }
@@ -9147,14 +9423,21 @@ export const HomeScreen = {
           this.continueWatchingDisplay = nextDisplay;
           this.continueWatchingLoading = false;
           this.persistContinueWatchingSnapshot();
-          if (this.layoutMode === "modern" && this.continueWatchingDisplay.length) {
+          if (
+            this.layoutMode === "modern" &&
+            this.layoutPrefs?.continueWatchingEnabled !== false &&
+            this.continueWatchingDisplay.length
+          ) {
             if (!preserveHomeReturnState && !this.suppressInitialContinueWatchingFocus) {
               this.heroItem = this.pickInitialHero();
             }
             if (
-              !background &&
-              !this.suppressInitialContinueWatchingFocus &&
-              !this.hasAppliedInitialContinueWatchingFocus
+              shouldApplyLateContinueWatchingFocus({
+                background,
+                hasUserInteracted: this.hasUserInteractedSinceHomePaint,
+                suppressInitialFocus: this.suppressInitialContinueWatchingFocus,
+                hasAppliedInitialFocus: this.hasAppliedInitialContinueWatchingFocus
+              })
             ) {
               this.forceInitialContinueWatchingFocus = true;
             }
@@ -9162,10 +9445,9 @@ export const HomeScreen = {
           const nextDisplaySignature = buildContinueWatchingSignature(this.continueWatchingDisplay);
           const nextHeroIdentity = buildHeroIdentity(this.heroItem);
           if (
-            !releaseInitialHomeAfterContinueWatching() &&
-            (previousLoadingState !== this.continueWatchingLoading ||
-              previousDisplaySignature !== nextDisplaySignature ||
-              (!preserveHomeReturnState && previousHeroIdentity !== nextHeroIdentity))
+            previousLoadingState !== this.continueWatchingLoading ||
+            previousDisplaySignature !== nextDisplaySignature ||
+            (!preserveHomeReturnState && previousHeroIdentity !== nextHeroIdentity)
           ) {
             this.requestBackgroundRender("cw-display-and-hero");
           }
@@ -9204,7 +9486,7 @@ export const HomeScreen = {
   },
 
   pickInitialHero() {
-    if (this.layoutMode === "modern") {
+    if (this.layoutMode === "modern" && this.layoutPrefs?.continueWatchingEnabled !== false) {
       if (
         this.continueWatchingLoading &&
         Array.isArray(this.continueWatching) &&
@@ -9515,6 +9797,7 @@ export const HomeScreen = {
     const backFocusHero = backFocusState ? this.getHeroSourceFromFocusState(backFocusState) : null;
     const shouldHoldHeroForContinueWatching =
       this.layoutMode === "modern" &&
+      this.layoutPrefs?.continueWatchingEnabled !== false &&
       Boolean(this.continueWatchingLoading) &&
       !this.continueWatchingDisplay?.length &&
       !this.heroItem;
@@ -9593,15 +9876,17 @@ export const HomeScreen = {
       Boolean(focusState);
     const rowItemLimit = this.getRowItemLimit();
     const loadingRowItemCount = this.getLoadingRowItemCount();
-    const continueWatchingLoadingCount = Math.min(
-      Math.max(
-        Number(this.continueWatching?.length || 0),
-        Number(this.nextUpProgressCandidates?.length || 0)
-      ),
-      loadingRowItemCount
-    );
+    const continueWatchingLoadingCount = continueWatchingEnabled
+      ? Math.min(
+          Math.max(
+            Number(this.continueWatching?.length || 0),
+            Number(this.nextUpProgressCandidates?.length || 0)
+          ),
+          loadingRowItemCount
+        )
+      : 0;
     const effectiveContinueWatchingLoadingCount =
-      this.continueWatchingLoading && continueWatchingLoadingCount === 0
+      continueWatchingEnabled && this.continueWatchingLoading && continueWatchingLoadingCount === 0
         ? loadingRowItemCount
         : continueWatchingLoadingCount;
     this.teardownGridStickyHeader();
@@ -9619,7 +9904,7 @@ export const HomeScreen = {
         heroCandidates: this.heroCandidates,
         continueWatchingItems: continueWatchingRows.main,
         upcomingItems: continueWatchingRows.upcoming,
-        continueWatchingLoading: Boolean(this.continueWatchingLoading),
+        continueWatchingLoading: continueWatchingEnabled && Boolean(this.continueWatchingLoading),
         continueWatchingLoadingCount: effectiveContinueWatchingLoadingCount,
         continueWatchingRenderLimit,
         useEpisodeThumbnailsInCw: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
@@ -9647,25 +9932,29 @@ export const HomeScreen = {
       this.catalogSeeAllMap = modernLayoutPayload.catalogSeeAllMap;
       mainContentMarkup = modernLayoutPayload.markup;
     } else {
-      const continueHtml = renderContinueWatchingSection(continueWatchingRows.main, {
-        rowKey: "continue_watching",
-        loading: Boolean(this.continueWatchingLoading),
-        loadingCount: effectiveContinueWatchingLoadingCount,
-        itemLimit: continueWatchingRenderLimit,
-        useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
-        blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
-        cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card"
-      });
-      const upcomingHtml = renderContinueWatchingSection(continueWatchingRows.upcoming, {
-        rowKey: "upcoming_section",
-        titleKey: "upcoming_section_title",
-        title: "Upcoming",
-        startIndex: continueWatchingRows.main.length,
-        itemLimit: continueWatchingRows.upcoming.length,
-        useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
-        blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
-        cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card"
-      });
+      const continueHtml = continueWatchingEnabled
+        ? renderContinueWatchingSection(continueWatchingRows.main, {
+            rowKey: "continue_watching",
+            loading: Boolean(this.continueWatchingLoading),
+            loadingCount: effectiveContinueWatchingLoadingCount,
+            itemLimit: continueWatchingRenderLimit,
+            useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
+            blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
+            cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card"
+          })
+        : "";
+      const upcomingHtml = continueWatchingEnabled
+        ? renderContinueWatchingSection(continueWatchingRows.upcoming, {
+            rowKey: "upcoming_section",
+            titleKey: "upcoming_section_title",
+            title: "Upcoming",
+            startIndex: continueWatchingRows.main.length,
+            itemLimit: continueWatchingRows.upcoming.length,
+            useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
+            blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
+            cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card"
+          })
+        : "";
       const legacyRowsPayload = renderLegacyCatalogRowsMarkup(this.rows, {
         layoutMode: this.layoutMode,
         showPosterLabels,
@@ -10083,8 +10372,9 @@ export const HomeScreen = {
       this.container.querySelector(".home-main") ||
       this.container;
     const viewportRect = viewport.getBoundingClientRect();
-    const verticalMargin = Platform.isWebOS() || Platform.isTizen() ? 720 : 1200;
-    const horizontalMargin = Platform.isWebOS() || Platform.isTizen() ? 520 : 1000;
+    const constrained = this.isPerformanceConstrained();
+    const verticalMargin = constrained ? 720 : 1200;
+    const horizontalMargin = constrained ? 520 : 1000;
     imageRows.forEach(({ row, images }) => {
       if (row instanceof HTMLElement && !row.isConnected) {
         return;
@@ -11066,6 +11356,9 @@ export const HomeScreen = {
     const currentFocusedNode =
       this.getCurrentFocusedNode() || this.container?.querySelector(".focusable") || null;
     const code = Number(event?.keyCode || 0);
+    if (code === 13 || isDirectionalKeyCode(code)) {
+      this.markUserInteractionSinceHomePaint();
+    }
     if (this._homeHoldDialog) {
       return true;
     }
@@ -11098,7 +11391,7 @@ export const HomeScreen = {
         this.scheduleModernSidebarPillAutoCollapse({ restart: wasIconOnly });
       }
     }
-    if (this.layoutMode === "modern" && [37, 38, 39, 40].includes(code)) {
+    if (this.layoutMode === "modern" && isDirectionalKeyCode(code)) {
       this.cancelFocusedPosterFlow();
     }
     if (this.handleHomeDpad(event)) {
@@ -11458,10 +11751,16 @@ export const HomeScreen = {
    * render() did — the hold-menu and focus paths read it by index.
    */
   computeContinueWatchingRenderState(focusState = null) {
-    const continueWatchingRows = partitionContinueWatchingRows(
-      this.continueWatchingDisplay || [],
-      this.layoutPrefs?.continueWatchingSortMode
-    );
+    // continueWatchingEnabled veio do upstream 0.3.42. Este metodo e a extracao
+    // do corpo que era inline no render(), e sem portar a preferencia aqui a
+    // configuracao nova ficaria silenciosamente inerte no fork.
+    const continueWatchingEnabled = this.layoutPrefs?.continueWatchingEnabled !== false;
+    const continueWatchingRows = continueWatchingEnabled
+      ? partitionContinueWatchingRows(
+          this.continueWatchingDisplay || [],
+          this.layoutPrefs?.continueWatchingSortMode
+        )
+      : { main: [], upcoming: [] };
     this.continueWatchingRenderedItems = [
       ...continueWatchingRows.main,
       ...continueWatchingRows.upcoming
@@ -11474,16 +11773,19 @@ export const HomeScreen = {
         : String(focusState?.rowKey || "") === "upcoming_section"
           ? continueWatchingRows.main.length + Math.max(0, Number(focusState?.itemIndex || 0))
           : -1;
-    const continueWatchingRenderLimit = splitUpcomingEnabled
-      ? continueWatchingRows.main.length
-      : Math.min(
-          Number(this.continueWatchingDisplay?.length || 0),
-          Math.max(
-            this.getContinueWatchingRenderBatchSize(),
-            continueWatchingFocusIndex >= 0 ? continueWatchingFocusIndex + 1 : 0
-          )
-        );
+    const continueWatchingRenderLimit = !continueWatchingEnabled
+      ? 0
+      : splitUpcomingEnabled
+        ? continueWatchingRows.main.length
+        : Math.min(
+            Number(this.continueWatchingDisplay?.length || 0),
+            Math.max(
+              this.getContinueWatchingRenderBatchSize(),
+              continueWatchingFocusIndex >= 0 ? continueWatchingFocusIndex + 1 : 0
+            )
+          );
     return {
+      continueWatchingEnabled,
       continueWatchingRows,
       splitUpcomingEnabled,
       continueWatchingFocusIndex,
@@ -12213,6 +12515,22 @@ export const HomeScreen = {
   },
 
   cleanup() {
+    if (this.unsubscribeStartupSyncPullCompleted) {
+      this.unsubscribeStartupSyncPullCompleted();
+      this.unsubscribeStartupSyncPullCompleted = null;
+    }
+    if (this.unsubscribeAddonManifestChanges) {
+      this.unsubscribeAddonManifestChanges();
+      this.unsubscribeAddonManifestChanges = null;
+    }
+    if (this.unsubscribeInstalledAddonChanges) {
+      this.unsubscribeInstalledAddonChanges();
+      this.unsubscribeInstalledAddonChanges = null;
+    }
+    this.homeBackgroundRefreshPending = false;
+    this.homeBackgroundRefreshPreserveReturnState = false;
+    this.homeBackgroundRefreshReason = "";
+    this.homeBackgroundRefreshPromise = null;
     this.cancelModernSidebarPillAutoCollapse();
     this.cancelPendingContinueWatchingEnter();
     this.cancelPendingContinueWatchingHold();
@@ -12263,6 +12581,7 @@ export const HomeScreen = {
     if (this.boundHomeEventContainer) {
       this.boundHomeEventContainer.removeEventListener("focusin", this.boundHomeFocusInHandler);
       this.boundHomeEventContainer.removeEventListener("click", this.boundHomeClickHandler);
+      this.boundHomeEventContainer.removeEventListener("mousedown", this.boundHomeMouseDownHandler);
       this.boundHomeEventContainer.removeEventListener("mouseover", this.boundHomeMouseOverHandler);
       this.boundHomeEventContainer.removeEventListener("wheel", this.boundHomeWheelHandler);
       this.boundHomeEventContainer = null;

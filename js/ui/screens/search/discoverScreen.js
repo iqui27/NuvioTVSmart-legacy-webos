@@ -58,7 +58,7 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
 
@@ -310,7 +310,7 @@ export const DiscoverScreen = {
     return true;
   },
 
-  async mount(params = {}, navigationContext = {}) {
+  async mount(_params = {}, navigationContext = {}) {
     this.container = document.getElementById("discover");
     ScreenUtils.show(this.container);
     this.layoutPrefs = LayoutPreferences.get();
@@ -837,7 +837,9 @@ export const DiscoverScreen = {
         : kind === "catalog"
           ? "discoverFilterCatalog"
           : "discoverFilterGenre";
-    this.requestRender();
+    if (!this.updateRenderedPickerRow()) {
+      this.requestRender();
+    }
   },
 
   closePickerMenu() {
@@ -1487,6 +1489,31 @@ export const DiscoverScreen = {
     });
   },
 
+  renderPickerRowMarkup() {
+    const selectedCatalog = this.getSelectedCatalog();
+    return [
+      this.renderFilterPicker("type", "Type", formatAddonTypeLabel(this.selectedType)),
+      this.renderFilterPicker("catalog", "Catalog", selectedCatalog?.catalogName || "Select"),
+      this.renderFilterPicker("genre", "Genre", this.selectedGenre || "Default")
+    ].join("");
+  },
+
+  updateRenderedPickerRow() {
+    const pickerRow = this.container?.querySelector("#discoverPickerRow");
+    if (!(pickerRow instanceof HTMLElement)) {
+      return false;
+    }
+
+    pickerRow.innerHTML = this.renderPickerRowMarkup();
+    this.lastRenderedOpenPicker = this.openPicker || null;
+    // Only the small picker row was replaced; keep the existing poster grid and
+    // its image decoders alive while refreshing focus metadata for the new menu.
+    ScreenUtils.indexFocusables(this.container);
+    this.restoreContentFocus({ scrollMode: "none" });
+    this.syncOpenPickerScroll();
+    return true;
+  },
+
   render() {
     this.cancelScheduledRender();
     this.layoutPrefs = LayoutPreferences.get();
@@ -1532,9 +1559,7 @@ export const DiscoverScreen = {
               <div class="seeall-subtitle" id="discoverContextLabel">${escapeHtml(contextLabel)}</div>
             </header>
             <section class="library-picker-row discover-picker-row" id="discoverPickerRow">
-              ${this.renderFilterPicker("type", "Type", formatAddonTypeLabel(this.selectedType))}
-              ${this.renderFilterPicker("catalog", "Catalog", selectedCatalog?.catalogName || "Select")}
-              ${this.renderFilterPicker("genre", "Genre", this.selectedGenre || "Default")}
+              ${this.renderPickerRowMarkup()}
             </section>
             <section class="seeall-grid discover-grid" id="discoverGridMount">
               ${cards}

@@ -133,7 +133,7 @@ async function resolveRemoteStoreKey() {
   if (AuthManager.isAuthenticated) {
     try {
       ownerId = String(await AuthManager.getEffectiveUserId());
-    } catch (error) {
+    } catch {
       ownerId = "guest";
     }
   }

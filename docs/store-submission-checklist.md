@@ -9,7 +9,7 @@ The locally prepared visual and metadata draft is in [`store-assets/`](../store-
 ### Samsung Tizen
 
 - The declared minimum remains Tizen 4.0+.
-- `npm run package:tizen` creates the unsigned WGT used by development and the Nuvio WebTV Installer; the installer signs it locally for the target TV before installation.
+- `npm run package:tizen` creates the unsigned WGT used by development and the Nuvio TV Installer; the installer signs it locally for the target TV before installation.
 - `npm run package:tizen:store` creates the Store-signed profile through the official Tizen CLI, requires a security profile, verifies `author-signature.xml` and `signature1.xml`, and fails if either signature is absent.
 - The Store profile packages the local EngineFS `tizen:service`, the `web.service` feature, and the `application.launch` privilege. Torrent/P2P therefore remains available on capable Tizen 5+ TVs and is unavailable only on Tizen 4, where the runtime capability gate intentionally reports the feature as unsupported.
 - `auto-restart` and `on-boot` are disabled in generated Tizen service metadata.
@@ -58,4 +58,4 @@ npm run package:webos
 TIZEN_CLI=/path/to/tizen TIZEN_SECURITY_PROFILE=ProfileName npm run package:tizen:store
 ```
 
-The unsigned Tizen package is the GitHub release input for the WebTV Installer and must not be uploaded directly to Seller Office. Seller Office requires the separately generated, officially signed package from `npm run package:tizen:store`.
+The unsigned Tizen package is the GitHub release input for the Nuvio TV Installer and must not be uploaded directly to Seller Office. Seller Office requires the separately generated, officially signed package from `npm run package:tizen:store`.

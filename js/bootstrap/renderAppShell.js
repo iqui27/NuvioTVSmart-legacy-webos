@@ -9,6 +9,7 @@ const APP_SHELL = `
     <div id="stream" class="screen"></div>
     <div id="castDetail" class="screen"></div>
     <div id="catalogSeeAll" class="screen"></div>
+    <div id="tmdbEntityBrowse" class="screen"></div>
     <div id="folderDetail" class="screen"></div>
     <div id="library" class="screen"></div>
     <div id="search" class="screen"></div>

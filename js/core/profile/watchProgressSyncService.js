@@ -7,6 +7,7 @@ import { TraktAuthStore } from "../../data/local/traktAuthStore.js";
 import { SimklAuthStore } from "../../data/local/simklAuthStore.js";
 import { TraktSettingsStore, WatchProgressSource } from "../../data/local/traktSettingsStore.js";
 import { getSyncClientId } from "../sync/syncClientIdentity.js";
+import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 
 const PULL_RPC = "sync_pull_watch_progress";
 const PUSH_RPC = "sync_push_watch_progress";
@@ -20,9 +21,21 @@ const MAX_REASONABLE_PROGRESS_DURATION_MS = 24 * 60 * 60 * 1000;
 
 let activePushPromise = null;
 let pushAgainRequested = false;
-let lastSuccessfulPushSignature = "";
-let lastFailedPushSignature = "";
-let lastFailedPushAt = 0;
+const pushStateByProfile = new Map();
+let lastPullStatus = "idle";
+let lastPullHadUnsynced = false;
+
+function pushStateForProfile(profileId) {
+  const key = String(profileId || "1");
+  if (!pushStateByProfile.has(key)) {
+    pushStateByProfile.set(key, {
+      lastSuccessfulPushSignature: "",
+      lastFailedPushSignature: "",
+      lastFailedPushAt: 0
+    });
+  }
+  return pushStateByProfile.get(key);
+}
 
 function progressKey(item = {}) {
   return toProgressKey(item);
@@ -260,8 +273,8 @@ function normalizeInflatedProgressTimes(positionMs = 0, durationMs = 0) {
   };
 }
 
-function resolveProfileId() {
-  const raw = Number(ProfileManager.getActiveProfileId() || 1);
+function resolveProfileId(profileId = null) {
+  const raw = Number(profileId ?? ProfileManager.getActiveProfileId() ?? 1);
   if (Number.isFinite(raw) && raw > 0) {
     return Math.trunc(raw);
   }
@@ -452,99 +465,151 @@ function buildPushSignature(rows = []) {
   );
 }
 
-async function pushOnce() {
+async function pushOnce(profileId = null) {
   let pushSignature = "";
+  const resolvedProfileId = resolveProfileId(profileId);
+  const pushState = pushStateForProfile(resolvedProfileId);
   try {
     if (!AuthManager.isAuthenticated) {
       return false;
     }
-    const items = coalesceSyncItems(await watchProgressRepository.getAll()).filter((item) =>
-      isSyncableProgressItem(item)
+    const items = coalesceSyncItems(await watchProgressRepository.getAll(resolvedProfileId)).filter(
+      (item) => isSyncableProgressItem(item)
     );
-    const profileId = resolveProfileId();
     const rows = buildRemoteProgressEntries(items);
     pushSignature = buildPushSignature(rows);
-    if (pushSignature && pushSignature === lastSuccessfulPushSignature) {
+    if (!rows.length) {
+      // An empty payload is not a safe way to express deletion. Deletions use
+      // the explicit delete RPC below, so never let a transiently empty local
+      // snapshot replace the remote progress set.
+      pushState.lastFailedPushSignature = "";
+      pushState.lastFailedPushAt = 0;
+      return true;
+    }
+    if (pushSignature && pushSignature === pushState.lastSuccessfulPushSignature) {
       return true;
     }
     if (
       pushSignature &&
-      pushSignature === lastFailedPushSignature &&
-      Date.now() - Number(lastFailedPushAt || 0) < PUSH_RETRY_BACKOFF_MS
+      pushSignature === pushState.lastFailedPushSignature &&
+      Date.now() - Number(pushState.lastFailedPushAt || 0) < PUSH_RETRY_BACKOFF_MS
     ) {
       return false;
     }
     await SupabaseApi.rpc(
       PUSH_RPC,
       {
-        p_profile_id: profileId,
+        p_profile_id: resolvedProfileId,
         p_entries: rows,
         p_origin_client_id: getSyncClientId()
       },
       true
     );
-    lastSuccessfulPushSignature = pushSignature;
-    writeBaselineItems(profileId, items);
-    lastFailedPushSignature = "";
-    lastFailedPushAt = 0;
+    pushState.lastSuccessfulPushSignature = pushSignature;
+    writeBaselineItems(resolvedProfileId, items);
+    pushState.lastFailedPushSignature = "";
+    pushState.lastFailedPushAt = 0;
     return true;
   } catch (error) {
     if (typeof pushSignature === "string" && pushSignature) {
-      lastFailedPushSignature = pushSignature;
+      pushState.lastFailedPushSignature = pushSignature;
     }
-    lastFailedPushAt = Date.now();
+    pushState.lastFailedPushAt = Date.now();
     console.warn("Watch progress sync push failed", error);
     return false;
   }
 }
 
 export const WatchProgressSyncService = {
-  async pull() {
+  getLastPullStatus() {
+    return lastPullStatus;
+  },
+
+  getLastPullHadUnsynced() {
+    return lastPullHadUnsynced;
+  },
+
+  async pull(profileId = null) {
+    if (isSyncBackoffActive()) {
+      lastPullStatus = "deferred";
+      lastPullHadUnsynced = false;
+      return [];
+    }
+    lastPullStatus = "loading";
+    lastPullHadUnsynced = false;
+    let localItems = [];
     try {
       if (!AuthManager.isAuthenticated) {
+        lastPullStatus = "signed-out";
         return [];
       }
       if (!shouldUseSupabaseWatchProgressSync()) {
+        lastPullStatus = "skipped";
         return [];
       }
-      const localItems = await watchProgressRepository.getAll();
-      const profileId = resolveProfileId();
-      const rows = await SupabaseApi.rpc(PULL_RPC, { p_profile_id: profileId }, true);
-      const filteredRows = (Array.isArray(rows) ? rows : []).filter((row) => {
+      const resolvedProfileId = resolveProfileId(profileId);
+      localItems = await watchProgressRepository.getAll(resolvedProfileId);
+      const rows = await SupabaseApi.rpc(PULL_RPC, { p_profile_id: resolvedProfileId }, true);
+      if (!Array.isArray(rows)) {
+        const error = new Error("Watch progress sync returned an invalid snapshot");
+        error.code = "INVALID_SYNC_SNAPSHOT";
+        throw error;
+      }
+      const filteredRows = rows.filter((row) => {
         const rowProfile = row?.profile_id ?? row?.profileId ?? null;
         if (rowProfile == null || rowProfile === "") {
           return true;
         }
-        return String(rowProfile) === String(profileId);
+        return String(rowProfile) === String(resolvedProfileId);
       });
       const remoteItems = filteredRows
         .map((row) => mapProgressRow(row))
         .filter((item) => Boolean(item.contentId) && isSyncableProgressItem(item));
       const snapshotItems = normalizeProgressItems(remoteItems);
-      const baselineItems = readBaselineItems(profileId);
+      if (!snapshotItems.length && localItems.length) {
+        // Android keeps the local snapshot when the remote endpoint returns
+        // an empty list: an empty response may be a wrong profile, owner,
+        // authorization result, or a backend outage rather than a deletion.
+        // Do not advance the baseline or schedule an empty push.
+        lastPullStatus = "ok";
+        lastPullHadUnsynced = false;
+        return localItems;
+      }
+      const baselineItems = readBaselineItems(resolvedProfileId);
       const mergedItems = mergeProgressItems(localItems, snapshotItems, baselineItems);
-      writeBaselineItems(profileId, snapshotItems);
-      lastSuccessfulPushSignature = buildPushSignature(
+      const remoteSignature = buildPushSignature(
         buildRemoteProgressEntries(coalesceSyncItems(snapshotItems))
       );
-      await watchProgressRepository.replaceAll(mergedItems);
+      const mergedSignature = buildPushSignature(
+        buildRemoteProgressEntries(coalesceSyncItems(mergedItems))
+      );
+      lastPullHadUnsynced = mergedSignature !== remoteSignature;
+      writeBaselineItems(resolvedProfileId, snapshotItems);
+      pushStateForProfile(resolvedProfileId).lastSuccessfulPushSignature = remoteSignature;
+      await watchProgressRepository.replaceAll(mergedItems, resolvedProfileId);
+      lastPullStatus = "ok";
       return mergedItems;
     } catch (error) {
+      lastPullStatus = "error";
       console.warn("Watch progress sync pull failed", error);
-      return [];
+      return localItems;
     }
   },
 
-  async push() {
+  async push(profileId = null) {
+    if (isSyncBackoffActive()) {
+      return false;
+    }
     if (activePushPromise) {
       pushAgainRequested = true;
       return activePushPromise;
     }
+    const resolvedProfileId = resolveProfileId(profileId);
     activePushPromise = (async () => {
       let lastResult = false;
       do {
         pushAgainRequested = false;
-        lastResult = await pushOnce();
+        lastResult = await pushOnce(resolvedProfileId);
       } while (pushAgainRequested);
       return lastResult;
     })().finally(() => {
@@ -553,14 +618,18 @@ export const WatchProgressSyncService = {
     return activePushPromise;
   },
 
-  async deleteItems(items = []) {
+  async deleteItems(items = [], profileId = null) {
     try {
+      if (isSyncBackoffActive()) {
+        return false;
+      }
       if (!AuthManager.isAuthenticated) {
         return false;
       }
       if (!shouldUseSupabaseWatchProgressSync()) {
         return true;
       }
+      const resolvedProfileId = resolveProfileId(profileId);
       const keys = buildDeleteKeys(items);
       if (!keys.length) {
         return true;
@@ -568,19 +637,18 @@ export const WatchProgressSyncService = {
       await SupabaseApi.rpc(
         DELETE_RPC,
         {
-          p_profile_id: resolveProfileId(),
+          p_profile_id: resolvedProfileId,
           p_keys: keys,
           p_origin_client_id: getSyncClientId()
         },
         true
       );
-      const profileId = resolveProfileId();
-      const baselineByKey = itemsByProgressKey(readBaselineItems(profileId));
+      const baselineByKey = itemsByProgressKey(readBaselineItems(resolvedProfileId));
       normalizeProgressItems(items).forEach((item) => {
         baselineByKey.delete(progressKey(item));
       });
-      writeBaselineItems(profileId, Array.from(baselineByKey.values()));
-      lastSuccessfulPushSignature = "";
+      writeBaselineItems(resolvedProfileId, Array.from(baselineByKey.values()));
+      pushStateForProfile(resolvedProfileId).lastSuccessfulPushSignature = "";
       return true;
     } catch (error) {
       console.warn("Watch progress sync delete failed", error);

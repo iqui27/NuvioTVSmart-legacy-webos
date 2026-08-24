@@ -73,7 +73,7 @@ function buildConfigXml({
     : "";
   const serviceMetadata = serviceMetadataXml ? `\n    ${serviceMetadataXml}` : "";
   const engineFsService = includeEngineFsService
-    ? `  <tizen:service id="${engineFsServiceId}" auto-restart="false" on-boot="false">
+    ? `  <tizen:service id="${engineFsServiceId}" type="ui" auto-restart="false" on-boot="false">
     <tizen:content src="${tizenEngineFsServiceRelativePath}"/>${serviceMetadata}
     <tizen:name>Nuvio EngineFS Service</tizen:name>
     <tizen:icon src="icon.png"/>
@@ -445,7 +445,9 @@ async function assertSignedTizenPackage(outputPath, { requireEngineFsService = f
   if (requireEngineFsService) {
     const requiredServiceEntries = [
       tizenEngineFsServiceRelativePath,
-      `${tizenEngineFsRuntimeDirRelativePath}/media-http.cjs`
+      `${tizenEngineFsRuntimeDirRelativePath}/media-http.cjs`,
+      `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-parser.cjs`,
+      `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-service.cjs`
     ];
     const missingServiceEntry = requiredServiceEntries.find((fileName) => !zip.file(fileName));
     if (missingServiceEntry) {

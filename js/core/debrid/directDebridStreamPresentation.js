@@ -1,33 +1,8 @@
 import { DebridSettingsStore } from "../../data/local/debridSettingsStore.js";
-import { DEBRID_PROVIDER_IDS, DebridProviders } from "./debridProviders.js";
+import { DebridProviders } from "./debridProviders.js";
 import { DebridStreamTemplateEngine } from "./debridStreamTemplateEngine.js";
 import { sizeBytesFromStreamText } from "./streamTextSizeParser.js";
 
-const RESOLUTION_RANK = {
-  P2160: 700,
-  P1440: 600,
-  P1080: 500,
-  P720: 400,
-  P576: 300,
-  P480: 200,
-  P360: 100,
-  UNKNOWN: 0
-};
-const QUALITY_RANK = {
-  BLURAY_REMUX: 1200,
-  BLURAY: 1100,
-  WEB_DL: 1000,
-  WEBRIP: 900,
-  HDRIP: 800,
-  HD_RIP: 700,
-  DVDRIP: 600,
-  HDTV: 500,
-  CAM: 100,
-  TS: 90,
-  TC: 80,
-  SCR: 70,
-  UNKNOWN: 0
-};
 const RESOLUTION_LABELS = {
   P2160: "2160p",
   P1440: "1440p",

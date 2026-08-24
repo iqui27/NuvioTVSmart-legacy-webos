@@ -387,7 +387,7 @@
     <string name="trakt_waiting_approval">ממתין לאישור…</string>
     <string name="qr_login_approved">ההתחברות אושרה. מסיים כניסה…</string>
     <string name="qr_login_pending">ממתין לאישור בטלפון שלך…</string>
-    <string name="qr_login_expired">QR פג תוקף. צור קוד חדש.</string>
+    <string name="qr_login_expired">קוד ה-QR פג. לחץ על \"רענן קוד QR\".</string>
     <string name="trakt_code_expires">הקוד יפוג בעוד %1$s</string>
     <string name="trakt_token_refreshes">אסימון גישה Trakt יתחדש בעוד %1$s</string>
     <string name="trakt_login_instruction">לחץ התחבר להתחלת אימות מכשיר Trakt. כאן יופיע קוד QR.</string>
@@ -773,7 +773,7 @@
     <string name="layout_preview_row">הצג שורת תצוגה מקדימה</string>
     <string name="layout_preview_row_sub">הצג תצוגה מקדימה חלקית של השורה הבאה בפריסת הבית המודרני.</string>
     <string name="update_title">עדכון אפליקציה</string>
-    <string name="update_installer_required">יש להשתמש ב-Nuvio WebTV Installer כדי לעדכן את האפליקציה בטלוויזיה.</string>
+    <string name="update_installer_required">יש להשתמש ב-Nuvio TV Installer כדי לעדכן את האפליקציה בטלוויזיה.</string>
     <string name="update_release_notes">מה חדש</string>
     <string name="update_release_notes_unavailable">תיאור הגרסה אינו זמין.</string>
     <string name="update_downloading">מוריד עדכון</string>
@@ -1060,7 +1060,7 @@
     <string name="appearance_amoled_surfaces_mode_subtitle">הפוך גם כרטיסים, פאנלים ומכלים לשחור טהור</string>
     <string name="settings_style_classic_desc">פריסה רגילה עם כרטיסים</string>
     <string name="settings_style_zen_desc">פריסה פשוטה ושטוחה</string>
-    <string name="settings_style_horizon_desc">לשוניות ניווט בחלק העליון (לא תומך בעברית)</string>
+    <string name="settings_style_horizon_desc">לשוניות ניווט בחלק העליון</string>
     <string name="appearance_font_and_language">גופן ושפה</string>
     <string name="appearance_font_and_language_subtitle">בחר את הגופן והשפה המשמשים בכל האפליקציה</string>
     <string name="settings_experience">חווית שימוש</string>

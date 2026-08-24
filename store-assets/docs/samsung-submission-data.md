@@ -32,7 +32,7 @@ TIZEN_SECURITY_PROFILE=NuvioStoreProfile \
 npm run package:tizen:store
 ```
 
-The command verifies that the result contains both `author-signature.xml` and `signature1.xml`. The unsigned WGT from `npm run package:tizen` is used by the Nuvio WebTV Installer, which signs it locally for the target TV; it must not be uploaded directly to Seller Office.
+The command verifies that the result contains both `author-signature.xml` and `signature1.xml`. The unsigned WGT from `npm run package:tizen` is used by the Nuvio TV Installer, which signs it locally for the target TV; it must not be uploaded directly to Seller Office.
 
 ## Seller Office fields still needed
 

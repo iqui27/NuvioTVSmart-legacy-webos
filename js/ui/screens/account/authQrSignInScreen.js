@@ -268,7 +268,7 @@ export const AuthQrSignInScreen = {
     this.startQr();
   },
 
-  handleContinueAction() {
+  async handleContinueAction() {
     if (this.isLeaving) {
       return;
     }
@@ -277,6 +277,7 @@ export const AuthQrSignInScreen = {
     LocalStore.set("hasSeenAuthQrOnFirstLaunch", true);
     if (!this.isSignedIn) {
       LocalStore.set(GUEST_QR_BYPASS_KEY, true);
+      await AuthManager.signOut();
     } else {
       LocalStore.remove(GUEST_QR_BYPASS_KEY);
     }

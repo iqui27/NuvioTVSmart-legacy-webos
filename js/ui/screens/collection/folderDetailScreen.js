@@ -1,6 +1,7 @@
 import { Router } from "../../navigation/router.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Environment } from "../../../platform/environment.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
@@ -9,6 +10,7 @@ import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { TmdbService } from "../../../core/tmdb/tmdbService.js";
 import { TmdbSettingsStore } from "../../../data/local/tmdbSettingsStore.js";
 import { TmdbMetadataService } from "../../../core/tmdb/tmdbMetadataService.js";
+import { toTraktImageUrl } from "../../../core/trakt/traktImageUrl.js";
 import { TMDB_API_KEY, TRAKT_API_URL, TRAKT_CLIENT_ID } from "../../../config.js";
 import {
   HomeScreen,
@@ -75,8 +77,32 @@ function firstNonEmpty(...values) {
   return "";
 }
 
+function normalizeTraktImageCandidate(value) {
+  if (typeof value === "string") {
+    return toTraktImageUrl(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeTraktImageCandidate).find(Boolean) || "";
+  }
+  if (value && typeof value === "object") {
+    return (
+      [value.full, value.medium, value.thumb].map(normalizeTraktImageCandidate).find(Boolean) || ""
+    );
+  }
+  return "";
+}
+
+function bestTraktImage(images = {}, ...kinds) {
+  return kinds.map((kind) => normalizeTraktImageCandidate(images?.[kind])).find(Boolean) || "";
+}
+
+// Mesma razao do metaDetailsScreen: superconjunto das duas condicoes.
 function folderPosterLoadingMode() {
-  return Environment.isTizen() || Environment.isWebOS() ? "eager" : "lazy";
+  return Environment.isTizen() ||
+    Environment.isWebOS() ||
+    getTvRuntimePerformanceProfile().isPerformanceConstrained
+    ? "eager"
+    : "lazy";
 }
 
 function toImageUrl(path, kind = "poster") {
@@ -684,21 +710,21 @@ function mapTraktEntity(entity = {}, type = "movie") {
       id,
       type: normalizedType,
       name: title,
-      poster: firstNonEmpty(
-        entity?.images?.poster?.[0],
-        entity?.images?.poster,
-        entity?.images?.posters?.[0]
-      ),
-      background: firstNonEmpty(
-        entity?.images?.fanart?.[0],
-        entity?.images?.background,
-        entity?.images?.backdrop?.[0]
+      poster: bestTraktImage(entity?.images, "poster", "posters", "fanart"),
+      background: bestTraktImage(
+        entity?.images,
+        "fanart",
+        "background",
+        "backdrop",
+        "banner",
+        "thumb",
+        "poster"
       ),
       releaseInfo: String(entity?.year || entity?.released || entity?.first_aired || "").slice(
         0,
         4
       ),
-      logo: firstNonEmpty(entity?.images?.logo?.[0])
+      logo: bestTraktImage(entity?.images, "logo", "clearart")
     },
     normalizedType
   );

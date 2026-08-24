@@ -125,13 +125,18 @@ export function getTizenCapabilities(runtime = globalThis) {
       : null;
   const engineFsServicePackaged = runtime?.__NUVIO_TIZEN_ENGINEFS_SERVICE_ENABLED__ !== false;
   const supportsWebService = isTizen && engineFsServicePackaged && webServiceSupported !== false;
-  const supportsP2p =
+  const p2pVersionSupported =
     isTizen &&
     supportsP2pByVersion({
       tizenMajorVersion: tizenVersion.major,
       chromiumMajorVersion
-    }) &&
-    supportsWebService;
+    });
+  // Samsung exposes web.service as an optional capability. Some supported
+  // TVs/firmwares report false even though the packaged service can still be
+  // started through the legacy service/application APIs. Let the real local
+  // service probe decide in that case; keep the version and package gates
+  // authoritative so Tizen 4 and service-less packages remain unsupported.
+  const supportsP2p = isTizen && engineFsServicePackaged && p2pVersionSupported;
 
   const capabilities = Object.freeze({
     isTizen,
@@ -145,6 +150,7 @@ export function getTizenCapabilities(runtime = globalThis) {
     engineFsServicePackaged,
     webServiceSupported,
     supportsWebService,
+    p2pVersionSupported,
     supportsP2p,
     supportsTizenAvPlayDashAudioSwitching:
       isTizen &&

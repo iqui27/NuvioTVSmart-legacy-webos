@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve NuvioTV Web.
+Thanks for helping improve Nuvio TV.
 
 ## Strict rules - read before opening anything
 
@@ -40,7 +40,7 @@ Pull requests are accepted only when they fit one of these categories:
 ## UI changes
 
 Do not open a pull request for a UI change just because it looks better, cleaner, more modern, or more consistent to you.
-NuvioTV Web is optimized for TV-first usage, so UI changes are especially sensitive. A small visual change can affect remote-control navigation, focus behavior, readability, overscan, performance, or compatibility on older Smart TV browsers.
+Nuvio TV is optimized for TV-first usage, so UI changes are especially sensitive. A small visual change can affect remote-control navigation, focus behavior, readability, overscan, performance, or compatibility on older Smart TV browsers.
 UI PRs are accepted only when they fix a specific, documented glitch or bug, such as:
 
 - Broken layout
@@ -83,7 +83,7 @@ Do not open a PR that changes behavior unless one of these is true:
 
 ## Platform-specific changes
 
-NuvioTV Web supports multiple Smart TV targets from a shared web codebase.
+Nuvio TV supports multiple Smart TV targets from a shared codebase.
 Platform-specific changes must be handled carefully because a fix for one target can easily break another.
 Platform-specific PRs must include:
 
@@ -106,7 +106,7 @@ Platform-specific PRs must include:
 - Tizen `.wgt` packaging
 - webOS `.ipk` packaging
 - webOS Homebrew wrapper behavior
-- Nuvio WebTV Installer behavior
+- Nuvio TV Installer behavior
 
 ---
 
@@ -154,7 +154,7 @@ This includes:
 - `local.properties` / environment property handling
 - `sync:tizen`
 - `sync:webos`
-- Nuvio WebTV Installer compatibility
+- Nuvio TV Installer compatibility
 - webOS Homebrew metadata support
   PRs in this area must include:
 - The exact command tested
@@ -194,7 +194,7 @@ To keep issues fixable, bug reports should include:
 - Platform: Samsung Tizen, LG webOS, browser, or installer
 - Device model
 - Platform version, when available
-- Install method, such as WebTV Installer, Homebrew Channel, manual WGT, manual IPK, or local development build
+- Install method, such as Nuvio TV Installer, Homebrew Channel, manual WGT, manual IPK, or local development build
 - Steps to reproduce, with exact steps
 - Expected vs actual behavior
 - Frequency: always, sometimes, or once

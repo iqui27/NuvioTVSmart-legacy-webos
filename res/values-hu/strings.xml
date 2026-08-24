@@ -929,7 +929,7 @@
 	
     <!-- UpdatePromptDialog -->
     <string name="update_title">Alkalmazásfrissítés</string>
-    <string name="update_installer_required">A TV-n lévő alkalmazás frissítéséhez használd a Nuvio WebTV Installert.</string>
+    <string name="update_installer_required">A TV-n lévő alkalmazás frissítéséhez használd a Nuvio TV Installert.</string>
     <string name="update_release_notes">Újdonságok</string>
     <string name="update_release_notes_unavailable">Nem érhető el kiadási leírás.</string>
     <string name="update_downloading">Frissítés letöltése</string>
@@ -1267,9 +1267,9 @@
     <string name="layout_cw_sort_split_upcoming">Külön Hamarosan sor</string>
     <string name="layout_cw_sort_split_upcoming_desc">A még le nem adott epizódok áthelyezése külön Hamarosan sorba</string>
     <string name="upcoming_section_title">Hamarosan</string>
-    <string name="layout_overall_ratings">Összesített értékelések</string>
-    <string name="layout_overall_ratings_sub_on">A standard és TMDB-értékelések megjelennek.</string>
-    <string name="layout_overall_ratings_sub_off">A standard és TMDB-értékelések rejtve vannak. A részletező oldalakon az MDBList-szolgáltató beállításai élveznek elsőbbséget.</string>
+    <string name="layout_overall_ratings">Általános értékelések</string>
+    <string name="layout_overall_ratings_sub_on">A normál és a TMDB értékelések látszanak.</string>
+    <string name="layout_overall_ratings_sub_off">A normál és a TMDB értékelések rejtve vannak. A részletek oldalon az MDBList szolgáltatóbeállításai élveznek elsőbbséget.</string>
     <string name="settings_p2p_unsupported_subtitle">Nem támogatott ezen a TV-n.</string>
     <string name="player_audio_tizen_dash_unsupported">A DASH hangsávok váltása nem támogatott ezen a TV-n.</string>
     <string name="player_subtitle_tizen_advanced_unsupported">Előfordulhat, hogy a fejlett feliratstílusok nem teljesen támogatottak ezen a TV-n.</string>

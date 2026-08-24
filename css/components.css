@@ -4350,6 +4350,7 @@ button:focus-visible {
     auto-fill,
     minmax(var(--library-poster-width, 252px), var(--library-poster-width, 252px))
   );
+  grid-gap: 32px 24px; /* Legacy Chromium/Tizen 5 fallback; Android spacing is 16/12dp. */
   gap: 32px 24px;
   align-content: start;
 }
@@ -4372,7 +4373,7 @@ button:focus-visible {
 
 .library-grid-card.focused .library-grid-poster {
   border-color: var(--focus-color);
-  box-shadow: 0 0 0 4px var(--focus-color);
+  box-shadow: none; /* Android TV uses the inside focus border, not an outer halo. */
   background-color: var(--focus-bg);
 }
 
@@ -5278,6 +5279,12 @@ button:focus-visible {
   height: 100%;
 }
 
+/* Provides the Android-style stable dark frame while an identified
+   constrained TV swaps a single hero image layer. */
+.home-screen-shell .home-hero-backdrop-wrap {
+  background: var(--bg-color);
+}
+
 .home-screen-shell .home-hero-backdrop {
   position: absolute;
   display: block;
@@ -5289,6 +5296,8 @@ button:focus-visible {
   height: 100%;
   object-fit: cover;
   opacity: 0.96;
+  /* Android legacy/grid HeroCarousel crossfade baseline. */
+  transition: opacity 300ms ease;
 }
 
 .home-screen-shell .home-hero-backdrop.placeholder {
@@ -5346,6 +5355,7 @@ button:focus-visible {
 }
 
 .home-screen-shell .home-hero-brand {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -5361,6 +5371,7 @@ button:focus-visible {
   max-width: 100%;
   max-height: 96px;
   object-fit: contain;
+  transition: opacity 300ms ease;
 }
 
 .home-screen-shell .home-hero-title-text {
@@ -6525,22 +6536,36 @@ button:focus-visible {
   transition: opacity 480ms ease;
 }
 
-.home-screen-shell.home-layout-modern .home-hero-backdrop.home-hero-backdrop-transition-enter {
+.home-screen-shell .home-hero-backdrop.home-hero-backdrop-transition-enter {
   opacity: 0;
+  transition-duration: 300ms;
+}
+
+.home-screen-shell.home-layout-modern .home-hero-backdrop.home-hero-backdrop-transition-enter {
   transition-duration: 400ms;
 }
 
-.home-screen-shell.home-layout-modern
-  .home-hero-backdrop.home-hero-backdrop-transition-enter.is-visible {
+.home-screen-shell .home-hero-backdrop.home-hero-backdrop-transition-enter.is-visible {
   opacity: 1;
+}
+
+.home-screen-shell .home-hero-backdrop-transition-ghost {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  inset: 0;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 300ms ease;
 }
 
 .home-screen-shell.home-layout-modern .home-hero-backdrop-transition-ghost {
-  opacity: 1;
-  transition: opacity 400ms ease;
+  transition-duration: 400ms;
 }
 
-.home-screen-shell.home-layout-modern .home-hero-backdrop-transition-ghost.is-fading-out {
+.home-screen-shell .home-hero-backdrop-transition-ghost.is-fading-out {
   opacity: 0;
 }
 
@@ -6632,28 +6657,32 @@ button:focus-visible {
   object-position: left top;
 }
 
-.home-screen-shell.home-layout-modern .home-hero-logo {
-  transition: opacity 400ms ease;
-}
-
-.home-screen-shell.home-layout-modern .home-hero-logo.home-hero-logo-transition-enter {
+.home-screen-shell .home-hero-logo.home-hero-logo-transition-enter {
   opacity: 0;
 }
 
-.home-screen-shell.home-layout-modern .home-hero-logo.home-hero-logo-transition-enter.is-visible {
+.home-screen-shell.home-layout-modern .home-hero-logo {
+  transition-duration: 400ms;
+}
+
+.home-screen-shell .home-hero-logo.home-hero-logo-transition-enter.is-visible {
   opacity: 1;
 }
 
-.home-screen-shell.home-layout-modern .home-hero-logo-transition-ghost {
+.home-screen-shell .home-hero-logo-transition-ghost {
   position: absolute;
   left: 0;
   top: 0;
   opacity: 1;
   pointer-events: none;
-  transition: opacity 400ms ease;
+  transition: opacity 300ms ease;
 }
 
-.home-screen-shell.home-layout-modern .home-hero-logo-transition-ghost.is-fading-out {
+.home-screen-shell.home-layout-modern .home-hero-logo-transition-ghost {
+  transition-duration: 400ms;
+}
+
+.home-screen-shell .home-hero-logo-transition-ghost.is-fading-out {
   opacity: 0;
 }
 
@@ -7859,6 +7888,11 @@ button:focus-visible {
   perspective: 2200px;
 }
 
+.supporters-membership-card {
+  background: #07080b;
+  color: #f6f7f9;
+}
+
 .supporters-brand-face {
   position: absolute;
   inset: 0;
@@ -7876,6 +7910,68 @@ button:focus-visible {
 .supporters-brand-front {
   transform: rotateY(0deg);
   opacity: 1;
+}
+
+.supporters-membership-front {
+  justify-content: space-between;
+  gap: min(1.67vw, 32px);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.supporters-membership-front::-webkit-scrollbar {
+  display: none;
+}
+
+.supporters-membership-copy {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: min(1.04vw, 20px);
+}
+
+.supporters-membership-copy .supporters-title {
+  color: #f6f7f9;
+}
+
+.supporters-membership-copy .supporters-secondary-copy {
+  color: rgb(255 255 255 / 0.65);
+}
+
+.supporters-membership-tier-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: min(0.42vw, 8px);
+}
+
+.supporters-membership-tier-line strong {
+  color: var(--focus-color);
+  font-weight: 700;
+}
+
+.supporters-membership-since {
+  color: rgb(255 255 255 / 0.52) !important;
+}
+
+.supporters-membership-error {
+  margin: 0;
+  color: #ff9e9e;
+  font-size: min(1.25vw, 24px);
+  line-height: min(1.67vw, 32px);
+}
+
+.supporters-membership-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: min(0.52vw, 10px);
+}
+
+.supporters-membership-primary-button {
+  margin-top: 0;
 }
 
 .supporters-brand-back {
@@ -7935,7 +8031,8 @@ button:focus-visible {
 .supporters-donate-button,
 .supporters-back-button,
 .supporters-retry-button,
-.supporters-dialog-button {
+.supporters-dialog-button,
+.supporters-membership-refresh-button {
   appearance: none;
   border: none;
   min-height: min(
@@ -7964,6 +8061,18 @@ button:focus-visible {
   margin-top: auto;
 }
 
+.supporters-membership-refresh-button {
+  width: 100%;
+  background: transparent;
+  color: rgb(255 255 255 / 0.65);
+  text-align: center;
+}
+
+.supporters-membership-refresh-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .supporters-back-button,
 .supporters-dialog-button:not(.primary) {
   background: var(--card-bg);
@@ -7974,6 +8083,7 @@ button:focus-visible {
 .supporters-back-button.focused,
 .supporters-retry-button.focused,
 .supporters-dialog-button.focused,
+.supporters-membership-refresh-button.focused,
 .supporters-donate-button:focus-visible,
 .supporters-back-button:focus-visible,
 .supporters-retry-button:focus-visible,
@@ -7982,6 +8092,14 @@ button:focus-visible {
   transform: scale(1.04);
   background: var(--focus-color);
   color: var(--bg-color);
+}
+
+.supporters-membership-refresh-button.focused,
+.supporters-membership-refresh-button:focus-visible {
+  outline: none;
+  background: transparent;
+  color: var(--focus-color);
+  transform: scale(1.04);
 }
 
 .supporters-qr-copy {
@@ -11673,6 +11791,34 @@ html.legacy-webos .debug-console-log-frame {
 .player-ass-subtitles.hidden {
   display: none;
 }
+.player-ass-subtitles .ASS-box {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: Arial, sans-serif;
+}
+
+.player-ass-subtitles .ASS-dialogue {
+  position: absolute;
+  z-index: 0;
+  display: block;
+  box-sizing: content-box;
+  width: max-content;
+  font-size: 0;
+  transform: translate(calc(var(--ass-align-h) * -1), calc(var(--ass-align-v) * -1));
+}
+
+.player-ass-subtitles .ASS-dialogue span {
+  display: inline-block;
+}
+
+.player-ass-subtitles .ASS-dialogue [data-text] {
+  display: inline-block;
+  color: var(--ass-fill-color);
+  font-size: calc(var(--ass-scale) * var(--ass-real-fs) * 1px);
+  line-height: calc(var(--ass-scale) * var(--ass-tag-fs) * 1px);
+  letter-spacing: calc(var(--ass-scale) * var(--ass-tag-fsp) * 1px);
+}
 
 .player-html-subtitle-cue {
   position: absolute;
@@ -14201,6 +14347,16 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   display: none;
 }
 
+.player-subtitle-virtual-spacer {
+  flex: 0 0 auto;
+  width: 1px;
+  pointer-events: none;
+}
+
+.no-flex-gap .player-subtitle-rail > * + * {
+  margin-top: 8px;
+}
+
 .player-audio-track-list {
   width: 444px;
   max-height: 100%;
@@ -15631,15 +15787,20 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .movie-detail-shell .series-detail-vignette {
-  background:
-    linear-gradient(
-      90deg,
-      rgba(6, 9, 14, 0.96) 0%,
-      rgba(6, 9, 14, 0.86) 45%,
-      rgba(6, 9, 14, 0.66) 72%,
-      rgba(6, 9, 14, 0.5) 100%
-    ),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.18) 38%, rgba(0, 0, 0, 0.9) 100%);
+  /* Android TV BackdropLayer leftGradient: fadeWidth = 78% of screen. */
+  background: linear-gradient(
+    90deg,
+    rgb(var(--bg-color-rgb) / 1) 0%,
+    rgb(var(--bg-color-rgb) / 0.95) 7.8%,
+    rgb(var(--bg-color-rgb) / 0.84) 17.16%,
+    rgb(var(--bg-color-rgb) / 0.7) 28.08%,
+    rgb(var(--bg-color-rgb) / 0.52) 40.56%,
+    rgb(var(--bg-color-rgb) / 0.34) 51.48%,
+    rgb(var(--bg-color-rgb) / 0.18) 60.84%,
+    rgb(var(--bg-color-rgb) / 0.07) 70.2%,
+    rgb(var(--bg-color-rgb) / 0) 78%,
+    rgb(var(--bg-color-rgb) / 0) 100%
+  );
 }
 
 .movie-detail-content {
@@ -16291,17 +16452,20 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   left: 0;
   inset: 0;
   z-index: 0;
-  /* Stronger scrim that never fully fades, so detail info/genres stay readable
-     over light backdrops. Classic rgba() for old Tizen/webOS browsers. */
-  background:
-    linear-gradient(
-      90deg,
-      rgba(6, 9, 14, 0.96) 0%,
-      rgba(6, 9, 14, 0.86) 45%,
-      rgba(6, 9, 14, 0.66) 72%,
-      rgba(6, 9, 14, 0.5) 100%
-    ),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.18) 38%, rgba(0, 0, 0, 0.9) 100%);
+  /* Android TV BackdropLayer leftGradient: fadeWidth = 78% of screen. */
+  background: linear-gradient(
+    90deg,
+    rgb(var(--bg-color-rgb) / 1) 0%,
+    rgb(var(--bg-color-rgb) / 0.95) 7.8%,
+    rgb(var(--bg-color-rgb) / 0.84) 17.16%,
+    rgb(var(--bg-color-rgb) / 0.7) 28.08%,
+    rgb(var(--bg-color-rgb) / 0.52) 40.56%,
+    rgb(var(--bg-color-rgb) / 0.34) 51.48%,
+    rgb(var(--bg-color-rgb) / 0.18) 60.84%,
+    rgb(var(--bg-color-rgb) / 0.07) 70.2%,
+    rgb(var(--bg-color-rgb) / 0) 78%,
+    rgb(var(--bg-color-rgb) / 0) 100%
+  );
   transition: opacity 800ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -17935,10 +18099,21 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .performance-constrained .home-screen-shell .home-content-card,
 .performance-constrained .home-screen-shell .home-continue-card,
 .performance-constrained .home-screen-shell .home-poster-frame,
-.performance-constrained .home-screen-shell .home-hero-card,
+.performance-constrained .home-screen-shell .home-hero-card {
+  transition: none !important;
+}
+
+/* Keep the Android-aligned Hero asset crossfade isolated from the broader
+   constrained-TV animation shutdown. It runs only after the next asset has
+   been preloaded; card, scroll and focus animations remain disabled. */
 .performance-constrained .home-screen-shell .home-hero-backdrop,
 .performance-constrained .home-screen-shell .home-hero-logo {
-  transition: none !important;
+  transition: opacity 300ms ease !important;
+}
+
+.performance-constrained .home-screen-shell.home-layout-modern .home-hero-backdrop,
+.performance-constrained .home-screen-shell.home-layout-modern .home-hero-logo {
+  transition-duration: 400ms !important;
 }
 
 .performance-constrained .home-screen-shell .home-content-card.focused,
@@ -18820,7 +18995,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .no-flex-gap .cast-credit-track > * {
-  margin-right: 14px;
+  margin-right: 16px;
 }
 
 .no-flex-gap .cast-credit-track > *:last-child {
@@ -18874,10 +19049,6 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   .home-poster-card.is-landscape
   .home-poster-frame {
   height: var(--home-landscape-poster-height);
-}
-
-.no-aspect-ratio .cast-credit-poster {
-  height: 360px;
 }
 
 .no-backdrop-filter .modern-sidebar-panel,
@@ -20006,38 +20177,36 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .legacy-tizen .series-detail-vignette {
-  background: rgba(0, 0, 0, 0.34);
-}
-
-.legacy-tizen .series-detail-vignette::before,
-.legacy-tizen .series-detail-vignette::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  inset: 0;
-  pointer-events: none;
-}
-
-.legacy-tizen .series-detail-vignette::before {
+  /* Keep the old-engine fallback on the same Android TV left gradient. */
   background: linear-gradient(
     90deg,
-    rgba(6, 9, 14, 0.98) 0%,
-    rgba(6, 9, 14, 0.94) 24%,
-    rgba(6, 9, 14, 0.78) 48%,
-    rgba(6, 9, 14, 0.58) 72%,
-    rgba(6, 9, 14, 0.42) 100%
+    rgb(var(--bg-color-rgb) / 1) 0%,
+    rgb(var(--bg-color-rgb) / 0.95) 7.8%,
+    rgb(var(--bg-color-rgb) / 0.84) 17.16%,
+    rgb(var(--bg-color-rgb) / 0.7) 28.08%,
+    rgb(var(--bg-color-rgb) / 0.52) 40.56%,
+    rgb(var(--bg-color-rgb) / 0.34) 51.48%,
+    rgb(var(--bg-color-rgb) / 0.18) 60.84%,
+    rgb(var(--bg-color-rgb) / 0.07) 70.2%,
+    rgb(var(--bg-color-rgb) / 0) 78%,
+    rgb(var(--bg-color-rgb) / 0) 100%
   );
 }
 
-.legacy-tizen .series-detail-vignette::after {
+.series-detail-shell.detail-rtl .series-detail-vignette {
+  /* Android TV mirrors the detail gradient for RTL locales. */
   background: linear-gradient(
-    180deg,
-    rgba(0, 0, 0, 0.24) 0%,
-    rgba(0, 0, 0, 0.12) 42%,
-    rgba(0, 0, 0, 0.78) 100%
+    270deg,
+    rgb(var(--bg-color-rgb) / 1) 0%,
+    rgb(var(--bg-color-rgb) / 0.95) 7.8%,
+    rgb(var(--bg-color-rgb) / 0.84) 17.16%,
+    rgb(var(--bg-color-rgb) / 0.7) 28.08%,
+    rgb(var(--bg-color-rgb) / 0.52) 40.56%,
+    rgb(var(--bg-color-rgb) / 0.34) 51.48%,
+    rgb(var(--bg-color-rgb) / 0.18) 60.84%,
+    rgb(var(--bg-color-rgb) / 0.07) 70.2%,
+    rgb(var(--bg-color-rgb) / 0) 78%,
+    rgb(var(--bg-color-rgb) / 0) 100%
   );
 }
 
@@ -20359,7 +20528,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   transform: scale(1.005);
   border-color: var(--secondary-color);
   background: rgb(var(--card-bg-rgb) / 0.98);
+  /* Android TV keeps the focus border inside the card. The outer halo alone
+     can be clipped by the TV list/panel overflow while the list scrolls. */
   box-shadow:
+    inset 0 0 0 2px var(--secondary-color),
     0 0 0 5px var(--secondary-color),
     0 10px 28px rgba(0, 0, 0, 0.28);
 }
@@ -20809,6 +20981,11 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   line-height: 1.45;
   color: var(--text-color);
   max-width: 1200px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  overflow: hidden;
 }
 
 .cast-detail-section-title {
@@ -20824,7 +21001,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   display: flex;
   gap: 14px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
   padding-bottom: 8px;
 }
@@ -20834,43 +21011,86 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .cast-credit-card {
-  flex: 0 0 240px;
-  border-radius: 18px;
-  padding: 10px;
-  background: var(--bg-elevated);
-  border: 1px solid rgb(var(--focus-color-rgb) / 0.12);
+  flex: 0 0 248px;
+  width: 248px;
+  min-width: 248px;
+  overflow: visible;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-color);
+  box-sizing: border-box;
 }
 
 .cast-credit-card.focused {
   transform: none;
-  border-color: var(--focus-color);
-  box-shadow: 0 0 0 3px rgb(var(--focus-color-rgb) / 0.2);
 }
 
 .cast-credit-poster {
+  display: block;
   width: 100%;
-  aspect-ratio: 2 / 3;
+  height: 372px;
+  overflow: hidden;
+  border: 2px solid transparent;
   border-radius: 14px;
   background: var(--card-bg) center center / cover no-repeat;
-  margin-bottom: 10px;
+  box-sizing: border-box;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    background-color 120ms ease;
+}
+
+.cast-credit-card.focused .cast-credit-poster {
+  border-color: var(--secondary-color);
+  box-shadow: 0 0 0 2px var(--secondary-color);
+  background-color: var(--focus-bg);
 }
 
 .cast-credit-title {
-  font-size: 18px;
+  width: 100%;
+  min-height: 34px;
+  margin-top: 10px;
+  padding: 0 2px;
+  color: var(--text-color);
+  font-size: 24px;
+  line-height: 1.2;
   font-weight: 700;
-  line-height: 1.25;
-  min-height: 44px;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
   -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cast-credit-subtitle {
-  margin-top: 6px;
-  font-size: 15px;
+  margin-top: 4px;
+  padding: 0 2px;
   color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+@media (min-width: 1520px) {
+  .cast-credit-card {
+    flex-basis: 280px;
+    width: 280px;
+    min-width: 280px;
+  }
+
+  .cast-credit-poster {
+    height: 420px;
+  }
+
+  .cast-credit-title {
+    font-size: var(--tv-body-text, 28px);
+  }
+
+  .cast-credit-subtitle {
+    font-size: var(--tv-caption-text, 22px);
+  }
 }
 
 .cast-credit-empty {
@@ -22069,6 +22289,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     rgba(13, 13, 13, 0.16) 76%,
     rgba(13, 13, 13, 0) 100%
   );
+  background: linear-gradient(
+    90deg,
+    var(--bg-color) 0%,
+    rgba(var(--bg-color-rgb-legacy), 0.86) 22%,
+    rgba(var(--bg-color-rgb-legacy), 0.56) 46%,
+    rgba(var(--bg-color-rgb-legacy), 0.16) 76%,
+    rgba(var(--bg-color-rgb-legacy), 0) 100%
+  );
 }
 
 .legacy-tizen .home-screen-shell.home-layout-modern .home-modern-hero-media::after,
@@ -22080,6 +22308,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     rgba(13, 13, 13, 0.25) 89.2%,
     rgba(13, 13, 13, 0.65) 95.5%,
     #0d0d0d 100%
+  );
+  background: linear-gradient(
+    180deg,
+    rgba(var(--bg-color-rgb-legacy), 0) 0%,
+    rgba(var(--bg-color-rgb-legacy), 0) 82%,
+    rgba(var(--bg-color-rgb-legacy), 0.25) 89.2%,
+    rgba(var(--bg-color-rgb-legacy), 0.65) 95.5%,
+    var(--bg-color) 100%
   );
 }
 
@@ -22111,6 +22347,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     rgba(13, 13, 13, 0.42) 76%,
     rgba(13, 13, 13, 0) 100%
   );
+  background: linear-gradient(
+    90deg,
+    var(--bg-color) 0%,
+    rgba(var(--bg-color-rgb-legacy), 0.9) 22%,
+    rgba(var(--bg-color-rgb-legacy), 0.8) 46%,
+    rgba(var(--bg-color-rgb-legacy), 0.42) 76%,
+    rgba(var(--bg-color-rgb-legacy), 0) 100%
+  );
 }
 
 .legacy-tizen
@@ -22126,6 +22370,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     rgba(13, 13, 13, 0.35) 74.8%,
     rgba(13, 13, 13, 0.75) 85.6%,
     #0d0d0d 100%
+  );
+  background: linear-gradient(
+    180deg,
+    rgba(var(--bg-color-rgb-legacy), 0) 0%,
+    rgba(var(--bg-color-rgb-legacy), 0) 64%,
+    rgba(var(--bg-color-rgb-legacy), 0.35) 74.8%,
+    rgba(var(--bg-color-rgb-legacy), 0.75) 85.6%,
+    var(--bg-color) 100%
   );
 }
 
@@ -22275,7 +22527,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   margin: 0.65rem 0;
 }
 
-/* ===========================================================================
+/* ====================================================================
  * Legacy-TV performance overrides (measured on an LG OLED65C9, Chromium 53).
  *
  * Note on what is deliberately NOT here: disabling the
@@ -22483,4 +22735,412 @@ html.no-css-grid .player-subtitle-option-copy > * + * {
    de ordem no arquivo. */
 html.no-flex-gap .stream-route-card-badges-lazy > * {
   margin-bottom: 0;
+  =======
+/* TMDB entity browse: the Android entity screen ported to the TV rails. */
+.tmdb-entity-shell {
+    width: 100vw;
+    height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    background: var(--bg-color);
+    color: var(--text-color);
+    box-sizing: border-box;
+    padding-bottom: 56px;
+  }
+
+  .tmdb-entity-shell::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tmdb-entity-shell-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .tmdb-entity-state,
+  .tmdb-entity-empty {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 48px;
+    box-sizing: border-box;
+  }
+
+  .tmdb-entity-state {
+    color: var(--text-secondary);
+    font-size: 28px;
+  }
+
+  .tmdb-entity-state .nuvio-loading-indicator {
+    width: 96px;
+    height: 96px;
+    margin-bottom: 20px;
+  }
+
+  .tmdb-entity-state-title {
+    max-width: 900px;
+    color: var(--text-color);
+    font-size: 40px;
+    line-height: 1.2;
+    font-weight: 600;
+  }
+
+  .tmdb-entity-state-subtitle {
+    max-width: 760px;
+    margin-top: 14px;
+    color: var(--text-secondary);
+    font-size: 24px;
+    line-height: 1.4;
+  }
+
+  .tmdb-entity-retry {
+    min-height: 64px;
+    margin-top: 28px;
+    padding: 0 32px;
+    border: 1px solid rgb(var(--focus-color-rgb) / 0.22);
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text-color);
+    font-size: 24px;
+  }
+
+  .tmdb-entity-retry.focused {
+    border-color: var(--focus-color);
+    box-shadow: 0 0 0 3px rgb(var(--focus-color-rgb) / 0.22);
+    background: var(--focus-bg);
+  }
+
+  .tmdb-entity-hero {
+    position: relative;
+    min-height: 520px;
+    overflow: hidden;
+    box-sizing: border-box;
+    background: var(--bg-color);
+  }
+
+  .tmdb-entity-hero-backdrop,
+  .tmdb-entity-hero-scrim {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .tmdb-entity-hero-backdrop {
+    object-fit: cover;
+    opacity: 0.16;
+  }
+
+  .tmdb-entity-hero-scrim {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--bg-color-rgb) / 1) 0%,
+      rgb(var(--bg-color-rgb) / 0.94) 26%,
+      rgb(var(--bg-color-rgb) / 0.72) 60%,
+      rgb(var(--bg-color-rgb) / 0.42) 100%
+    );
+  }
+
+  .tmdb-entity-hero-copy {
+    position: relative;
+    z-index: 1;
+    min-height: 520px;
+    max-width: 1050px;
+    padding: 74px 48px 66px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-end;
+    box-sizing: border-box;
+  }
+
+  .tmdb-entity-eyebrow {
+    margin-bottom: 12px;
+    color: var(--text-secondary);
+    font-size: 20px;
+    line-height: 1.25;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .tmdb-entity-logo {
+    width: 280px;
+    height: 120px;
+    margin-bottom: 16px;
+    object-fit: contain;
+    object-position: left center;
+  }
+
+  .tmdb-entity-title {
+    max-width: 980px;
+    margin: 0;
+    color: #fff;
+    font-size: 64px;
+    line-height: 1.02;
+    font-weight: 700;
+  }
+
+  .tmdb-entity-meta {
+    margin-top: 16px;
+    color: rgb(255 255 255 / 0.78);
+    font-size: 25px;
+    line-height: 1.3;
+  }
+
+  .tmdb-entity-description {
+    max-width: 900px;
+    margin: 14px 0 0;
+    color: #fff;
+    font-size: 24px;
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    overflow: hidden;
+  }
+
+  .tmdb-entity-rails {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+    padding-top: 28px;
+  }
+
+  .tmdb-entity-rail {
+    min-width: 0;
+  }
+
+  .tmdb-entity-rail-title {
+    margin: 0 48px 14px;
+    color: var(--text-color);
+    font-size: 32px;
+    line-height: 1.25;
+    font-weight: 600;
+  }
+
+  .tmdb-entity-track {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding: 4px 48px 16px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    box-sizing: border-box;
+  }
+
+  .tmdb-entity-track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tmdb-entity-card {
+    flex: 0 0 248px;
+    width: 248px;
+    min-width: 248px;
+    overflow: visible;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text-color);
+    box-sizing: border-box;
+  }
+
+  .tmdb-entity-card-poster-wrap {
+    position: relative;
+    width: 100%;
+    height: 372px;
+    overflow: hidden;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    background: var(--card-bg);
+    box-sizing: border-box;
+    transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease,
+      background-color 120ms ease;
+  }
+
+  .tmdb-entity-card-poster,
+  .tmdb-entity-card-placeholder {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .tmdb-entity-card-poster {
+    object-fit: cover;
+  }
+
+  .tmdb-entity-card-placeholder {
+    background: var(--card-bg);
+  }
+
+  .tmdb-entity-card.focused .tmdb-entity-card-poster-wrap {
+    border-color: var(--secondary-color);
+    box-shadow: 0 0 0 2px var(--secondary-color);
+    background: var(--focus-bg);
+  }
+
+  .tmdb-entity-card-title {
+    width: 100%;
+    min-height: 34px;
+    margin-top: 10px;
+    padding: 0 2px;
+    color: var(--text-color);
+    font-size: 24px;
+    line-height: 1.2;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tmdb-entity-card-year {
+    margin-top: 4px;
+    padding: 0 2px;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1.25;
+  }
+
+  .tmdb-entity-card.focused .tmdb-entity-card-title {
+    color: #fff;
+  }
+
+  .tmdb-entity-card.focused .tmdb-entity-card-year {
+    color: rgb(255 255 255 / 0.82);
+  }
+
+  .tmdb-entity-rail-loading {
+    flex: 0 0 72px;
+    width: 72px;
+    height: 372px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+  }
+
+  .tmdb-entity-rail-loading .nuvio-loading-indicator {
+    width: 52px;
+    height: 52px;
+  }
+
+  .no-flex-gap .tmdb-entity-rails > * + * {
+    margin-top: 30px;
+  }
+
+  .no-flex-gap .tmdb-entity-track > * + * {
+    margin-left: 16px;
+  }
+
+  .legacy-tizen .tmdb-entity-shell,
+  .legacy-webos .tmdb-entity-shell {
+    background: #0d0d0d;
+  }
+
+  .legacy-tizen .tmdb-entity-hero-scrim,
+  .legacy-webos .tmdb-entity-hero-scrim {
+    background: rgba(13, 13, 13, 0.86);
+  }
+
+  .legacy-tizen .tmdb-entity-card-poster-wrap,
+  .legacy-webos .tmdb-entity-card-poster-wrap {
+    transition: none;
+  }
+
+  @media (min-width: 1520px) {
+    .tmdb-entity-hero {
+      min-height: 560px;
+    }
+
+    .tmdb-entity-hero-copy {
+      min-height: 560px;
+      padding-left: var(--tv-safe-gutter-wide, 96px);
+      padding-right: var(--tv-safe-gutter-wide, 96px);
+    }
+
+    .tmdb-entity-rail-title {
+      margin-left: var(--tv-safe-gutter-wide, 96px);
+      margin-right: var(--tv-safe-gutter-wide, 96px);
+      font-size: clamp(28px, 1.7vw, 40px);
+    }
+
+    .tmdb-entity-track {
+      padding-left: var(--tv-safe-gutter-wide, 96px);
+      padding-right: var(--tv-safe-gutter-wide, 96px);
+      gap: 24px;
+    }
+
+    .tmdb-entity-card {
+      flex-basis: 280px;
+      width: 280px;
+      min-width: 280px;
+    }
+
+    .tmdb-entity-card-poster-wrap {
+      height: 420px;
+    }
+
+    .tmdb-entity-card-title {
+      font-size: var(--tv-body-text, 28px);
+    }
+
+    .tmdb-entity-card-year {
+      font-size: var(--tv-caption-text, 22px);
+    }
+
+    .tmdb-entity-rail-loading {
+      height: 420px;
+    }
+
+    .no-flex-gap .tmdb-entity-track > * + * {
+      margin-left: 24px;
+    }
+  }
+
+  /* Tizen 5/older Chromium keeps the Android hero logo on the TV-safe right
+   side. Keep this fallback limited to identified constrained Tizen runtimes;
+   modern Tizen and browser layouts retain their existing Web presentation. */
+  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-hero-copy {
+    width: 100%;
+    max-width: none;
+  }
+
+  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-logo {
+    position: absolute;
+    top: 50%;
+    right: 48px;
+    margin-bottom: 0;
+    transform: translateY(-50%);
+    object-position: center center;
+  }
+
+  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-eyebrow,
+  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-title,
+  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-meta,
+  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-description {
+    max-width: calc(100% - 328px);
+  }
+
+  @media (min-width: 1520px) {
+    .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-logo {
+      right: var(--tv-safe-gutter-wide, 96px);
+    }
+  }
 }

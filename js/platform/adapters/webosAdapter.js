@@ -5,15 +5,6 @@ import {
   requestWebOsCompanionService
 } from "../webos/webosCompanionService.js";
 
-function getAvplayApi() {
-  const webapis = globalThis.webapis;
-  const avplay = webapis?.avplay || webapis?.avPlay || globalThis.avplay || null;
-  if (!avplay || typeof avplay.open !== "function") {
-    return null;
-  }
-  return avplay;
-}
-
 export const webosAdapter = {
   name: "webos",
 

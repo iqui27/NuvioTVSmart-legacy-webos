@@ -27,8 +27,10 @@ import {
 import { ProfileManager } from "./profileManager.js";
 import {
   clearProfileSettingsCloudSyncPending,
+  getProfileSettingsCloudSyncPendingVersion,
   hasProfileSettingsCloudSyncPending
 } from "../../data/local/profileScopedStore.js";
+import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 import { normalizeSubtitleVerticalOffset } from "../player/subtitleVerticalOffset.js";
 import {
   androidColorIntToSubtitleTextOpacity,
@@ -40,6 +42,7 @@ const PULL_RPC = "sync_pull_profile_settings_blob";
 const PUSH_RPC = "sync_push_profile_settings_blob";
 const SETTINGS_SYNC_PLATFORM = "tv";
 const CACHE_KEY = "profileSettingsSyncCache";
+const syncInFlightByProfile = new Map();
 const EXCLUDED_PROFILE_KEYS = {
   layout_settings: new Set(["search_discover_enabled"]),
   player_settings: new Set(["audio_amplification_db", "persist_audio_amplification"]),
@@ -71,6 +74,25 @@ function resolveProfileId(profileId = null) {
     return Math.trunc(raw);
   }
   return 1;
+}
+
+async function withProfileSettingsSyncLock(profileId, task) {
+  const key = String(resolveProfileId(profileId));
+  const previous = syncInFlightByProfile.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => {
+    release = resolve;
+  });
+  syncInFlightByProfile.set(key, current);
+  await previous.catch(() => false);
+  try {
+    return await task();
+  } finally {
+    release();
+    if (syncInFlightByProfile.get(key) === current) {
+      syncInFlightByProfile.delete(key);
+    }
+  }
 }
 
 function cloneValue(value) {
@@ -2147,74 +2169,87 @@ function applyRemoteBlob(profileId, blob) {
   return applied;
 }
 
-export const ProfileSettingsSyncService = {
-  async pull(profileId = null) {
-    try {
-      if (!AuthManager.isAuthenticated) {
-        return false;
-      }
-      const resolvedProfileId = resolveProfileId(profileId);
-      if (hasProfileSettingsCloudSyncPending(resolvedProfileId)) {
-        await this.push(resolvedProfileId);
-        return false;
-      }
-      const blob = await pullRemoteBlob(resolvedProfileId);
-      if (!blob) {
-        return false;
-      }
-
-      setCachedBlob(resolvedProfileId, blob);
-
-      const signatureStart = syncPerfEnabled() ? syncPerfNow() : 0;
-      const remoteSignature = buildComparableSignatureFromBlob(blob);
-      const localSignature = buildComparableSignatureFromLocal(resolvedProfileId);
-      if (syncPerfEnabled()) {
-        try {
-          console.info("[home-perf] profileSettingsSync.signature", {
-            ms: Number((syncPerfNow() - signatureStart).toFixed(1))
-          });
-        } catch (_) {}
-      }
-      if (remoteSignature === localSignature) {
-        return false;
-      }
-
-      return applyRemoteBlob(String(resolvedProfileId), blob);
-    } catch (error) {
-      if (shouldTreatAsMissingResource(error)) {
-        return false;
-      }
-      console.warn("Profile settings sync pull failed", error);
+async function pullProfileSettingsUnlocked(resolvedProfileId) {
+  try {
+    if (!AuthManager.isAuthenticated || isSyncBackoffActive()) {
       return false;
     }
+    if (hasProfileSettingsCloudSyncPending(resolvedProfileId)) {
+      // Android keeps a local change authoritative until its debounced push
+      // succeeds. Never pull remote data over an unsynced local edit.
+      return false;
+    }
+    const blob = await pullRemoteBlob(resolvedProfileId);
+    if (
+      !blob ||
+      !AuthManager.isAuthenticated ||
+      isSyncBackoffActive() ||
+      hasProfileSettingsCloudSyncPending(resolvedProfileId)
+    ) {
+      return false;
+    }
+
+    setCachedBlob(resolvedProfileId, blob);
+
+    const remoteSignature = buildComparableSignatureFromBlob(blob);
+    const localSignature = buildComparableSignatureFromLocal(resolvedProfileId);
+    if (remoteSignature === localSignature) {
+      return false;
+    }
+
+    return applyRemoteBlob(String(resolvedProfileId), blob);
+  } catch (error) {
+    if (shouldTreatAsMissingResource(error)) {
+      return false;
+    }
+    console.warn("Profile settings sync pull failed", error);
+    return false;
+  }
+}
+
+async function pushProfileSettingsUnlocked(resolvedProfileId) {
+  try {
+    if (!AuthManager.isAuthenticated || isSyncBackoffActive()) {
+      return false;
+    }
+    const pendingVersion = getProfileSettingsCloudSyncPendingVersion(resolvedProfileId);
+    const remoteBlob = await pullRemoteBlob(resolvedProfileId);
+    const blob = buildOutgoingBlob(String(resolvedProfileId), remoteBlob);
+    await SupabaseApi.rpc(
+      PUSH_RPC,
+      {
+        p_profile_id: resolvedProfileId,
+        p_settings_json: blob,
+        p_platform: SETTINGS_SYNC_PLATFORM
+      },
+      true
+    );
+    setCachedBlob(resolvedProfileId, blob);
+    if (pendingVersion != null) {
+      clearProfileSettingsCloudSyncPending(resolvedProfileId, pendingVersion);
+    }
+    return true;
+  } catch (error) {
+    if (shouldTreatAsMissingResource(error)) {
+      return false;
+    }
+    console.warn("Profile settings sync push failed", error);
+    return false;
+  }
+}
+
+export const ProfileSettingsSyncService = {
+  async pull(profileId = null) {
+    const resolvedProfileId = resolveProfileId(profileId);
+    return withProfileSettingsSyncLock(resolvedProfileId, () =>
+      pullProfileSettingsUnlocked(resolvedProfileId)
+    );
   },
 
   async push(profileId = null) {
-    try {
-      if (!AuthManager.isAuthenticated) {
-        return false;
-      }
-      const resolvedProfileId = resolveProfileId(profileId);
-      const remoteBlob = await pullRemoteBlob(resolvedProfileId);
-      const blob = buildOutgoingBlob(String(resolvedProfileId), remoteBlob);
-      await SupabaseApi.rpc(
-        PUSH_RPC,
-        {
-          p_profile_id: resolvedProfileId,
-          p_settings_json: blob,
-          p_platform: SETTINGS_SYNC_PLATFORM
-        },
-        true
-      );
-      setCachedBlob(resolvedProfileId, blob);
-      clearProfileSettingsCloudSyncPending(resolvedProfileId);
-      return true;
-    } catch (error) {
-      if (shouldTreatAsMissingResource(error)) {
-        return false;
-      }
-      console.warn("Profile settings sync push failed", error);
-      return false;
-    }
+    const resolvedProfileId = resolveProfileId(profileId);
+    return withProfileSettingsSyncLock(resolvedProfileId, () =>
+      pushProfileSettingsUnlocked(resolvedProfileId)
+    );
   }
 };

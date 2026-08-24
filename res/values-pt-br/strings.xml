@@ -314,8 +314,8 @@
     <string name="about_check_updates_subtitle">Baixar a versão mais recente</string>
     <string name="about_privacy_policy">Política de Privacidade</string>
     <string name="about_privacy_policy_subtitle">Ler nossa política de privacidade</string>
-    <string name="about_supporters_contributors">Apoiadores &amp; Colaboradores</string>
-    <string name="about_supporters_contributors_subtitle">Reconhecimento e créditos do projeto</string>
+    <string name="about_supporters_contributors">Apoiar o Nuvio</string>
+    <string name="about_supporters_contributors_subtitle">Apoie o projeto e veja os créditos da comunidade</string>
     <string name="about_debug_console_title">Console debug</string>
     <string name="about_debug_console_subtitle">Mostrar últimos erros/avisos</string>
     <string name="debug_console_subtitle">Últimos avisos e erros capturados nesta sessão do app</string>
@@ -481,7 +481,7 @@
     <string name="sub_opacity">Opacidade</string>
     <string name="action_none">Nenhum</string>
     <string name="action_close">Fechar</string>
-    <string name="supporters_contributors_title">Apoiadores e Colaboradores</string>
+    <string name="supporters_contributors_title">Apoiar o Nuvio</string>
     <string name="supporters_contributors_subtitle">As pessoas que apoiam o Nuvio e os colaboradores que o constroem para TV e celular.</string>
     <string name="supporters_contributors_supporters_copy">Apoiadores e doadores ajudam a manter o projeto ativo, financiam a infraestrutura e abrem espaço para recursos ambiciosos.</string>
     <string name="supporters_contributors_donate_copy">O Nuvio continuará sendo gratuito e de código aberto. Se você quiser apoiar o projeto, pode ajudar com os custos de tempo e infraestrutura.</string>
@@ -497,7 +497,7 @@
     <string name="supporters_empty">Nenhum apoiador encontrado ainda.</string>
     <string name="supporters_error_title">Não foi possível carregar os apoiadores</string>
     <string name="supporters_no_message">Nenhuma mensagem compartilhada.</string>
-    <string name="supporters_open_donations">Abrir página de doações</string>
+    <string name="supporters_open_donations">Abrir página de apoio</string>
     <string name="sponsors_loading">Carregando patrocinadores…</string>
     <string name="sponsors_empty">Nenhum patrocinador encontrado ainda.</string>
     <string name="sponsors_error_title">Não foi possível carregar patrocinadores</string>
@@ -604,7 +604,7 @@
     <string name="audio_decoder_prefer_app">Preferir decodificadores do app</string>
     <string name="audio_decoder_priority">Prioridade do decodificador</string>
     <string name="audio_enable_downmix_title">Ativar mixagem de áudio (downmix)</string>
-    <string name="audio_enable_downmix_subtitle">Utiliza a mixagem do FFmpeg. Se desativado, o áudio segue o caminho padrão do dispositivo/Android.</string>
+    <string name="audio_enable_downmix_subtitle">Usa o caminho de downmix do FFmpeg. Requer a opção “Preferir decodificadores do app (FFmpeg)”. Quando desativado, o áudio segue o caminho anterior do Android/dispositivo.</string>
     <string name="audio_tunneled">Reprodução tunneled</string>
     <string name="audio_tunneled_sub">Melhora a sincronização de áudio e vídeo usando o hardware.</string>
     <string name="dv7_handling_title">Reprodução de Dolby Vision (Perfil 7)</string>
@@ -1078,7 +1078,7 @@
     <string name="trakt_watch_progress_source_trakt">Trakt</string>
     <string name="trakt_watch_progress_source_nuvio">Nuvio Sync</string>
     <string name="trakt_library_source_title">Fonte para Biblioteca</string>
-    <string name="trakt_library_source_subtitle">Escolha qual fonte usar para salvar e ver sua coleção</string>
+    <string name="trakt_library_source_subtitle">Escolha qual fonte o Nuvio usa para sua Biblioteca</string>
     <string name="trakt_library_source_dialog_title">Fonte para Biblioteca</string>
     <string name="trakt_library_source_dialog_subtitle">Escolha onde salvar e gerenciar os itens da sua biblioteca</string>
     <string name="trakt_library_source_trakt">Trakt</string>
@@ -1725,8 +1725,8 @@
     <string name="layout_selection_subtitle">Escolha o layout da sua tela inicial</string>
     <string name="layout_selection_continue">Continuar</string>
     <string name="update_title">Atualização do App</string>
-    <string name="update_installer_required">Use o Nuvio WebTV Installer para atualizar o app na TV.</string>
-    <string name="update_release_notes">Novidades</string>
+    <string name="update_installer_required">Use o Nuvio TV Installer para atualizar o app na TV.</string>
+    <string name="update_release_notes">Notas de versão</string>
     <string name="update_release_notes_unavailable">Nenhuma descrição da versão está disponível.</string>
     <string name="update_downloading">Baixando atualização</string>
     <string name="update_download">Baixar</string>
@@ -2061,8 +2061,8 @@
     <string name="collections_editor_url_short_placeholder">https://...</string>
     <string name="collections_editor_tmdb_genres_movie_placeholder">28,12</string>
     <string name="collections_editor_tmdb_genres_tv_placeholder">18,35</string>
-    <string name="collections_editor_tmdb_date_from_placeholder">2020-01-01</string>
-    <string name="collections_editor_tmdb_date_to_placeholder">2024-12-31</string>
+    <string name="collections_editor_tmdb_date_from_placeholder">01-01-2020</string>
+    <string name="collections_editor_tmdb_date_to_placeholder">31-12-2024</string>
     <string name="collections_editor_tmdb_rating_min_placeholder">7.0</string>
     <string name="collections_editor_tmdb_rating_max_placeholder">10</string>
     <string name="collections_editor_tmdb_votes_min_placeholder">100</string>
@@ -2460,7 +2460,6 @@
     <string name="playback_net_connection_count_sub">Número de conexões TCP paralelas. Valores maiores aumentam o uso de memória e a velocidade, mas com ganhos cada vez menores.</string>
     <string name="playback_net_chunk_size">Tamanho do bloco</string>
     <string name="playback_net_chunk_size_sub">Tamanho de cada bloco baixado por conexão. Blocos maiores reduzem a sobrecarga, mas usam mais memória.</string>
-    <string name="common_beta">Beta</string>
     <string name="contributor_role_app_maintainer">Mantenedor deste app</string>
     <string name="settings.layout.groups.continueWatching.title">Continuar assistindo</string>
     <string name="settings.layout.groups.continueWatching.subtitle">Configure os próximos episódios e a ordem</string>
@@ -2732,8 +2731,8 @@
     <string name="cloud_library_search_clear">Limpar pesquisa</string>
     <string name="upcoming_section_title">Próximos</string>
     <string name="layout_overall_ratings">Avaliações gerais</string>
-    <string name="layout_overall_ratings_sub_on">As avaliações padrão e do TMDB são exibidas.</string>
-    <string name="layout_overall_ratings_sub_off">As avaliações padrão e do TMDB estão ocultas. As configurações do provedor MDBList têm prioridade nas páginas de detalhes.</string>
+    <string name="layout_overall_ratings_sub_on">Mostra as avaliações padrão e do TMDB.</string>
+    <string name="layout_overall_ratings_sub_off">Oculta as avaliações padrão e do TMDB. As configurações do provedor MDBList têm prioridade nas páginas de detalhes.</string>
     <string name="settings_p2p_unsupported_subtitle">Não compatível com esta TV.</string>
     <string name="player_audio_tizen_dash_unsupported">A troca de faixas de áudio DASH não é compatível com esta TV.</string>
     <string name="player_subtitle_tizen_advanced_unsupported">A estilização avançada de legendas pode não ser totalmente compatível com esta TV.</string>
@@ -2742,4 +2741,6 @@
     <string name="player_error_tizen_p2p_unsupported">A reprodução Torrent/P2P não é compatível com esta TV.</string>
     <string name="player_tizen_mkv_subtitles_unavailable">As legendas MKV incorporadas não são expostas pelo player web desta TV.</string>
     <string name="player_tizen_mkv_audio_unavailable">As faixas de áudio MKV incorporadas não são expostas pelo player web desta TV.</string>
+    <string name="layout_cw_enabled">Mostrar Continuar Assistindo</string>
+    <string name="layout_cw_enabled_sub">Exibir a linha de Continuar Assistindo na tela inicial.</string>
 </resources>

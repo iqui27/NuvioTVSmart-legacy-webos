@@ -1,4 +1,5 @@
 // js/core/qr/qrCodeGenerator.js
+/* global qrcode */
 
 // qrcode-generator is 59 KB of unminified script that only three screens ever
 // need, and it used to be a blocking <script> in the boot path. Load it the

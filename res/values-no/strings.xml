@@ -971,7 +971,7 @@
     <string name="layout_selection_subtitle">Velg oppsettet for hjemmeskjermen</string>
     <string name="layout_selection_continue">Fortsett</string>
     <string name="update_title">Appoppdatering</string>
-    <string name="update_installer_required">Bruk Nuvio WebTV Installer for å oppdatere appen på TV-en.</string>
+    <string name="update_installer_required">Bruk Nuvio TV Installer for å oppdatere appen på TV-en.</string>
     <string name="update_release_notes">Dette er nytt</string>
     <string name="update_release_notes_unavailable">Ingen utgivelsesbeskrivelse er tilgjengelig.</string>
     <string name="update_downloading">Laster ned oppdatering</string>

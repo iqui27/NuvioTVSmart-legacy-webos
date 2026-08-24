@@ -1107,7 +1107,7 @@
     <string name="profile_addons">πρόσθετα</string>
     <string name="profile_plugins">πρόσθετα</string>
     <string name="profile_choose_avatar">Επιλογή avatar</string>
-    <string name="profile_custom_avatar_web_panel_note">Οι URL προσαρμοσμένων avatar μπορούν να ρυθμιστούν από το web panel Nuvio.</string>
+    <string name="profile_custom_avatar_web_panel_note">Οι URL προσαρμοσμένων avatar μπορούν να ρυθμιστούν από τον πίνακα λογαριασμού Nuvio.</string>
     <string name="profile_avatar_none_selected">Δεν επιλέχθηκε avatar</string>
     <string name="profile_avatar_focus_hint">Εστιάστε σε ένα avatar για να δείτε το όνομά του</string>
     <string name="profile_avatar_category_all">Όλα</string>
@@ -1620,7 +1620,7 @@
     <string name="layout_selection_subtitle">Επιλέξτε τη διάταξη αρχικής οθόνης</string>
     <string name="layout_selection_continue">Συνέχεια</string>
   <string name="update_title">Ενημέρωση εφαρμογής</string>
-  <string name="update_installer_required">Χρησιμοποιήστε το Nuvio WebTV Installer για να ενημερώσετε την εφαρμογή στην τηλεόρασή σας.</string>
+  <string name="update_installer_required">Χρησιμοποιήστε το Nuvio TV Installer για να ενημερώσετε την εφαρμογή στην τηλεόρασή σας.</string>
   <string name="update_release_notes">Τι νέο υπάρχει</string>
   <string name="update_release_notes_unavailable">Δεν υπάρχει διαθέσιμη περιγραφή έκδοσης.</string>
     <string name="update_downloading">Λήψη ενημέρωσης</string>

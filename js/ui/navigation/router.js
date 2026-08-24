@@ -21,6 +21,7 @@ import { CatalogOrderScreen } from "../screens/plugin/catalogOrderScreen.js";
 import { StreamScreen } from "../screens/stream/streamScreen.js";
 import { CastDetailScreen } from "../screens/cast/castDetailScreen.js";
 import { CatalogSeeAllScreen } from "../screens/catalog/catalogSeeAllScreen.js";
+import { TmdbEntityBrowseScreen } from "../screens/tmdb/tmdbEntityBrowseScreen.js";
 import { FolderDetailScreen } from "../screens/collection/folderDetailScreen.js";
 import { Platform } from "../../platform/index.js";
 import { RouteStateStore } from "./routeStateStore.js";
@@ -94,6 +95,14 @@ LAZY_ROUTE_DEFINITIONS.forEach((definition) => {
   LazyRouteRegistry.register(definition.route, definition);
 });
 
+function getStackEntryRoute(entry) {
+  return typeof entry === "string" ? entry : String(entry?.route || "");
+}
+
+function getStackEntryParams(entry) {
+  return typeof entry === "string" ? {} : entry?.params || {};
+}
+
 export const Router = {
   current: null,
   currentParams: {},
@@ -107,6 +116,7 @@ export const Router = {
   routeReturnBackGuardActive: false,
   routeReturnBackGuardUntil: 0,
   routeReturnBackGuardNavigationId: 0,
+  pendingHistoryReturn: null,
 
   routes: {
     home: HomeScreen,
@@ -133,6 +143,7 @@ export const Router = {
     stream: StreamScreen,
     castDetail: CastDetailScreen,
     catalogSeeAll: CatalogSeeAllScreen,
+    tmdbEntityBrowse: TmdbEntityBrowseScreen,
     folderDetail: FolderDetailScreen
   },
 
@@ -184,31 +195,120 @@ export const Router = {
     };
   },
 
+  async consumePendingHistoryReturn(state = null) {
+    const pending = this.pendingHistoryReturn;
+    if (!pending) {
+      return false;
+    }
+
+    this.pendingHistoryReturn = null;
+    // This history traversal is the transition we explicitly requested. Any
+    // stale one-shot/timed suppression belongs to a previous event and must not
+    // swallow the route that Android would have revealed with popBackStack().
+    this.ignoreNextPopstate = false;
+    this.suppressPopstateUntil = 0;
+
+    const stackEntry = this.stack[this.stack.length - 1];
+    const stackMatches =
+      this.stack.length === Number(pending.stackLength) &&
+      getStackEntryRoute(stackEntry) === pending.route;
+    const routeMatches = state?.route === pending.route;
+    const sourceMatches = this.current === pending.sourceRoute;
+
+    if (sourceMatches && stackMatches && routeMatches) {
+      this.stack.pop();
+      const targetParams =
+        state?.params && typeof state.params === "object"
+          ? state.params
+          : getStackEntryParams(stackEntry) || pending.params;
+      await this.navigate(pending.route, targetParams, {
+        fromHistory: true,
+        skipStackPush: true,
+        isBackNavigation: true
+      });
+      return true;
+    }
+
+    if (sourceMatches && stackMatches && !state?.route) {
+      // A few TV browser builds can emit a null state when the app reaches the
+      // first history entry. Keep the requested Android destination instead of
+      // allowing the generic no-state path to jump to Home.
+      this.stack.pop();
+      await this.navigate(pending.route, getStackEntryParams(stackEntry) || pending.params, {
+        skipStackPush: true,
+        replaceHistory: true,
+        isBackNavigation: true
+      });
+      return true;
+    }
+
+    if (sourceMatches) {
+      // The browser has still completed the one Back traversal, but the route
+      // stack changed before its popstate arrived. Let the browser state be
+      // authoritative while preventing the old screen from consuming the
+      // same event as a second Back request.
+      this.skipConsumeNextPopstate = true;
+    }
+    return false;
+  },
+
+  restoreCurrentHistoryState(previousState = null) {
+    if (!window?.history) {
+      return;
+    }
+    const hasPreviousRouteMetadata = Object.prototype.hasOwnProperty.call(
+      previousState || {},
+      "previousRoute"
+    );
+    const currentState = {
+      route: this.current,
+      params: this.currentParams,
+      previousRoute: hasPreviousRouteMetadata
+        ? previousState.previousRoute || null
+        : previousState?.route === this.current
+          ? null
+          : previousState?.route || null
+    };
+    if (
+      previousState?.route === currentState.route &&
+      typeof window.history.replaceState === "function"
+    ) {
+      // The browser already points at this route. Replace only the params so a
+      // duplicate popstate does not append another identical history entry.
+      window.history.replaceState(currentState, "");
+      return;
+    }
+    if (typeof window.history.pushState === "function") {
+      // A real late Back moved to an older route. Push the restored current
+      // route so the older entry remains reachable on the next Back.
+      window.history.pushState(currentState, "");
+    }
+  },
+
   init() {
     if (this.popstateBound) {
       return;
     }
     this.popstateBound = true;
     window.addEventListener("popstate", async (event) => {
+      const state = event?.state || null;
+      if (await this.consumePendingHistoryReturn(state)) {
+        return;
+      }
       if (this.ignoreNextPopstate) {
         this.ignoreNextPopstate = false;
         return;
       }
       if (Date.now() < Number(this.suppressPopstateUntil || 0)) {
-        if (window?.history && typeof window.history.pushState === "function") {
-          window.history.pushState({ route: this.current, params: this.currentParams }, "");
-        }
+        this.restoreCurrentHistoryState(state);
         return;
       }
-      const state = event?.state || null;
       if (this.consumeRouteReturnBackGuard()) {
         // A physical Tizen Back can also move browser history after its key
         // event has already completed an in-app route return. Keep that late
         // popstate on the restored screen instead of letting Home consume it
         // as a second Back and open the sidebar.
-        if (window?.history && typeof window.history.pushState === "function") {
-          window.history.pushState({ route: this.current, params: this.currentParams }, "");
-        }
+        this.restoreCurrentHistoryState(state);
         return;
       }
       if (Platform.isTizen() && this.current === "home" && state?.route === "home") {
@@ -231,12 +331,8 @@ export const Router = {
           ? currentScreen?.consumeBackRequest?.()
           : false;
       if (consumeResult) {
-        if (
-          consumeResult !== "history" &&
-          window?.history &&
-          typeof window.history.pushState === "function"
-        ) {
-          window.history.pushState({ route: this.current, params: this.currentParams }, "");
+        if (consumeResult !== "history") {
+          this.restoreCurrentHistoryState(state);
         }
         return;
       }
@@ -275,6 +371,61 @@ export const Router = {
 
   ignoreSinglePopstate() {
     this.ignoreNextPopstate = true;
+  },
+
+  popToExistingRoute(routeName, fallbackParams = {}) {
+    const targetRoute = String(routeName || "").trim();
+    if (!targetRoute || !this.routes[targetRoute] || this.current === targetRoute) {
+      return false;
+    }
+
+    if (this.pendingHistoryReturn) {
+      return this.pendingHistoryReturn.route === targetRoute;
+    }
+
+    if (!this.historyInitialized || !window?.history || typeof window.history.back !== "function") {
+      return false;
+    }
+
+    const currentHistoryRoute = String(window.history.state?.route || "");
+    if (currentHistoryRoute && currentHistoryRoute !== this.current) {
+      // The current route is still mounting and has not written its browser
+      // entry yet. Calling history.back() here would pop the caller's route
+      // instead of the Player/Stream entry; let the conservative replacement
+      // path finish the pending navigation first.
+      return false;
+    }
+
+    const previousHistoryRoute = String(window.history.state?.previousRoute || "");
+    if (previousHistoryRoute && previousHistoryRoute !== targetRoute) {
+      // The top Router entry can remain a Sources route after an in-place
+      // Player replacement (for example automatic episode progression). The
+      // explicit history predecessor prevents treating that stale stack entry
+      // as the Android destination.
+      return false;
+    }
+
+    const stackEntry = this.stack[this.stack.length - 1];
+    if (getStackEntryRoute(stackEntry) !== targetRoute) {
+      return false;
+    }
+
+    this.pendingHistoryReturn = {
+      route: targetRoute,
+      params: fallbackParams && typeof fallbackParams === "object" ? fallbackParams : {},
+      sourceRoute: this.current,
+      stackLength: this.stack.length,
+      requestedAt: Date.now()
+    };
+
+    try {
+      window.history.back();
+      return true;
+    } catch (error) {
+      this.pendingHistoryReturn = null;
+      console.warn("Failed to return to existing route", targetRoute, error);
+      return false;
+    }
   },
 
   beginRouteReturnBackGuard(isBackNavigation = false) {
@@ -485,7 +636,11 @@ export const Router = {
     }
 
     if (window?.history && typeof window.history.pushState === "function") {
-      const state = { route: this.current, params: this.currentParams };
+      const state = {
+        route: this.current,
+        params: this.currentParams,
+        previousRoute: previousRoute || null
+      };
       if (!this.historyInitialized) {
         window.history.replaceState(state, "");
         this.historyInitialized = true;
@@ -535,6 +690,10 @@ export const Router = {
   },
 
   async back(options = {}) {
+    if (this.pendingHistoryReturn) {
+      return;
+    }
+
     const currentScreen = this.getCurrentScreen();
     const consumeResult = !options?.skipConsume ? currentScreen?.consumeBackRequest?.() : false;
     if (consumeResult) {
@@ -584,8 +743,8 @@ export const Router = {
     }
 
     const previous = this.stack.pop();
-    const previousRoute = typeof previous === "string" ? previous : previous?.route;
-    const previousParams = typeof previous === "string" ? {} : previous?.params || {};
+    const previousRoute = getStackEntryRoute(previous);
+    const previousParams = getStackEntryParams(previous);
 
     if (!previousRoute || !this.routes[previousRoute]) {
       return;

@@ -1,4 +1,5 @@
 import { AuthManager } from "../auth/authManager.js";
+import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 import { MAX_PROFILES, ProfileManager } from "./profileManager.js";
 import { SupabaseApi } from "../../data/remote/supabase/supabaseApi.js";
 
@@ -11,6 +12,9 @@ const SET_PROFILE_PIN_RPC = "set_profile_pin";
 const CLEAR_PROFILE_PIN_RPC = "clear_profile_pin";
 const VERIFY_PROFILE_PIN_RPC = "verify_profile_pin";
 const DELETE_PROFILE_DATA_RPC = "sync_delete_profile_data";
+
+let lastPullStatus = "idle";
+let lastPullError = null;
 
 function shouldTryLegacyTable(error) {
   if (!error) {
@@ -67,9 +71,25 @@ function mapProfileRow(row = {}) {
 }
 
 export const ProfileSyncService = {
+  getLastPullStatus() {
+    return lastPullStatus;
+  },
+
+  getLastPullError() {
+    return lastPullError;
+  },
+
   async pull() {
+    if (isSyncBackoffActive()) {
+      lastPullStatus = "deferred";
+      lastPullError = null;
+      return [];
+    }
+    lastPullStatus = "loading";
+    lastPullError = null;
     try {
       if (!AuthManager.isAuthenticated) {
+        lastPullStatus = "signed-out";
         return [];
       }
       let rows = [];
@@ -100,18 +120,28 @@ export const ProfileSyncService = {
           );
         }
       }
+      if (!AuthManager.isAuthenticated || isSyncBackoffActive()) {
+        lastPullStatus = "deferred";
+        return [];
+      }
       const profiles = (rows || []).map((row) => mapProfileRow(row));
       if (profiles.length) {
         await ProfileManager.replaceProfiles(profiles);
       }
+      lastPullStatus = "ok";
       return profiles;
     } catch (error) {
+      lastPullStatus = "error";
+      lastPullError = error;
       console.warn("Profile sync pull failed", error);
       return [];
     }
   },
 
   async push() {
+    if (isSyncBackoffActive()) {
+      return false;
+    }
     try {
       if (!AuthManager.isAuthenticated) {
         return false;
@@ -145,7 +175,10 @@ export const ProfileSyncService = {
         );
         return true;
       } catch (rpcError) {
-        console.warn("Profile sync push RPC failed, falling back to table sync", rpcError);
+        if (!shouldTryProfileTableFallback(rpcError)) {
+          throw rpcError;
+        }
+        console.warn("Profile sync push RPC is unavailable, falling back to table sync", rpcError);
       }
 
       const ownerId = await AuthManager.getEffectiveUserId();
@@ -201,6 +234,9 @@ export const ProfileSyncService = {
   },
 
   async pullProfileLockStates() {
+    if (isSyncBackoffActive()) {
+      return {};
+    }
     try {
       if (!AuthManager.isAuthenticated) {
         return {};

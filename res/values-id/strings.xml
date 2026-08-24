@@ -1638,7 +1638,7 @@
     <string name="layout_selection_subtitle">Pilih tata letak layar beranda Anda</string>
     <string name="layout_selection_continue">Lanjutkan</string>
     <string name="update_title">Pembaruan Aplikasi</string>
-    <string name="update_installer_required">Gunakan Nuvio WebTV Installer untuk memperbarui aplikasi di TV Anda.</string>
+    <string name="update_installer_required">Gunakan Nuvio TV Installer untuk memperbarui aplikasi di TV Anda.</string>
     <string name="update_release_notes">Yang baru</string>
     <string name="update_release_notes_unavailable">Deskripsi rilis tidak tersedia.</string>
     <string name="update_downloading">Mengunduh pembaruan</string>

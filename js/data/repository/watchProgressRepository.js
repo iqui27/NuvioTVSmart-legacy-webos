@@ -14,6 +14,7 @@ import { SimklAuthStore } from "../local/simklAuthStore.js";
 import { SimklSyncService } from "./simklSyncService.js";
 import { metaRepository } from "./metaRepository.js";
 import { mapWithConcurrency } from "../../core/network/mapWithConcurrency.js";
+import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
 import {
   WATCH_PROGRESS_COMPLETED_THRESHOLD,
   WATCH_PROGRESS_STARTED_THRESHOLD,
@@ -51,8 +52,8 @@ function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
 }
 
-let watchProgressSyncTimer = null;
-let watchProgressSyncInFlight = null;
+const watchProgressSyncTimers = new Map();
+const watchProgressSyncInFlightByProfile = new Map();
 let traktProgressSnapshotCache = null;
 let traktProgressSnapshotInFlight = null;
 const TRAKT_PROGRESS_SNAPSHOT_TTL_MS = 30000;
@@ -61,29 +62,45 @@ function getWatchProgressSyncDebounceMs() {
   return globalThis.document?.body?.classList?.contains("performance-constrained") ? 15000 : 1500;
 }
 
-function queueWatchProgressCloudSync(delayMs = getWatchProgressSyncDebounceMs()) {
-  if (watchProgressSyncTimer) {
-    clearTimeout(watchProgressSyncTimer);
+function queueWatchProgressCloudSync(
+  profileId = activeProfileId(),
+  delayMs = getWatchProgressSyncDebounceMs()
+) {
+  const profileKey = String(profileId || "1");
+  const existingTimer = watchProgressSyncTimers.get(profileKey);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
   }
-  watchProgressSyncTimer = setTimeout(() => {
-    watchProgressSyncTimer = null;
+  const timerId = setTimeout(() => {
+    watchProgressSyncTimers.delete(profileKey);
     const runPush = async () => {
-      if (watchProgressSyncInFlight) {
-        await watchProgressSyncInFlight.catch(() => false);
+      const inFlight = watchProgressSyncInFlightByProfile.get(profileKey);
+      if (inFlight) {
+        await inFlight.catch(() => false);
       }
-      watchProgressSyncInFlight = import("../../core/profile/watchProgressSyncService.js")
-        .then(({ WatchProgressSyncService }) => WatchProgressSyncService.push())
+      const pushPromise = import("../../core/profile/watchProgressSyncService.js")
+        .then(({ WatchProgressSyncService }) => WatchProgressSyncService.push(profileId))
         .catch((error) => {
           console.warn("Watch progress cloud sync enqueue failed", error);
           return false;
         })
         .finally(() => {
-          watchProgressSyncInFlight = null;
+          if (watchProgressSyncInFlightByProfile.get(profileKey) === pushPromise) {
+            watchProgressSyncInFlightByProfile.delete(profileKey);
+          }
         });
-      await watchProgressSyncInFlight;
+      watchProgressSyncInFlightByProfile.set(profileKey, pushPromise);
+      const didPush = await pushPromise;
+      if (!didPush) {
+        const retryDelayMs = getSyncBackoffRemainingMs();
+        if (retryDelayMs > 0) {
+          queueWatchProgressCloudSync(profileId, Math.max(5000, retryDelayMs));
+        }
+      }
     };
     void runPush();
   }, delayMs);
+  watchProgressSyncTimers.set(profileKey, timerId);
 }
 
 function invalidateContinueWatchingDisplaySnapshot() {
@@ -125,14 +142,14 @@ function matchesProgressTarget(item = {}, contentId, videoId = null) {
   return String(item.videoId || "") === String(videoId);
 }
 
-async function deleteWatchProgressFromCloud(items = []) {
+async function deleteWatchProgressFromCloud(items = [], profileId = activeProfileId()) {
   if (!items.length) {
     return false;
   }
   try {
     const { WatchProgressSyncService } =
       await import("../../core/profile/watchProgressSyncService.js");
-    return WatchProgressSyncService.deleteItems(items);
+    return WatchProgressSyncService.deleteItems(items, profileId);
   } catch (error) {
     console.warn("Watch progress cloud delete failed", error);
     return false;
@@ -603,11 +620,9 @@ class WatchProgressRepository {
     if (isCloudProgressItem(progress)) {
       return;
     }
+    const pid = activeProfileId();
     if (isSeriesType(progress?.contentType)) {
-      ContinueWatchingPreferences.removeDismissedNextUpKeysForContent(
-        progress?.contentId,
-        activeProfileId()
-      );
+      ContinueWatchingPreferences.removeDismissedNextUpKeysForContent(progress?.contentId, pid);
     }
     WatchProgressStore.upsert(
       {
@@ -615,7 +630,7 @@ class WatchProgressRepository {
         source: String(progress?.source || "").trim() || selectedLocalProgressSource(),
         updatedAt: progress.updatedAt || Date.now()
       },
-      activeProfileId()
+      pid
     );
     invalidateContinueWatchingDisplaySnapshot();
     queueWatchProgressCloudSync();
@@ -653,7 +668,7 @@ class WatchProgressRepository {
       matchesProgressTarget(item, contentId, videoId)
     );
     WatchProgressStore.remove(contentId, videoId, pid);
-    await deleteWatchProgressFromCloud(removedItems);
+    await deleteWatchProgressFromCloud(removedItems, pid);
     invalidateContinueWatchingDisplaySnapshot();
     queueWatchProgressCloudSync();
   }
@@ -708,8 +723,8 @@ class WatchProgressRepository {
     return enrichMetadata ? batchEnrichProgressItems(limitedItems) : limitedItems;
   }
 
-  async getAll() {
-    return WatchProgressStore.listForProfile(activeProfileId()).filter(
+  async getAll(profileId = activeProfileId()) {
+    return WatchProgressStore.listForProfile(profileId).filter(
       (item) => !isCloudProgressItem(item)
     );
   }
@@ -743,9 +758,9 @@ class WatchProgressRepository {
     return selectedContinueWatchingSource();
   }
 
-  async replaceAll(items) {
+  async replaceAll(items, profileId = activeProfileId()) {
     WatchProgressStore.replaceForProfile(
-      activeProfileId(),
+      profileId,
       (Array.isArray(items) ? items : []).filter((item) => !isCloudProgressItem(item))
     );
     invalidateContinueWatchingDisplaySnapshot();

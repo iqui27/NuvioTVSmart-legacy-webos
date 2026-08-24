@@ -861,7 +861,7 @@ Klaida: Bandomoji simuliuojama klaida — tai nėra tikras gedimas. Šaltinis gr
     <string name="layout_selection_subtitle">Pasirinkite, kaip norite matyti pradinį ekraną</string>
     <string name="layout_selection_continue">Tęsti</string>
     <string name="update_title">Programos atnaujinimas</string>
-    <string name="update_installer_required">Norėdami atnaujinti programą televizoriuje, naudokite Nuvio WebTV Installer.</string>
+    <string name="update_installer_required">Norėdami atnaujinti programą televizoriuje, naudokite Nuvio TV Installer.</string>
     <string name="update_release_notes">Kas naujo</string>
     <string name="update_release_notes_unavailable">Leidimo aprašymas nepasiekiamas.</string>
     <string name="update_downloading">Atsiunčiama…</string>

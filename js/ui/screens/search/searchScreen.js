@@ -6,6 +6,7 @@ import { watchedItemsRepository } from "../../../data/repository/watchedItemsRep
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { I18n } from "../../../i18n/index.js";
 import { Platform } from "../../../platform/index.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import { MODERN_HOME_CONSTANTS } from "../home/modernHomeLayout.js";
 import {
   activateLegacySidebarAction,
@@ -133,8 +134,7 @@ function isSearchableCatalogType(type) {
 
 function isPerformanceConstrainedRuntime() {
   return (
-    Platform.isWebOS() ||
-    Platform.isTizen() ||
+    getTvRuntimePerformanceProfile().isPerformanceConstrained ||
     Boolean(globalThis.document?.body?.classList?.contains("performance-constrained"))
   );
 }
@@ -1130,7 +1130,7 @@ export const SearchScreen = {
     };
   },
 
-  resolvePreferredResultsNode(rowNodes = [], fallbackCol = 0) {
+  resolvePreferredResultsNode(rowNodes = [], _fallbackCol = 0) {
     if (!Array.isArray(rowNodes) || !rowNodes.length) {
       return null;
     }

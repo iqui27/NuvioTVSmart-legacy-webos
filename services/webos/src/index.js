@@ -492,7 +492,9 @@ function registerEmbeddedTextSubtitleCommand() {
         respond(message, Object.assign(buildBasePayload(), result, { returnValue: true }));
       })
       .catch(function (error) {
-        console.error("[" + SERVICE_ID + "] embedded text subtitle extraction failed:", error);
+        if (!error || error.code !== "REQUEST_SUPERSEDED") {
+          console.error("[" + SERVICE_ID + "] embedded text subtitle extraction failed:", error);
+        }
         respond(
           message,
           buildErrorPayload(error, {

@@ -1,6 +1,7 @@
 import { LocalStore } from "../storage/localStore.js";
 import { Environment } from "../../platform/environment.js";
 import { Platform } from "../../platform/index.js";
+import { getTvRuntimePerformanceProfile } from "../../platform/tvRuntimePerformance.js";
 import { isWebOsImageProxyUrl, normalizeImageUrl } from "./imageProxy.js";
 
 const failedAddonLogoUrls = new Set();
@@ -142,10 +143,9 @@ export async function preloadAddonLogoUrls(urls = []) {
     return;
   }
 
-  const concurrency =
-    Environment.isWebOS() || Platform.isTizen()
-      ? ADDON_LOGO_PRELOAD_CONCURRENCY_TV
-      : ADDON_LOGO_PRELOAD_CONCURRENCY_DEFAULT;
+  const concurrency = getTvRuntimePerformanceProfile().isPerformanceConstrained
+    ? ADDON_LOGO_PRELOAD_CONCURRENCY_TV
+    : ADDON_LOGO_PRELOAD_CONCURRENCY_DEFAULT;
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < pending.length) {
@@ -337,7 +337,9 @@ function persistAddonLogoCache() {
     return;
   }
   addonLogoCachePersistTimer = null;
-  const cacheLimit = Platform.isWebOS() ? ADDON_LOGO_TV_CACHE_LIMIT : ADDON_LOGO_CACHE_LIMIT;
+  const cacheLimit = getTvRuntimePerformanceProfile().isPerformanceConstrained
+    ? ADDON_LOGO_TV_CACHE_LIMIT
+    : ADDON_LOGO_CACHE_LIMIT;
   const entries = Array.from(addonLogoCache.entries())
     .filter(
       ([, entry]) =>

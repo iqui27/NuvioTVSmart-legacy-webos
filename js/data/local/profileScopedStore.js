@@ -1,5 +1,6 @@
 import { LocalStore } from "../../core/storage/localStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
+import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
 
 const PROFILE_SCOPED_VERSION = 1;
 const PROFILES_KEY = "profiles";
@@ -145,14 +146,26 @@ function readPendingSettingsSyncProfiles() {
 export function markProfileSettingsCloudSyncPending(profileId = null) {
   const normalizedProfileId = normalizeProfileId(profileId);
   const pending = readPendingSettingsSyncProfiles();
-  pending[normalizedProfileId] = Date.now();
+  pending[normalizedProfileId] = Math.max(
+    Date.now(),
+    Number(pending[normalizedProfileId] || 0) + 1
+  );
   LocalStore.set(SETTINGS_SYNC_PENDING_KEY, pending);
 }
 
-export function clearProfileSettingsCloudSyncPending(profileId = null) {
+export function getProfileSettingsCloudSyncPendingVersion(profileId = null) {
+  const normalizedProfileId = normalizeProfileId(profileId);
+  const pending = readPendingSettingsSyncProfiles();
+  return pending[normalizedProfileId] == null ? null : pending[normalizedProfileId];
+}
+
+export function clearProfileSettingsCloudSyncPending(profileId = null, expectedVersion = null) {
   const normalizedProfileId = normalizeProfileId(profileId);
   const pending = readPendingSettingsSyncProfiles();
   if (!Object.prototype.hasOwnProperty.call(pending, normalizedProfileId)) {
+    return;
+  }
+  if (expectedVersion != null && pending[normalizedProfileId] !== expectedVersion) {
     return;
   }
   delete pending[normalizedProfileId];
@@ -208,7 +221,13 @@ export function queueProfileSettingsCloudSync(
           }
         });
       settingsSyncInFlightByProfile.set(normalizedProfileId, pushPromise);
-      await pushPromise;
+      const didPush = await pushPromise;
+      if (!didPush && hasProfileSettingsCloudSyncPending(normalizedProfileId)) {
+        const retryDelayMs = getSyncBackoffRemainingMs();
+        if (retryDelayMs > 0) {
+          queueProfileSettingsCloudSync(normalizedProfileId, Math.max(5000, retryDelayMs));
+        }
+      }
     };
     void runPush();
   }, delayMs);

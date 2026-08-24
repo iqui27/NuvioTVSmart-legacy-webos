@@ -359,7 +359,7 @@
     <string name="playback_player_ask">Chiedi ogni volta</string>
     <string name="playback_internal_player_engine">Motore Interno</string>
     <string name="playback_engine_exoplayer">ExoPlayer</string>
-    <string name="playback_engine_mvplayer">Libmpv (Beta)</string>
+<string name="playback_engine_mvplayer">Libmpv (Beta)</string>
     <string name="playback_auto_switch_internal_player_on_error">Cambio motore automatico su errore di avvio</string>
     <string name="playback_auto_switch_internal_player_on_error_sub">Se l\'avvio del flusso fallisce, passa automaticamente tra ExoPlayer e libmpv.</string>
     <string name="playback_section_audio">Audio &amp; Video</string>
@@ -1220,7 +1220,7 @@
     <string name="layout_selection_subtitle">Scegli il layout della tua schermata home</string>
     <string name="layout_selection_continue">Continua</string>
     <string name="update_title">Aggiornamento App</string>
-    <string name="update_installer_required">Usa Nuvio WebTV Installer per aggiornare l\'app sulla TV.</string>
+    <string name="update_installer_required">Usa Nuvio TV Installer per aggiornare l\'app sulla TV.</string>
     <string name="update_release_notes">Novità</string>
     <string name="update_release_notes_unavailable">Non è disponibile una descrizione della release.</string>
     <string name="update_downloading">Download aggiornamento in corso</string>
@@ -1271,6 +1271,7 @@
     <string name="cd_expand_sidebar">Espandi barra laterale</string>
     <string name="update_checking">Controllo aggiornamenti…</string>
     <string name="update_download_complete">Download completato. Pronto per l\'installazione.</string>
+    <string name="update_latest_version">Stai usando la versione più recente.</string>
     <string name="update_up_to_date">Il sistema è aggiornato. Ultime modifiche:</string>
     <string name="update_close">Chiudi</string>
     <string name="update_open_settings">Apri Impostazioni</string>
@@ -2249,7 +2250,6 @@
     <string name="collections_delete_confirm_subtitle">Questo eliminerà permanentemente \"%1$s\". L\'azione è irreversibile.</string>
     <string name="collections_editor_delete_folder_title">Eliminare la cartella?</string>
     <string name="collections_editor_delete_folder_subtitle">Questo eliminerà permanentemente \"%1$s\" e tutto il suo contenuto.</string>
-    <string name="common_beta">Beta</string>
     <string name="audio_dv_sub">Mappa il profilo Dolby Vision 7 in HEVC standard per i dispositivi senza supporto hardware DV</string>
     <string name="settings.layout.groups.continueWatching.title">Continua a guardare</string>
     <string name="settings.layout.groups.continueWatching.subtitle">Configura prossimi episodi e ordinamento</string>

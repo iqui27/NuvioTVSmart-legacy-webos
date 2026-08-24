@@ -741,7 +741,7 @@
     <string name="layout_selection_subtitle">Elige tu diseño de pantalla de inicio</string>
     <string name="layout_selection_continue">Continuar</string>
     <string name="update_title">Actualización de la aplicación</string>
-    <string name="update_installer_required">Usa Nuvio WebTV Installer para actualizar la aplicación en tu televisor.</string>
+    <string name="update_installer_required">Usa Nuvio TV Installer para actualizar la aplicación en tu televisor.</string>
     <string name="update_release_notes">Novedades</string>
     <string name="update_release_notes_unavailable">No hay ninguna descripción de la versión disponible.</string>
     <string name="update_downloading">Descargando actualización</string>

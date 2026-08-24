@@ -784,7 +784,7 @@
     <string name="profile_pin_overlay_set_support">Ovaj PIN će biti potreban prije otvaranja ovog profila.</string>
     <string name="profile_pin_overlay_confirm_support">Ponovo unesi iste 4 cifre da završiš podešavanje.</string>
     <string name="profile_pin_overlay_mismatch">PIN-ovi se ne poklapaju. Ponovo unesi novi PIN.</string>
-    <string name="profile_pin_overlay_forgot_hint">Zaboravljen PIN? Resetuj ga sa svog Nuvio računa na Nuvio web stranici.</string>
+    <string name="profile_pin_overlay_forgot_hint">Zaboravljen PIN? Resetuj ga sa svog Nuvio računa na Nuvio stranici naloga.</string>
     <string name="profile_pin_overlay_back_hint">Pritisni nazad za otkazivanje</string>
     <string name="addon_title">Addoni</string>
     <string name="addon_readonly_notice">Koriste se addoni primarnog profila i ne mogu se mijenjati</string>
@@ -1148,7 +1148,7 @@
     <string name="layout_selection_subtitle">Odaberi raspored početnog ekrana</string>
     <string name="layout_selection_continue">Nastavi</string>
     <string name="update_title">Ažuriranje Aplikacije</string>
-    <string name="update_installer_required">Koristite Nuvio WebTV Installer za ažuriranje aplikacije na TV-u.</string>
+    <string name="update_installer_required">Koristite Nuvio TV Installer za ažuriranje aplikacije na TV-u.</string>
     <string name="update_release_notes">Šta je novo</string>
     <string name="update_release_notes_unavailable">Opis izdanja nije dostupan.</string>
     <string name="update_downloading">Preuzimanje ažuriranja</string>

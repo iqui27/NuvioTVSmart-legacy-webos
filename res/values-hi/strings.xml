@@ -850,7 +850,7 @@
     <string name="layout_selection_subtitle">अपना होम स्क्रीन लेआउट चुनें</string>
     <string name="layout_selection_continue">जारी रखें</string>
     <string name="update_title">ऐप अपडेट</string>
-    <string name="update_installer_required">अपने टीवी पर ऐप अपडेट करने के लिए Nuvio WebTV Installer का उपयोग करें।</string>
+    <string name="update_installer_required">अपने टीवी पर ऐप अपडेट करने के लिए Nuvio TV Installer का उपयोग करें।</string>
     <string name="update_release_notes">नया क्या है</string>
     <string name="update_release_notes_unavailable">रिलीज़ का विवरण उपलब्ध नहीं है।</string>
     <string name="update_downloading">अपडेट डाउनलोड हो रहा है</string>

@@ -1,4 +1,5 @@
 import { SUPABASE_FALLBACK_URL, SUPABASE_URL } from "../../config.js";
+import { recordSyncFailure } from "../sync/syncBackoffPolicy.js";
 
 const RETRYABLE_AUTH_STATUSES = new Set([
   408, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 530
@@ -53,14 +54,32 @@ export async function fetchSupabaseAuth(endpoint, init = {}) {
 
   try {
     const response = await fetch(primaryUrl, init);
-    if (!canFallback || !(await isRetryableResponse(response))) {
+    const shouldRetryPrimary = await isRetryableResponse(response);
+    if (!canFallback || !shouldRetryPrimary) {
       return response;
     }
+    recordSyncFailure({ status: response.status });
   } catch (error) {
-    if (!canFallback || !isNetworkError(error)) {
+    if (!isNetworkError(error)) {
+      throw error;
+    }
+    recordSyncFailure(error);
+    if (!canFallback) {
       throw error;
     }
   }
 
-  return fetch(authUrl(fallbackBaseUrl, endpoint), init);
+  let fallbackResponse;
+  try {
+    fallbackResponse = await fetch(authUrl(fallbackBaseUrl, endpoint), init);
+  } catch (error) {
+    if (isNetworkError(error)) {
+      recordSyncFailure(error);
+    }
+    throw error;
+  }
+  if (await isRetryableResponse(fallbackResponse)) {
+    recordSyncFailure({ status: fallbackResponse.status });
+  }
+  return fallbackResponse;
 }

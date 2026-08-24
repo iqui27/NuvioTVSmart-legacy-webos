@@ -20,6 +20,7 @@ import { preloadStreamBadgeImages } from "./ui/screens/stream/streamScreen.js";
 import { warmStreamingLibs } from "./runtime/loadStreamingLibs.js";
 import { warmScreenChunks } from "./runtime/loadScreenChunks.js";
 import { Platform } from "./platform/index.js";
+import { getTvRuntimePerformanceProfile } from "./platform/tvRuntimePerformance.js";
 import { LocalStore } from "./core/storage/localStore.js";
 import { I18n } from "./i18n/index.js";
 import { getLatestAppUpdate } from "./core/update/appUpdateService.js";
@@ -131,6 +132,12 @@ function renderFatalError(error) {
 }
 
 function isLowEndDevice() {
+  // TV runtimes use the year/Chromium profile below. Their exposed
+  // hardwareConcurrency/deviceMemory values are often coarse and would mark
+  // otherwise modern TV generations as low-end by accident.
+  if (getTvRuntimePerformanceProfile().isTvRuntime) {
+    return false;
+  }
   const hardware = Number(globalThis.navigator?.hardwareConcurrency || 0);
   const memory = Number(globalThis.navigator?.deviceMemory || 0);
   const lowCpu = Number.isFinite(hardware) && hardware > 0 && hardware <= 4;
@@ -138,23 +145,17 @@ function isLowEndDevice() {
   return lowCpu || lowMem;
 }
 
-function getChromiumMajorVersion() {
-  const userAgent = String(globalThis.navigator?.userAgent || "");
-  const match = userAgent.match(/(?:chrome|chromium)\/(\d{2,3})/i);
-  const version = Number(match?.[1] || 0);
-  return Number.isFinite(version) ? version : 0;
-}
-
 function applyPerformanceMode() {
-  const constrained = Platform.isWebOS() || Platform.isTizen() || isLowEndDevice();
+  const tvRuntime = getTvRuntimePerformanceProfile();
+  const constrained = tvRuntime.isPerformanceConstrained || isLowEndDevice();
   const webOsMajorVersion = Platform.isWebOS() ? Number(Platform.getWebOsMajorVersion() || 0) : 0;
-  const legacyWebOs = Platform.isWebOS() && (webOsMajorVersion === 0 || webOsMajorVersion <= 6);
+  const legacyWebOs = Platform.isWebOS() && tvRuntime.isLegacyTvRuntime;
   const legacyWebOs38 = Platform.isWebOS() && webOsMajorVersion > 0 && webOsMajorVersion <= 3;
+  // Keep the Tizen class as a platform-layout fallback; performance gating is
+  // handled exclusively by the runtime profile above.
   const legacyTizen = Platform.isTizen();
   const rootClasses = document.documentElement.classList;
-  const modernWebOs = Platform.isWebOS() && getChromiumMajorVersion() >= 120;
-  const modernSidebarBlurCapable =
-    !rootClasses.contains("no-backdrop-filter") && ((!constrained && !legacyTizen) || modernWebOs);
+  const modernSidebarBlurCapable = !rootClasses.contains("no-backdrop-filter") && !constrained;
   document.documentElement.classList.toggle("performance-constrained", constrained);
   document.body.classList.toggle("performance-constrained", constrained);
   document.documentElement.classList.toggle(
@@ -253,11 +254,6 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
       : null;
   const isHomeResumeRoute = resumeRoute?.route === "home";
 
-  const shouldWaitForHomeSync =
-    experienceRoute === "home" &&
-    (!resumeRoute?.route || isHomeResumeRoute) &&
-    StartupSyncService.started;
-
   if (experienceRoute !== "home") {
     await Router.navigate(experienceRoute, {}, { replaceHistory: true, skipStackPush: true });
   } else if (resumeRoute?.route && !isHomeResumeRoute) {
@@ -266,20 +262,15 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
       skipStackPush: true
     });
   } else {
-    await Router.navigate(
-      "home",
-      shouldWaitForHomeSync || isHomeResumeRoute
-        ? {
-            ...(isHomeResumeRoute ? resumeRoute.params || {} : {}),
-            ...(shouldWaitForHomeSync
-              ? { forceReload: true, waitForFreshContinueWatching: true }
-              : {})
-          }
-        : {}
-    );
+    await Router.navigate("home", {
+      ...(isHomeResumeRoute ? resumeRoute.params || {} : {}),
+      ...(StartupSyncService.started ? { forceReload: true } : {})
+    });
   }
 
-  void StartupSyncService.requestSyncNow().catch((error) => {
+  void StartupSyncService.requestSyncNow({
+    notifyPullCompleted: experienceRoute === "home"
+  }).catch((error) => {
     console.warn("Profile background sync failed", error);
   });
 }

@@ -9,7 +9,7 @@ import {
   UNIQUE_CONTRIBUTIONS_BASE_URL
 } from "../../../config.js";
 import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
-import { renderBrandWordmarkImage } from "../../components/brandWordmark.js";
+import { MembershipOverviewRepository } from "../../../data/remote/supabase/membershipOverviewRepository.js";
 import {
   normalizeContributors,
   normalizeSupporterMembers,
@@ -24,6 +24,7 @@ import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 
 const TABS = ["supporters", "sponsors", "contributors"];
 const DEFAULT_TAB = "contributors";
+const PATREON_MEMBERSHIP_URL = "https://www.patreon.com/settings/memberships";
 const CONTRIBUTOR_SUPPORT_LINKS = {
   skoruppa: { kofiUrl: "https://ko-fi.com/skoruppa" },
   crisszollo: { kofiUrl: "https://ko-fi.com/crisszollo" },
@@ -214,11 +215,13 @@ export const SupportersContributorsScreen = {
   container: null,
   selectedTab: DEFAULT_TAB,
   focusKey: "tab:contributors",
-  showDonateQr: false,
+  showMembershipQr: false,
   dialog: null,
   routeEnterPending: false,
   routeEnterTimer: null,
   state: null,
+  membershipState: null,
+  membershipUnsubscribe: null,
   scrollTops: null,
   preserveListScrollAfterFocus: false,
 
@@ -229,6 +232,7 @@ export const SupportersContributorsScreen = {
       sponsors: { loading: false, loaded: false, items: [], error: null },
       contributors: { loading: false, loaded: false, items: [], error: null }
     };
+    this.membershipState = MembershipOverviewRepository.getState();
   },
 
   async mount() {
@@ -251,6 +255,15 @@ export const SupportersContributorsScreen = {
       this.container.addEventListener("click", this.handleClickBound);
     }
     await this.render();
+    if (!this.membershipUnsubscribe) {
+      this.membershipUnsubscribe = MembershipOverviewRepository.subscribe((membershipState) => {
+        this.membershipState = membershipState;
+        if (Router.getCurrent() === "supportersContributors") {
+          void this.render();
+        }
+      });
+    }
+    void MembershipOverviewRepository.refresh();
     void this.loadTabIfNeeded(this.selectedTab);
     void this.loadTabIfNeeded("supporters");
   },
@@ -265,8 +278,10 @@ export const SupportersContributorsScreen = {
     this.routeEnterTimer = null;
     this.routeEnterPending = false;
     this.handleClickBound = null;
+    this.membershipUnsubscribe?.();
+    this.membershipUnsubscribe = null;
     this.dialog = null;
-    this.showDonateQr = false;
+    this.showMembershipQr = false;
     ScreenUtils.hide(this.container);
   },
 
@@ -310,31 +325,108 @@ export const SupportersContributorsScreen = {
     void this.loadTabIfNeeded(tab);
   },
 
-  renderBrand() {
-    const supportUrl = normalizeBaseUrl(SUPPORT_URL);
+  renderMembershipPanel() {
+    const membership = this.membershipState || MembershipOverviewRepository.getState();
+    const overview = membership?.overview;
+    const manageMembership = overview?.subscriptionActive === true;
+    const actionUrl = manageMembership ? PATREON_MEMBERSHIP_URL : normalizeBaseUrl(SUPPORT_URL);
+    const showPrimaryAction = !membership?.isLoading && overview != null;
+    const showRefresh =
+      !membership?.isLoading &&
+      (overview == null ||
+        membership?.hasError ||
+        overview.subscriptionActive ||
+        overview.providerConnected ||
+        overview.hasActiveGrant ||
+        overview.active);
+    const primaryLabel = manageMembership
+      ? t("supporter_membership_manage", {}, "Manage membership")
+      : t("supporter_membership_view", {}, "View Membership");
+    const refreshLabel = membership?.isRefreshing
+      ? t("supporter_membership_refreshing", {}, "Refreshing")
+      : t("supporter_membership_refresh", {}, "Refresh");
     return `
-      <section class="supporters-brand-card${this.showDonateQr ? " is-flipped" : ""}" aria-label="${escapeHtml(t("supporters_contributors_title", {}, "Support Nuvio"))}">
-        <div class="supporters-brand-face supporters-brand-front">
-          <div class="supporters-brand-copy">
-            ${renderBrandWordmarkImage({ className: "supporters-brand-logo" })}
-            <h1 class="supporters-title">${escapeHtml(t("supporters_contributors_title", {}, "Support Nuvio"))}</h1>
-            <p class="supporters-secondary-copy">${escapeHtml(t("supporters_contributors_donate_copy", {}, "Nuvio will stay free and open source. If you want to support the project, you can help cover the time and infrastructure behind it."))}</p>
+      <section class="supporters-brand-card supporters-membership-card${this.showMembershipQr ? " is-flipped" : ""}" aria-label="${escapeHtml(t("supporter_membership_title", {}, "Nuvio Supporter Membership"))}">
+        <div class="supporters-brand-face supporters-brand-front supporters-membership-front">
+          <div class="supporters-membership-copy" aria-live="polite">
+            ${this.renderMembershipContent(membership)}
           </div>
-          <button class="supporters-donate-button supporters-focusable focusable" data-focus-key="brand:donate" data-action="showDonateQr">
-            ${escapeHtml(t("supporters_contributors_donate_button", {}, "Support Nuvio"))}
-          </button>
+          ${
+            showRefresh || showPrimaryAction
+              ? `<div class="supporters-membership-actions">
+                  ${
+                    showRefresh
+                      ? `<button class="supporters-membership-refresh-button supporters-focusable focusable" data-focus-key="membership:refresh" data-action="refreshMembership"${membership?.isRefreshing ? ' disabled aria-disabled="true"' : ""}>${escapeHtml(refreshLabel)}</button>`
+                      : ""
+                  }
+                  ${
+                    showPrimaryAction
+                      ? `<button class="supporters-donate-button supporters-membership-primary-button supporters-focusable focusable" data-focus-key="membership:action" data-action="showMembershipQr">${escapeHtml(primaryLabel)}</button>`
+                      : ""
+                  }
+                </div>`
+              : ""
+          }
         </div>
-        <div class="supporters-brand-face supporters-brand-back" aria-hidden="${this.showDonateQr ? "false" : "true"}">
+        <div class="supporters-brand-face supporters-brand-back" aria-hidden="${this.showMembershipQr ? "false" : "true"}">
           <div class="supporters-qr-copy">
-            <h2>${escapeHtml(t("supporters_contributors_qr_title", {}, "Scan to support"))}</h2>
-            <p>${escapeHtml(t("supporters_contributors_qr_subtitle", {}, "Open the link on your phone and support Nuvio through Ko-fi."))}</p>
+            <h2>${escapeHtml(t(manageMembership ? "supporter_membership_scan_manage" : "supporter_membership_scan_support", {}, manageMembership ? "Scan to manage membership" : "Scan to view membership"))}</h2>
+            <p>${escapeHtml(t(manageMembership ? "supporter_membership_scan_manage_description" : "supporter_membership_scan_support_description", {}, manageMembership ? "Open Patreon membership settings on your phone." : "Open the Supporter Membership page on your phone."))}</p>
           </div>
-          <canvas class="supporters-donate-qr" data-qr-content="${escapeHtml(supportUrl)}" aria-label="${escapeHtml(t("cd_donation_qr", {}, "Support QR code"))}"></canvas>
-          <button class="supporters-back-button supporters-focusable focusable" data-focus-key="brand:back" data-action="hideDonateQr">
+          <canvas class="supporters-donate-qr supporters-membership-qr" data-qr-content="${escapeHtml(actionUrl)}" aria-label="${escapeHtml(t("cd_membership_qr", {}, "Membership QR code"))}"></canvas>
+          <button class="supporters-back-button supporters-focusable focusable" data-focus-key="membership:back" data-action="hideMembershipQr">
             ${escapeHtml(t("supporters_contributors_back_button", {}, "Back to details"))}
           </button>
         </div>
       </section>
+    `;
+  },
+
+  renderMembershipContent(membership) {
+    const overview = membership?.overview;
+    if (membership?.isLoading) {
+      return `<h1 class="supporters-title">${escapeHtml(t("supporter_membership_loading", {}, "Loading membership…"))}</h1>`;
+    }
+    if (!overview) {
+      return `
+        <h1 class="supporters-title">${escapeHtml(t("supporter_membership_title", {}, "Nuvio Supporter Membership"))}</h1>
+        <p class="supporters-secondary-copy">${escapeHtml(t("supporter_membership_unable_load", {}, "Unable to load membership status. Please try again."))}</p>
+      `;
+    }
+    if (overview.subscriptionActive) {
+      return this.renderMembershipTierContent(overview);
+    }
+    if (overview.providerConnected && !overview.hasActiveGrant) {
+      return `
+        <h1 class="supporters-title">${escapeHtml(t("supporter_membership_connected_title", {}, "Patreon is connected"))}</h1>
+        <p class="supporters-secondary-copy">${escapeHtml(t("supporter_membership_connected_description", {}, "No active Nuvio tier was found on this Patreon account. View the available options or refresh after changing your Patreon membership."))}</p>
+        ${membership.hasError ? `<p class="supporters-membership-error">${escapeHtml(t("supporter_membership_unable_load", {}, "Unable to load membership status. Please try again."))}</p>` : ""}
+      `;
+    }
+    if (overview.hasActiveGrant || overview.active) {
+      return this.renderMembershipTierContent(overview);
+    }
+    return `
+      <h1 class="supporters-title">${escapeHtml(t("supporter_membership_title", {}, "Nuvio Supporter Membership"))}</h1>
+      <p class="supporters-secondary-copy">${escapeHtml(t("supporter_membership_description", {}, "Supporting Nuvio helps cover infrastructure and ongoing development while keeping the core experience free for everyone."))}</p>
+      ${membership.hasError ? `<p class="supporters-membership-error">${escapeHtml(t("supporter_membership_unable_load", {}, "Unable to load membership status. Please try again."))}</p>` : ""}
+    `;
+  },
+
+  renderMembershipTierContent(overview) {
+    const tier = overview.membershipLevel || overview.grantTier || overview.tier || "SUPPORTER";
+    const tierLabel =
+      tier === "SUPPORTER_PLUS"
+        ? t("supporter_membership_tier_supporter_plus", {}, "Supporter Plus")
+        : t("supporter_membership_tier_supporter", {}, "Supporter");
+    const since = formatSupporterDate(overview.supporterSince);
+    return `
+      <h1 class="supporters-title supporters-membership-tier-line">
+        <span>${escapeHtml(t("supporter_membership_you_are", {}, "You’re a"))}</span>
+        <strong>${escapeHtml(tierLabel)}</strong><span>.</span>
+        <span>${escapeHtml(t("supporter_membership_thank_you", {}, "Thank you."))}</span>
+      </h1>
+      ${since ? `<p class="supporters-secondary-copy supporters-membership-since">${escapeHtml(t("supporter_membership_supporter_since", { date: since }, `Supporter since ${since}.`))}</p>` : ""}
     `;
   },
 
@@ -605,7 +697,7 @@ export const SupportersContributorsScreen = {
     this.container.innerHTML = `
       <div class="supporters-route-shell${enterClass}">
         <div class="supporters-route-content">
-          ${this.renderBrand()}
+          ${this.renderMembershipPanel()}
           <section class="supporters-content-card">
             ${this.renderTabs()}
             <div class="supporters-tab-panel">
@@ -686,9 +778,17 @@ export const SupportersContributorsScreen = {
     scrollSettingsContentItem(node);
   },
 
-  getBrandFocusTarget() {
-    const action = this.showDonateQr ? "hideDonateQr" : "showDonateQr";
-    return this.container?.querySelector?.(`.focusable[data-action="${action}"]`) || null;
+  getMembershipFocusTarget() {
+    if (this.showMembershipQr) {
+      return this.container?.querySelector?.('.focusable[data-action="hideMembershipQr"]') || null;
+    }
+    return (
+      this.container?.querySelector?.('.focusable[data-action="showMembershipQr"]') ||
+      this.container?.querySelector?.(
+        '.focusable[data-action="refreshMembership"]:not([disabled])'
+      ) ||
+      null
+    );
   },
 
   getDirectionalTarget(current, direction) {
@@ -713,7 +813,7 @@ export const SupportersContributorsScreen = {
     }
 
     if (current.dataset.action === "openItem" && direction === "left") {
-      return this.getBrandFocusTarget();
+      return this.getMembershipFocusTarget();
     }
 
     if (current.dataset.action === "openItem" && direction === "right") {
@@ -734,11 +834,11 @@ export const SupportersContributorsScreen = {
       const tabs = Array.from(this.container?.querySelectorAll?.(".supporters-tab") || []);
       const currentIndex = tabs.indexOf(current);
       const nextIndex = currentIndex + (direction === "left" ? -1 : 1);
-      return tabs[nextIndex] || (direction === "left" ? this.getBrandFocusTarget() : null);
+      return tabs[nextIndex] || (direction === "left" ? this.getMembershipFocusTarget() : null);
     }
 
     if (current.dataset.action === "retry" && direction === "left") {
-      return this.getBrandFocusTarget();
+      return this.getMembershipFocusTarget();
     }
 
     const nodes = visibleFocusableNodes(this.container);
@@ -768,16 +868,26 @@ export const SupportersContributorsScreen = {
       await this.selectTab(String(target.dataset.tab || DEFAULT_TAB));
       return true;
     }
-    if (action === "showDonateQr") {
-      this.showDonateQr = true;
-      this.focusKey = "brand:back";
+    if (action === "showMembershipQr") {
+      this.showMembershipQr = true;
+      this.focusKey = "membership:back";
       await this.render();
       return true;
     }
-    if (action === "hideDonateQr") {
-      this.showDonateQr = false;
-      this.focusKey = "brand:donate";
+    if (action === "hideMembershipQr") {
+      this.showMembershipQr = false;
+      this.focusKey = "membership:action";
       await this.render();
+      return true;
+    }
+    if (action === "refreshMembership") {
+      this.focusKey = MembershipOverviewRepository.getState()?.overview
+        ? "membership:action"
+        : "membership:refresh";
+      await MembershipOverviewRepository.refresh();
+      if (Router.getCurrent() === "supportersContributors") {
+        await this.render();
+      }
       return true;
     }
     if (action === "retry") {
@@ -877,7 +987,7 @@ export const SupportersContributorsScreen = {
   },
 
   consumeBackRequest() {
-    if (!this.dialog && !this.showDonateQr) {
+    if (!this.dialog && !this.showMembershipQr) {
       return false;
     }
     void this.handleBack();
@@ -893,9 +1003,9 @@ export const SupportersContributorsScreen = {
       await this.render();
       return;
     }
-    if (this.showDonateQr) {
-      this.showDonateQr = false;
-      this.focusKey = "brand:donate";
+    if (this.showMembershipQr) {
+      this.showMembershipQr = false;
+      this.focusKey = "membership:action";
       await this.render();
       return;
     }

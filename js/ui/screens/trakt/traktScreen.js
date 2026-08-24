@@ -20,10 +20,6 @@ import {
 } from "../settings/settingsScreen.js";
 import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")

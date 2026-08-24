@@ -1639,7 +1639,7 @@
     <string name="layout_selection_subtitle">Vyberte rozloženie domovskej obrazovky</string>
     <string name="layout_selection_continue">Pokračovať</string>
     <string name="update_title">Aktualizácia aplikácie</string>
-    <string name="update_installer_required">Na aktualizáciu aplikácie v televízore použite Nuvio WebTV Installer.</string>
+    <string name="update_installer_required">Na aktualizáciu aplikácie v televízore použite Nuvio TV Installer.</string>
     <string name="update_release_notes">Čo je nové</string>
     <string name="update_release_notes_unavailable">Popis vydania nie je k dispozícii.</string>
     <string name="update_downloading">Sťahuje sa aktualizácia</string>

@@ -723,7 +723,7 @@
     <string name="layout_selection_subtitle">Kies je startschermindeling</string>
     <string name="layout_selection_continue">Doorgaan</string>
 <string name="update_title">App-update</string>
-<string name="update_installer_required">Gebruik Nuvio WebTV Installer om de app op je tv bij te werken.</string>
+<string name="update_installer_required">Gebruik Nuvio TV Installer om de app op je tv bij te werken.</string>
 <string name="update_release_notes">Wat is er nieuw</string>
 <string name="update_release_notes_unavailable">Er is geen releasebeschrijving beschikbaar.</string>
     <string name="update_downloading">Update downloaden</string>

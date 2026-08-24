@@ -1555,7 +1555,7 @@
     <string name="layout_selection_subtitle">选择您的首页画面布局</string>
     <string name="layout_selection_continue">继续</string>
     <string name="update_title">应用更新</string>
-    <string name="update_installer_required">请使用 Nuvio WebTV Installer 更新电视上的应用。</string>
+    <string name="update_installer_required">请使用 Nuvio TV Installer 更新电视上的应用。</string>
     <string name="update_release_notes">新增内容</string>
     <string name="update_release_notes_unavailable">暂无版本说明。</string>
     <string name="update_downloading">正在下载更新</string>

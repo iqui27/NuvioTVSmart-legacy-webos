@@ -743,7 +743,7 @@
     <string name="layout_selection_subtitle">Chọn bố cục màn hình chính</string>
     <string name="layout_selection_continue">Tiếp tục</string>
     <string name="update_title">Cập nhật ứng dụng</string>
-    <string name="update_installer_required">Dùng Nuvio WebTV Installer để cập nhật ứng dụng trên TV.</string>
+    <string name="update_installer_required">Dùng Nuvio TV Installer để cập nhật ứng dụng trên TV.</string>
     <string name="update_release_notes">Có gì mới</string>
     <string name="update_release_notes_unavailable">Không có mô tả bản phát hành.</string>
     <string name="update_downloading">Đang tải bản cập nhật</string>

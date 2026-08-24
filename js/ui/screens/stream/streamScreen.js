@@ -40,8 +40,10 @@ import {
   resolveAddonLogo
 } from "../../../core/media/addonLogoCache.js";
 import { Environment } from "../../../platform/environment.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import { WebOsLunaService } from "../../../platform/webos/webosLunaService.js";
 import { I18n } from "../../../i18n/index.js";
+import { localizedGenreText } from "../../../i18n/genreLabels.js";
 import {
   matchStreamBadges,
   normalizeStreamBadgeChipColor,
@@ -65,9 +67,9 @@ import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 const STREAM_BADGE_LIMIT = 9;
 // Number of rows on each side of the focused source to keep badge-hydrated.
 // Windowing by row index (instead of measuring every card) keeps a single
-// focus move O(1) in layout reads on TV browsers, where measuring every card
-// forced a full list reflow on each keypress in long source lists.
-const TV_STREAM_BADGE_WINDOW_ROWS = 24;
+// focus move O(1) in constrained TV/browser runtimes, where measuring every
+// card forced a full list reflow on each keypress in long source lists.
+const STREAM_BADGE_WINDOW_ROWS = 24;
 const WEBOS_NATIVE_PLAYER_APP_IDS = [
   "com.webos.app.mediadiscovery",
   "com.webos.app.photovideo",
@@ -81,6 +83,13 @@ function t(key, params = {}, fallback = key) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function isPerformanceConstrainedRuntime() {
+  return Boolean(
+    getTvRuntimePerformanceProfile().isPerformanceConstrained ||
+    globalThis.document?.body?.classList?.contains("performance-constrained")
+  );
 }
 
 function escapeHtml(value = "") {
@@ -1286,15 +1295,24 @@ export const StreamScreen = {
   },
 
   navigateBackFromStream() {
+    if (this.streamBackNavigationInProgress) {
+      // A pending history pop is the first Back transition. Do not let a
+      // duplicate Tizen event turn it into the next Android stack transition.
+      return "history";
+    }
     const itemId = String(this.params?.itemId || "").trim();
     if (!itemId) {
       return false;
     }
+    this.streamBackNavigationInProgress = true;
     const itemType = normalizeType(this.params?.itemType);
     const isSeries = itemType === "series" || itemType === "tv";
     if (this.params?.continueWatchingBackHome && !isSeries) {
       // Android returns movies opened from Continue Watching straight Home;
       // only episodic content reconstructs a Detail route on Back.
+      if (Router.popToExistingRoute?.("home", {})) {
+        return "history";
+      }
       void Router.navigate(
         "home",
         {},
@@ -1306,31 +1324,31 @@ export const StreamScreen = {
       );
       return true;
     }
-    void Router.navigate(
-      "detail",
-      {
-        itemId,
-        itemType,
-        imdbId: this.params?.imdbId || null,
-        tmdbId: this.params?.tmdbId || null,
-        traktId: this.params?.traktId || null,
-        originalItemId: this.params?.originalItemId || null,
-        fallbackTitle: this.params?.itemTitle || this.params?.playerTitle || "Untitled",
-        returnToSearchOnBack: Boolean(this.params?.returnToSearchOnBack),
-        returnHomeOnBack: Boolean(
-          !this.params?.returnToSearchOnBack &&
-          (this.params?.continueWatchingBackHome ||
-            this.params?.returnHomeOnBack ||
-            this.params?.returnToDetail ||
-            this.params?.fromDetailRoute)
-        )
-      },
-      {
-        skipStackPush: true,
-        replaceHistory: true,
-        isBackNavigation: true
-      }
-    );
+    const detailParams = {
+      itemId,
+      itemType,
+      imdbId: this.params?.imdbId || null,
+      tmdbId: this.params?.tmdbId || null,
+      traktId: this.params?.traktId || null,
+      originalItemId: this.params?.originalItemId || null,
+      fallbackTitle: this.params?.itemTitle || this.params?.playerTitle || "Untitled",
+      returnToSearchOnBack: Boolean(this.params?.returnToSearchOnBack),
+      returnHomeOnBack: Boolean(
+        !this.params?.returnToSearchOnBack &&
+        (this.params?.continueWatchingBackHome ||
+          this.params?.returnHomeOnBack ||
+          this.params?.returnToDetail ||
+          this.params?.fromDetailRoute)
+      )
+    };
+    if (Router.popToExistingRoute?.("detail", detailParams)) {
+      return "history";
+    }
+    void Router.navigate("detail", detailParams, {
+      skipStackPush: true,
+      replaceHistory: true,
+      isBackNavigation: true
+    });
     return true;
   },
 
@@ -1359,6 +1377,7 @@ export const StreamScreen = {
     this.container = document.getElementById("stream");
     ScreenUtils.show(this.container);
     this.params = params || {};
+    this.streamBackNavigationInProgress = false;
     this.stopStreamVirtualization();
     this.streamVirtualHeights = new Map();
     this.streamVirtualFocusReset = false;
@@ -2507,7 +2526,7 @@ export const StreamScreen = {
     const episodeLabel = normalizeEpisodeCode(this.params?.season, this.params?.episode);
     const detailLine = isSeries
       ? ""
-      : [String(this.params?.genres || "").trim(), String(this.params?.year || "").trim()]
+      : [localizedGenreText(this.params?.genres), String(this.params?.year || "").trim()]
           .filter(Boolean)
           .join(" • ");
     return { isSeries, title, subtitle, episodeLabel, detailLine };
@@ -2884,7 +2903,7 @@ export const StreamScreen = {
     const headline = getStreamHeadline(stream);
     const quality = getStreamQuality(stream);
     const lazyBadges =
-      (Environment.isWebOS() || Environment.isTizen()) &&
+      isPerformanceConstrainedRuntime() &&
       hasStreamBadges(stream, streamBadgesEnabled, badgeSettings);
     const badges = lazyBadges
       ? `<div class="stream-route-card-badges stream-route-card-badges-lazy" data-lazy-stream-badges data-stream-badge-row="${index}" data-badges-hydrated="false" aria-label="${escapeHtml(t("settings_stream_badges_section", {}, "Fusion Style"))}"></div>`
@@ -2908,8 +2927,9 @@ export const StreamScreen = {
         }
       }
       const addonBadgeLabel = escapeHtml(getAddonBadgeLabel(stream.addonName || ""));
-      const addonLogoLoading = Environment.isWebOS() || Environment.isTizen() ? "eager" : "lazy";
-      const addonLogoDecoding = Environment.isWebOS() || Environment.isTizen() ? "sync" : "async";
+      const performanceConstrained = isPerformanceConstrainedRuntime();
+      const addonLogoLoading = performanceConstrained ? "eager" : "lazy";
+      const addonLogoDecoding = performanceConstrained ? "sync" : "async";
       const addonBadge = displayAddonLogoUrl
         ? `<img src="${escapeHtml(displayAddonLogoUrl)}" alt="${escapeHtml(stream.addonName || "Addon")}" data-addon-logo="${escapeHtml(addonLogoUrl)}" decoding="${addonLogoDecoding}" loading="${addonLogoLoading}" referrerpolicy="no-referrer" /><span hidden>${addonBadgeLabel}</span>`
         : `<span>${addonBadgeLabel}</span>`;
@@ -3048,7 +3068,7 @@ export const StreamScreen = {
       this.stopStreamVirtualization();
     }
     const stableStreamList = Boolean(
-      (Environment.isWebOS() || Environment.isTizen()) &&
+      isPerformanceConstrainedRuntime() &&
       filtered.length &&
       addonLogosReady &&
       allStreams.length &&
@@ -3223,7 +3243,7 @@ export const StreamScreen = {
 
   requestStreamBadgeHydration() {
     if (
-      (!Environment.isWebOS() && !Environment.isTizen()) ||
+      !isPerformanceConstrainedRuntime() ||
       Router.getCurrent() !== "stream" ||
       this.streamBadgeHydrationFrame
     ) {
@@ -3236,11 +3256,7 @@ export const StreamScreen = {
   },
 
   hydrateVisibleStreamBadges() {
-    if (
-      (!Environment.isWebOS() && !Environment.isTizen()) ||
-      Router.getCurrent() !== "stream" ||
-      !this.container
-    ) {
+    if (!isPerformanceConstrainedRuntime() || Router.getCurrent() !== "stream" || !this.container) {
       return;
     }
     const list = this.container.querySelector(".stream-route-list");
@@ -3266,8 +3282,8 @@ export const StreamScreen = {
     // instead of measuring every card: per-card geometry reads forced a full
     // list reflow on every focus move on constrained TV browsers.
     const anchorRow = focusedRow >= 0 ? focusedRow : 0;
-    const windowStart = anchorRow - TV_STREAM_BADGE_WINDOW_ROWS;
-    const windowEnd = anchorRow + TV_STREAM_BADGE_WINDOW_ROWS;
+    const windowStart = anchorRow - STREAM_BADGE_WINDOW_ROWS;
+    const windowEnd = anchorRow + STREAM_BADGE_WINDOW_ROWS;
     placeholders.forEach((placeholder) => {
       const rowIndex = Number(placeholder.dataset.streamBadgeRow || -1);
       const shouldHydrate =

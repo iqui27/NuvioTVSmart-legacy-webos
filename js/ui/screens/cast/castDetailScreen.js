@@ -309,6 +309,24 @@ export const CastDetailScreen = {
       }
     }
 
+    // Keep the Android-style hero context visible while entering the first
+    // filmography row. Constrained TV viewports cannot show the whole poster
+    // and the hero at once; scrolling to the card bottom would hide the
+    // actor's name and biography before the user can read them.
+    const firstSection = this.container?.querySelector(".cast-credit-section");
+    const focusedSection = focused.closest(".cast-credit-section");
+    if (firstSection && focusedSection === firstSection) {
+      if (shell.scrollTop > 0) {
+        if (!instant && typeof shell.scrollTo === "function") {
+          shell.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+          shell.scrollTop = 0;
+        }
+      }
+      this.savedScrollTop = 0;
+      return;
+    }
+
     const shellRect = shell.getBoundingClientRect();
     const focusRect = focused.getBoundingClientRect();
     const padTop = 40;

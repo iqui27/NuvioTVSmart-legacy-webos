@@ -698,7 +698,7 @@
     <string name="layout_selection_subtitle">Alege aspectul ecranului de pornire</string>
     <string name="layout_selection_continue">Continuă</string>
     <string name="update_title">Actualizare aplicație</string>
-    <string name="update_installer_required">Folosește Nuvio WebTV Installer pentru a actualiza aplicația pe televizor.</string>
+    <string name="update_installer_required">Folosește Nuvio TV Installer pentru a actualiza aplicația pe televizor.</string>
     <string name="update_release_notes">Noutăți</string>
     <string name="update_release_notes_unavailable">Descrierea versiunii nu este disponibilă.</string>
     <string name="update_downloading">Se descarcă actualizarea</string>

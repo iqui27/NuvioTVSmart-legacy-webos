@@ -2,6 +2,7 @@ import { AuthManager } from "../auth/authManager.js";
 import { SupabaseApi } from "../../data/remote/supabase/supabaseApi.js";
 import { PluginRuntime } from "../player/pluginRuntime.js";
 import { ProfileManager } from "./profileManager.js";
+import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 
 const TABLE = "plugins";
 const PUSH_RPC = "sync_push_plugins";
@@ -127,6 +128,9 @@ function writeLocalSources(sources) {
 export const PluginSyncService = {
   async pull() {
     try {
+      if (isSyncBackoffActive()) {
+        return readLocalSources();
+      }
       if (!AuthManager.isAuthenticated) {
         return [];
       }
@@ -153,6 +157,9 @@ export const PluginSyncService = {
 
   async push() {
     try {
+      if (isSyncBackoffActive()) {
+        return false;
+      }
       if (!AuthManager.isAuthenticated) {
         return false;
       }
@@ -196,7 +203,7 @@ export const PluginSyncService = {
       if (rows.length) {
         try {
           await SupabaseApi.upsert(TABLE, rows, "user_id,profile_id,url", true);
-        } catch (upsertError) {
+        } catch {
           await SupabaseApi.upsert(TABLE, rows, null, true);
         }
       }

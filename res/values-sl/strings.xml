@@ -1452,7 +1452,7 @@
     <string name="layout_selection_subtitle">Izberite postavitev vašega domačega zaslona</string>
     <string name="layout_selection_continue">Nadaljuj</string>
     <string name="update_title">Posodobitev aplikacije</string>
-    <string name="update_installer_required">Za posodobitev aplikacije na televizorju uporabite Nuvio WebTV Installer.</string>
+    <string name="update_installer_required">Za posodobitev aplikacije na televizorju uporabite Nuvio TV Installer.</string>
     <string name="update_release_notes">Kaj je novega</string>
     <string name="update_release_notes_unavailable">Opis izdaje ni na voljo.</string>
     <string name="update_downloading">Prenašanje posodobitve</string>

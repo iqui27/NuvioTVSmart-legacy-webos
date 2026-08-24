@@ -1,3 +1,4 @@
+import { MemberCatalogStorage } from "../../local/memberCatalogStorage.js";
 import { SupabaseApi } from "./supabaseApi.js";
 import { createStorageAssetUrl, revokeStorageAssetUrl } from "./storageAsset.js";
 
@@ -6,6 +7,8 @@ const PROFILE_BACKGROUND_BUCKET = "membership-profile-backgrounds";
 let remoteCatalog = null;
 let catalogLoadPromise = null;
 let cacheGeneration = 0;
+let catalogHydrated = false;
+let remoteCatalogLoaded = false;
 const assetPromises = new Map();
 const objectUrls = new Set();
 const listeners = new Set();
@@ -21,6 +24,20 @@ function mapBackground(row = {}) {
   };
 }
 
+function hydrateStoredCatalog() {
+  if (catalogHydrated) {
+    return;
+  }
+  catalogHydrated = true;
+  const stored = MemberCatalogStorage.loadProfileBackgroundCatalog();
+  if (!Array.isArray(stored?.items)) {
+    return;
+  }
+  remoteCatalog = stored.items
+    .map((row) => mapBackground(row))
+    .filter((item) => item.id && item.storagePath);
+}
+
 function notify() {
   const catalog = remoteCatalog || [];
   listeners.forEach((listener) => {
@@ -32,22 +49,42 @@ function notify() {
   });
 }
 
+function assetKey(item) {
+  return `${item.id}:v${item.assetVersion}`;
+}
+
 async function loadAndPublish(item) {
   if (!item?.id || item.imageUrl) {
     return item?.imageUrl || null;
   }
-  if (assetPromises.has(item.id)) {
-    return assetPromises.get(item.id);
+  const key = assetKey(item);
+  if (assetPromises.has(key)) {
+    return assetPromises.get(key);
   }
   const generation = cacheGeneration;
   let promise;
   promise = (async () => {
     try {
-      const blob = await SupabaseApi.downloadStorageObject(
-        PROFILE_BACKGROUND_BUCKET,
-        item.storagePath,
-        true
+      let blob = await MemberCatalogStorage.loadAsset(
+        "profile-background",
+        item.id,
+        item.assetVersion
       );
+      if (!blob) {
+        blob = await SupabaseApi.downloadStorageObject(
+          PROFILE_BACKGROUND_BUCKET,
+          item.storagePath,
+          true
+        );
+        if (blob) {
+          await MemberCatalogStorage.saveAsset(
+            "profile-background",
+            item.id,
+            item.assetVersion,
+            blob
+          );
+        }
+      }
       const imageUrl = await createStorageAssetUrl(blob);
       if (!imageUrl) {
         return null;
@@ -58,7 +95,9 @@ async function loadAndPublish(item) {
       }
       objectUrls.add(imageUrl);
       if (remoteCatalog) {
-        const target = remoteCatalog.find((entry) => entry.id === item.id);
+        const target = remoteCatalog.find(
+          (entry) => entry.id === item.id && entry.assetVersion === item.assetVersion
+        );
         if (target) {
           target.imageUrl = imageUrl;
           notify();
@@ -69,55 +108,78 @@ async function loadAndPublish(item) {
       console.warn(`Unable to load supporter profile background ${item.id}`, error);
       return null;
     } finally {
-      if (assetPromises.get(item.id) === promise) {
-        assetPromises.delete(item.id);
+      if (assetPromises.get(key) === promise) {
+        assetPromises.delete(key);
       }
     }
   })();
-  assetPromises.set(item.id, promise);
+  assetPromises.set(key, promise);
   return promise;
+}
+
+function startCatalogLoad() {
+  if (catalogLoadPromise || remoteCatalogLoaded) {
+    return catalogLoadPromise;
+  }
+  const generation = cacheGeneration;
+  let requestPromise;
+  requestPromise = (async () => {
+    try {
+      const response = await SupabaseApi.rpc("get_member_profile_background_catalog", {}, true);
+      if (generation !== cacheGeneration) {
+        return remoteCatalog || [];
+      }
+      const rows = Array.isArray(response) ? response : [];
+      remoteCatalog = rows
+        .map((row) => mapBackground(row))
+        .filter((item) => item.id && item.storagePath);
+      remoteCatalogLoaded = true;
+      MemberCatalogStorage.saveProfileBackgroundCatalog({ items: rows });
+      notify();
+      return remoteCatalog;
+    } catch (error) {
+      if (generation !== cacheGeneration) {
+        return [];
+      }
+      console.warn("Unable to load supporter profile background catalog", error);
+      if (!Array.isArray(remoteCatalog)) {
+        remoteCatalog = [];
+      }
+      notify();
+      return remoteCatalog;
+    } finally {
+      if (catalogLoadPromise === requestPromise) {
+        catalogLoadPromise = null;
+      }
+    }
+  })();
+  catalogLoadPromise = requestPromise;
+  return requestPromise;
+}
+
+async function preloadCatalog(catalog, selectedId = null) {
+  const selected = catalog.find((item) => item.id === String(selectedId || "").trim());
+  if (selected) {
+    await loadAndPublish(selected);
+  }
+  await Promise.all(
+    catalog.filter((item) => item !== selected).map((item) => loadAndPublish(item))
+  );
 }
 
 export const ProfileBackgroundRepository = {
   async ensureLoaded() {
-    if (Array.isArray(remoteCatalog)) {
-      return remoteCatalog;
+    hydrateStoredCatalog();
+    const hadCatalog = Array.isArray(remoteCatalog);
+    const pendingCatalogLoad = startCatalogLoad();
+    if (!hadCatalog && pendingCatalogLoad) {
+      await pendingCatalogLoad;
     }
-    if (catalogLoadPromise) {
-      return catalogLoadPromise;
-    }
-    const generation = cacheGeneration;
-    let requestPromise;
-    requestPromise = (async () => {
-      try {
-        const response = await SupabaseApi.rpc("get_member_profile_background_catalog", {}, true);
-        if (generation !== cacheGeneration) {
-          return [];
-        }
-        remoteCatalog = (Array.isArray(response) ? response : [])
-          .map((row) => mapBackground(row))
-          .filter((item) => item.id && item.storagePath);
-        notify();
-        return remoteCatalog;
-      } catch (error) {
-        if (generation !== cacheGeneration) {
-          return [];
-        }
-        console.warn("Unable to load supporter profile background catalog", error);
-        remoteCatalog = [];
-        notify();
-        return remoteCatalog;
-      } finally {
-        if (catalogLoadPromise === requestPromise) {
-          catalogLoadPromise = null;
-        }
-      }
-    })();
-    catalogLoadPromise = requestPromise;
-    return requestPromise;
+    return remoteCatalog || [];
   },
 
   getCatalog() {
+    hydrateStoredCatalog();
     return Array.isArray(remoteCatalog) ? remoteCatalog : [];
   },
 
@@ -131,14 +193,16 @@ export const ProfileBackgroundRepository = {
 
   async loadSelectedAndPreload(selectedId = null) {
     const catalog = await this.ensureLoaded();
-    const selected = catalog.find((item) => item.id === String(selectedId || "").trim());
-    if (selected) {
-      await loadAndPublish(selected);
+    const pendingCatalogLoad = catalogLoadPromise;
+    await preloadCatalog(catalog, selectedId);
+    if (pendingCatalogLoad) {
+      await pendingCatalogLoad;
     }
-    await Promise.all(
-      catalog.filter((item) => item !== selected).map((item) => loadAndPublish(item))
-    );
-    return catalog;
+    const latestCatalog = this.getCatalog();
+    if (latestCatalog !== catalog) {
+      await preloadCatalog(latestCatalog, selectedId);
+    }
+    return this.getCatalog();
   },
 
   preloadImages() {
@@ -161,6 +225,8 @@ export const ProfileBackgroundRepository = {
     objectUrls.clear();
     remoteCatalog = null;
     catalogLoadPromise = null;
+    catalogHydrated = false;
+    remoteCatalogLoaded = false;
     notify();
   }
 };

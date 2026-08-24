@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible NuvioTV Web bug, one problem per issue.
+description: Report a reproducible Nuvio TV bug, one problem per issue.
 title: "[Bug]: short summary here"
 labels:
   - bug
@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug in NuvioTV Web.
+        Thanks for reporting a bug in Nuvio TV.
 
         If we can reproduce it, we can usually fix it. Please describe the bug in enough detail that someone else can understand what failed without watching a video or guessing from the title.
 
@@ -62,7 +62,7 @@ body:
         - Samsung Tizen
         - LG webOS
         - Browser development mode
-        - Nuvio WebTV Installer
+        - Nuvio TV Installer
         - webOS Homebrew wrapper
         - Other (please describe below)
     validations:
@@ -73,7 +73,7 @@ body:
     attributes:
       label: Install method
       options:
-        - Nuvio WebTV Installer
+        - Nuvio TV Installer
         - webOS Homebrew Channel
         - Manual WGT install
         - Manual IPK install
@@ -165,7 +165,7 @@ body:
       label: Steps to reproduce
       description: Exact steps, one action per line. If it depends on specific content, describe it without sharing private links.
       placeholder: |
-        1. Open NuvioTV Web on ...
+        1. Open Nuvio TV on ...
         2. Navigate to ...
         3. Press ...
         4. Select ...

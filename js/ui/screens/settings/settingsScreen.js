@@ -2486,7 +2486,6 @@ export const SettingsScreen = {
       <button class="settings-layout-card settings-content-focusable focusable${selected ? " is-selected" : ""}"
               data-zone="content"
               ${this.registerAction(focusKey, this.actionMap.get(focusKey))}>
-        <span class="settings-layout-badge">${escapeHtml(t("common.beta", {}, "Beta"))}</span>
         ${renderLayoutPreviewPlaceholderMarkup()}
         <span class="settings-layout-preview settings-layout-preview-${escapeHtml(option.id)}">${renderLayoutPreviewMarkup(option.id)}</span>
         <span class="settings-layout-name">${escapeHtml(translateOptionLabel(option))}</span>
@@ -3671,6 +3670,11 @@ export const SettingsScreen = {
         onSelect: (option) => LayoutPreferences.set({ continueWatchingCardStyle: option.id })
       })
     );
+    this.actionMap.set("layout:continueWatchingEnabled", () => {
+      LayoutPreferences.set({
+        continueWatchingEnabled: !LayoutPreferences.get().continueWatchingEnabled
+      });
+    });
     const openNumberSetting = (focusKey, titleKey, field, values, fallback) =>
       this.actionMap.set(focusKey, () =>
         this.openOptionDialog({
@@ -4054,8 +4058,9 @@ export const SettingsScreen = {
       </div>
     `;
 
-    const continueWatchingBody = `
-      <div class="settings-stack">
+    const continueWatchingEnabled = model.layout.continueWatchingEnabled !== false;
+    const continueWatchingOptionsBody = continueWatchingEnabled
+      ? `
         ${this.renderActionRow({ focusKey: "layout:continueWatchingCardStyle", title: t("layout_cw_card_style", {}, "Card style"), subtitle: t("layout_section_continue_watching_desc", {}, "Choose the Continue Watching card shape"), value: t(`layout_cw_card_style_${model.layout.continueWatchingCardStyle || "card"}`, {}, model.layout.continueWatchingCardStyle || "card") })}
         ${this.renderToggleRow({
           focusKey: "layout:useEpisodeThumbnailsInCw",
@@ -4115,6 +4120,22 @@ export const SettingsScreen = {
           ),
           value: continueWatchingSortLabel
         })}
+      `
+      : "";
+
+    const continueWatchingBody = `
+      <div class="settings-stack">
+        ${this.renderToggleRow({
+          focusKey: "layout:continueWatchingEnabled",
+          title: t("settings.layout.continueWatchingEnabled.title", {}, "Show Continue Watching"),
+          subtitle: t(
+            "settings.layout.continueWatchingEnabled.subtitle",
+            {},
+            "Show Continue Watching and Upcoming rows on Home."
+          ),
+          checked: continueWatchingEnabled
+        })}
+        ${continueWatchingOptionsBody}
       </div>
     `;
 
@@ -7140,7 +7161,7 @@ export const SettingsScreen = {
         const update = await getLatestAppUpdate({ currentVersion: CURRENT_APP_VERSION });
         this.aboutUpdateStatus = update
           ? String(update.tag || "")
-          : t("update_up_to_date", {}, "System is up to date.");
+          : t("update_latest_version", {}, "You’re using the latest version.");
         if (update) showAppUpdatePrompt(update);
       } catch (_) {
         this.aboutUpdateStatus = t("update_error_check_failed", {}, "Update check failed");

@@ -10,6 +10,7 @@ const LOCAL_BASE_URLS = [
 
 const START_TIMEOUT_MS = 12000;
 const PROBE_TIMEOUT_MS = 2500;
+const SERVICE_START_CALL_TIMEOUT_MS = 4000;
 const TIZEN_DEFAULT_OPERATION = "http://tizen.org/appcontrol/operation/default";
 
 let startPromise = null;
@@ -121,7 +122,8 @@ async function startViaTizenApplication(serviceId) {
 
 async function requestServiceStart(serviceId) {
   const errors = [];
-  const attempts = [
+  const legacyServiceFirst = TizenCapabilities.get().webServiceSupported === false;
+  const officialAttempts = [
     {
       method: "tizen-application-control-default",
       start: () => startViaApplicationControl(serviceId, TIZEN_DEFAULT_OPERATION)
@@ -135,10 +137,21 @@ async function requestServiceStart(serviceId) {
       start: () => startViaWrtService(serviceId)
     }
   ];
+  // Samsung warns that application-control launches can disturb the
+  // foreground app when web.service is reported as unavailable. Preserve the
+  // legacy path that worked on older firmware first and only use the official
+  // application-control path when the capability is true or unknown.
+  const attempts = legacyServiceFirst
+    ? officialAttempts.slice(2).concat(officialAttempts.slice(1, 2))
+    : officialAttempts;
 
   for (const attempt of attempts) {
     try {
-      await attempt.start();
+      await withTimeout(
+        attempt.start(),
+        SERVICE_START_CALL_TIMEOUT_MS,
+        `${attempt.method} service start call timed out`
+      );
       return { method: attempt.method };
     } catch (error) {
       errors.push(`${attempt.method}: ${error?.message || error}`);
@@ -211,13 +224,14 @@ export const TizenEngineFsService = {
     if (!Platform.isTizen()) {
       return { status: "unsupported", detail: "Not running on Tizen" };
     }
-    if (!TizenCapabilities.supportsWebService()) {
+    const capabilities = TizenCapabilities.get();
+    if (purpose !== "p2p" && !capabilities.supportsWebService) {
       return {
         status: "unsupported",
         detail: "Tizen web service support is unavailable on this TV"
       };
     }
-    if (purpose === "p2p" && !TizenCapabilities.canUseP2p()) {
+    if (purpose === "p2p" && !capabilities.supportsP2p) {
       return {
         status: "unsupported",
         detail: "Tizen P2P streaming is not supported on this TV"

@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Downloads / Releases
     url: https://github.com/NuvioMedia/NuvioWeb/releases
-    about: Download the latest NuvioTV Web packages, including Samsung Tizen WGT and LG webOS IPK builds.
+    about: Download the latest Nuvio TV packages, including Samsung Tizen WGT and LG webOS IPK builds.
 
   - name: Documentation
     url: https://github.com/NuvioMedia/NuvioWeb/blob/main/README.md
