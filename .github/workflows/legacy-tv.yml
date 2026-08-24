@@ -26,6 +26,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # O token do Actions e read-only por padrao, e sem contents:write o passo de
+    # release responde 403 "Resource not accessible by integration".
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
