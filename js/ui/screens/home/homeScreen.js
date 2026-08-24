@@ -8927,7 +8927,7 @@ export const HomeScreen = {
     // lands afterwards: the Continue Watching reads below are the only thing
     // gated on it, and they update the row in place when they resolve.
     let homeSyncPromise = null;
-    if (!background && waitForFreshContinueWatching && StartupSyncService.started) {
+    if (!background && StartupSyncService.started) {
       const preSyncSignature = this.buildSyncSensitiveHomeSignature();
       homeSyncPromise = measureHomeLoadStageAsync("startup-sync-background", () =>
         StartupSyncService.requestHomeSyncNow().catch((error) => {
@@ -8990,10 +8990,6 @@ export const HomeScreen = {
       ? buildContinueWatchingSignature(this.continueWatchingDisplay)
       : "";
     const waitForInitialContinueWatching = Boolean(!background && !hydratedFromSnapshot);
-    const initialContinueWatchingBudgetMs =
-      Platform.isWebOS() || Platform.isTizen()
-        ? CW_INITIAL_RESOLVE_BUDGET_TV_MS
-        : CW_INITIAL_RESOLVE_BUDGET_MS;
     let initialContinueWatchingReleased = false;
     const releaseInitialHomeAfterContinueWatching = () => {
       if (!waitForInitialContinueWatching || initialContinueWatchingReleased) {
@@ -9863,6 +9859,7 @@ export const HomeScreen = {
         ? retainedFocusState
         : null);
     const {
+      continueWatchingEnabled,
       continueWatchingRows,
       splitUpcomingEnabled,
       continueWatchingFocusIndex,

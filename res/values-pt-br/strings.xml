@@ -2568,6 +2568,7 @@
     <string name="home.continueStatusNextUp">Próximo episódio</string>
     <string name="home.continueStatusContinue">Continuar</string>
     <string name="home.continueStatusAlmostDone">Quase concluído</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}}% assistido</string>
     <string name="home.timeLeft">{{minutes}} minutos restantes</string>
     <string name="home.timeLeftDuration">{{time}} restantes</string>
     <string name="home.continueWatchingSubtitle">Continuar assistindo</string>

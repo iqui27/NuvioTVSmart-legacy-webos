@@ -2605,6 +2605,7 @@
     <string name="home.continueStatusNextUp">Next episode</string>
     <string name="home.continueStatusContinue">Continue</string>
     <string name="home.continueStatusAlmostDone">Almost done</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}}% watched</string>
     <string name="home.timeLeft">{{minutes}}m left</string>
     <string name="home.timeLeftDuration">{{time}} left</string>
     <string name="home.continueWatchingSubtitle">Continue watching</string>

@@ -3430,6 +3430,32 @@ export const PlayerController = {
     this.playbackEngine = "hls.js";
     let networkRecoveryAttempts = 0;
     let mediaRecoveryAttempts = 0;
+    // O bloco de recuperacao de 404 transitorio abaixo referenciava estes quatro
+    // nomes sem nunca declarar nenhum deles, entao alcancar aquele caminho
+    // lancava ReferenceError dentro do handler de erro do hls.js e abortava todo
+    // o tratamento do erro. Declarados aqui, no mesmo escopo dos outros
+    // contadores de recuperacao, com a semantica que o codigo ao redor assume.
+    const HLS_TRANSIENT_PLAYLIST_404_RETRY_LIMIT = 3;
+    const transientPlaylist404Retries = { levelLoadError: 0, audioTrackLoadError: 0 };
+    let transientPlaylist404RetryTimer = null;
+    const scheduleTransientPlaylist404Retry = (details = "") => {
+      const key = String(details || "");
+      if (transientPlaylist404RetryTimer) {
+        return;
+      }
+      transientPlaylist404Retries[key] = Number(transientPlaylist404Retries[key] || 0) + 1;
+      transientPlaylist404RetryTimer = setTimeout(() => {
+        transientPlaylist404RetryTimer = null;
+        if (this.hlsInstance !== hls) {
+          return;
+        }
+        try {
+          hls.startLoad();
+        } catch (error) {
+          console.warn("HLS transient 404 retry failed", error);
+        }
+      }, 500);
+    };
 
     const emitFatalHlsNetworkError = (data = {}, responseCode = 0) => {
       this.lastPlaybackErrorCode = 2;
