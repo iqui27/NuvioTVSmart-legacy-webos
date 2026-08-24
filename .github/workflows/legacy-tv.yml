@@ -40,15 +40,18 @@ jobs:
       # buildar e rodar os gates; um IPK publicavel precisa das reais, injetadas
       # por secret.
       - name: Preparar local.properties
+        id: props
         env:
           LOCAL_PROPERTIES: ${{ secrets.LOCAL_PROPERTIES }}
         run: |
           if [ -n "$LOCAL_PROPERTIES" ]; then
             printf '%s' "$LOCAL_PROPERTIES" > local.properties
+            echo "real=true" >> "$GITHUB_OUTPUT"
             echo "usando local.properties do secret"
           else
             cp local.example.properties local.properties
-            echo "usando local.example.properties (build de verificacao)"
+            echo "real=false" >> "$GITHUB_OUTPUT"
+            echo "usando local.example.properties (build de verificacao, NAO publicavel)"
           fi
 
       - name: Gate — identificador nunca declarado
@@ -70,14 +73,17 @@ jobs:
       - name: Relatorio — cobertura de fallback CSS
         run: npm run check:legacy-css
 
+      # So empacota com as chaves reais. Sem o secret o build sai de
+      # local.example.properties e nao funciona no aparelho — anexar isso a uma
+      # release entregaria um IPK placeholder a quem for instalar.
       - name: Empacotar IPK
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.props.outputs.real == 'true'
         env:
           NUVIO_IPK_NAME: NuvioTV-webOS-${{ github.ref_name }}.ipk
         run: node scripts/package-webos.mjs
 
       - name: Anexar IPK a release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.props.outputs.real == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: NuvioTV-webOS-${{ github.ref_name }}.ipk
