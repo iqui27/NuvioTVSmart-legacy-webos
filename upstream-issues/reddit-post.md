@@ -1,8 +1,21 @@
-# Post para r/NuvioApp (ou onde a comunidade do Nuvio estiver)
+# Post para r/Nuvio
+
+**Flair obrigatória: `Unofficial Fork`** — existe exatamente para "community-built
+custom ports", que é o que isto é. Sem ela o post entra na fila errada.
 
 **Título sugerido:**
-Unofficial 0.3.42 build for LG webOS 3.x/4.x (C9, C8, B7 and older) — the
+[Unofficial Fork] 0.3.42 build for LG webOS 3.x/4.x (C9, C8, B7 and older) — the
 platforms the official build dropped
+
+**Checado contra as regras do sub (2026-08-24):**
+- Regra 2 / política de addons: o texto não cita nenhum scraper de terceiros, nem
+  debrid, nem link de conteúdo. Só o cliente, hardware e desempenho — que é
+  explicitamente o que pertence ao sub.
+- Sem link de doação pessoal (proibido; só link para os devs do Nuvio é aceito).
+- **Se você anexar screenshot ou vídeo:** a regra de imagem proíbe logo de
+  streaming, emissora ou estúdio, e capa protegida por direito autoral. Print da
+  home com pôsteres viola isso. Use a tela de Ajustes, a lista de fontes ou a
+  tela de faixas de áudio — sem arte de filme — ou não anexe imagem.
 
 ---
 
@@ -27,11 +40,13 @@ progress and watched state.
 
 ## Two things worth knowing even if you never install this
 
-**Dolby Vision only engages from an MP4 container.** Same release, same
-`dv_profile 8`: the MP4 went into DV, the MKV played as HDR10. This is the TV's
-pipeline, not the app — the Jellyfin webOS client hits the same wall and remuxes
-server side. So the source list in this build ranks MP4 first and labels the
-container on each source.
+**Dolby Vision only engages from an MP4 container.** I tested the same title in
+two containers with identical Dolby Vision metadata: the MP4 engaged DV, the MKV
+fell back to HDR10. This is the TV's media pipeline, not the app — the Jellyfin
+webOS client runs into the same limitation and works around it on the server
+side. Practical consequence for anyone on these sets: if DV matters to you, an
+MP4 is the only container that gets you there. This build labels the container on
+each entry in the source list so you can see it before you commit.
 
 **The old engine lies about what it supports.** `CSS.supports("zoom")` answers
 `true` and the engine ignores the property. `canPlayType("video/x-matroska")`
@@ -57,7 +72,7 @@ step by step is in the README.
 
 - Tested on exactly one model — my C9 65". Reports from other webOS 3.x/4.x sets
   are what I need most.
-- It is a fork, so it lags upstream releases by however long the merge takes.
+- It is a fork, so it trails official versions by however long the merge takes.
 - Defects I found that are not specific to old hardware are being reported
   upstream so they get fixed for everyone, and the fork shrinks over time. That
   is the goal, not a permanent parallel app.
