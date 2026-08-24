@@ -1,0 +1,93 @@
+# CI da variante legacy-tv.
+#
+# Os tres gates existem porque cada um corresponde a um defeito que ja chegou ao
+# aparelho nesta base, e nenhum deles aparece em qualquer etapa do build:
+#
+#   check:no-undef      -> identificador nunca declarado. Derrubou a home inteira
+#                          (o Router rebaixa falha de mount a console.warn, logo
+#                          a tela ficava vazia sem erro visivel) e lancava dentro
+#                          do handler de erro do hls.js.
+#   check:legacy-regex  -> recurso de regex pos-ES2017. O esbuild reescreve um
+#                          literal com flag nao suportada como
+#                          `new RegExp(src, flags)`, que compila em qualquer
+#                          engine e so estoura em runtime.
+#   check:legacy-css    -> RELATORIO, nao gate: sai 0 de proposito. Serve para o
+#                          numero de features sem fallback aparecer no log e a
+#                          variacao ser notada entre releases.
+name: legacy-tv
+
+on:
+  push:
+    branches: [legacy-tv]
+    tags: ["v*"]
+  pull_request:
+    branches: [legacy-tv]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      # local.properties nao esta versionado. As 19 chaves do exemplo bastam para
+      # buildar e rodar os gates; um IPK publicavel precisa das reais, injetadas
+      # por secret.
+      - name: Preparar local.properties
+        env:
+          LOCAL_PROPERTIES: ${{ secrets.LOCAL_PROPERTIES }}
+        run: |
+          if [ -n "$LOCAL_PROPERTIES" ]; then
+            printf '%s' "$LOCAL_PROPERTIES" > local.properties
+            echo "usando local.properties do secret"
+          else
+            cp local.example.properties local.properties
+            echo "usando local.example.properties (build de verificacao)"
+          fi
+
+      - name: Gate — identificador nunca declarado
+        run: npm run check:no-undef
+
+      - name: Lint da home (gate do repo)
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Build
+        env:
+          NUVIO_UI_SCALE: "0.8"
+          NUVIO_BUILD_LABEL: legacy.ci
+        run: node scripts/build.mjs
+
+      - name: Gate — regex incompativel com Chromium 53
+        run: npm run check:legacy-regex
+
+      - name: Relatorio — cobertura de fallback CSS
+        run: npm run check:legacy-css
+
+      - name: Empacotar IPK
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          NUVIO_IPK_NAME: NuvioTV-webOS-${{ github.ref_name }}.ipk
+        run: node scripts/package-webos.mjs
+
+      - name: Anexar IPK a release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: NuvioTV-webOS-${{ github.ref_name }}.ipk
+          # A GPL-3.0 §6 exige o Corresponding Source junto do binario. A tag no
+          # proprio repo publico satisfaz isso, e o corpo da release aponta para ela.
+          body: |
+            Build nao oficial da variante legacy-tv, para LG webOS 3.x/4.x
+            (Chromium 53), plataformas que o upstream deixou de suportar em
+            0.3.42.
+
+            Fonte correspondente: esta tag neste repositorio.
+            Projeto original: https://github.com/NuvioMedia/NuvioTVSmart
+            "Nuvio" e marca dos autores originais e nao e licenciada pela GPL.
