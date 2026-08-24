@@ -68,7 +68,10 @@ jobs:
       - name: Build
         env:
           NUVIO_UI_SCALE: "0.8"
-          NUVIO_BUILD_LABEL: legacy.ci
+          # Em build de tag o rotulo e a propria tag, porque ele aparece em
+          # Ajustes no aparelho e "legacy.ci" nao diz a ninguem qual versao esta
+          # instalada. Fora de tag continua marcando que veio do CI.
+          NUVIO_BUILD_LABEL: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'legacy.ci' }}
         run: node scripts/build.mjs
 
       - name: Gate — regex incompativel com Chromium 53
