@@ -8,9 +8,20 @@ import {
 const LOCAL_MEDIA_SERVER_PORT_CANDIDATES = [2710, 2711, 2712, 2713, 2714];
 const REQUEST_TIMEOUT_MS = 4000;
 const TRACK_CACHE_TTL_MS = 30000;
-const WEBOS_EMPTY_TRACK_CACHE_TTL_MS = 5000;
-const WEBOS_LUNA_TRACK_ATTEMPTS = 6;
-const WEBOS_LUNA_TRACK_RETRY_DELAY_MS = 700;
+// Every attempt makes the media server walk the container again, and the 4 s
+// REQUEST_TIMEOUT_MS above only abandons the luna reply — it does not cancel the
+// read already in flight. So retries stack real range requests against the same
+// server that is feeding the video. On a large torrent-backed file that is the
+// difference between "starts in seconds" and "starves". Two attempts, and a
+// long enough empty-result TTL that the player's warmup timers (which re-ask
+// every 1.2 s) coalesce onto one cached answer instead of queueing new probes.
+const WEBOS_EMPTY_TRACK_CACHE_TTL_MS = 60000;
+const WEBOS_LUNA_TRACK_ATTEMPTS = 2;
+const WEBOS_LUNA_TRACK_RETRY_DELAY_MS = 900;
+// The probe reads from the front of the container, which on a cold torrent may
+// not have arrived yet, so it needs more than REQUEST_TIMEOUT_MS above. The
+// service caps this at 30 s and applies the same value to its own read.
+const WEBOS_LUNA_TRACK_PROBE_TIMEOUT_MS = 12000;
 
 let cachedLocalMediaServerPort = LOCAL_MEDIA_SERVER_PORT_CANDIDATES[0];
 const tracksCache = new Map();
@@ -70,10 +81,14 @@ async function requestTracksViaLuna(mediaUrl) {
     requestWebOsCompanionService({
       method: "tracks",
       parameters: {
-        url: String(mediaUrl || "").trim()
+        url: String(mediaUrl || "").trim(),
+        timeoutMs: WEBOS_LUNA_TRACK_PROBE_TIMEOUT_MS
       }
     }),
-    REQUEST_TIMEOUT_MS,
+    // Give up locally a beat after the service does, so a probe that is simply
+    // slow reports as one timeout instead of being abandoned here and retried
+    // while the server-side read is still running.
+    WEBOS_LUNA_TRACK_PROBE_TIMEOUT_MS + 1500,
     "webOS companion track request timed out"
   );
   const payload = result?.payload || {};

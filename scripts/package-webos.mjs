@@ -1,4 +1,4 @@
-import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { build } from "esbuild";
 import { readAppMetadata, syncVersionFiles } from "./appMetadata.mjs";
 import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { runWebOsToolsBinary } from "./aresCli.mjs";
+import { buildWebOsMediaRuntime } from "./webosMediaRuntime.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -21,10 +22,22 @@ const webOsServiceId = "space.nuvio.webos.service";
 const webOsServiceSourceDir = path.join(rootDir, "services", "webos");
 const webOsRuntimeScriptPath = "assets/libs/webOSTV.js";
 
+// On-demand screen chunks emitted by scripts/build.mjs. They are fetched at
+// runtime by js/runtime/loadScreenChunks.js, so nothing in index.html
+// references them and a missing file would only show up on the TV as a screen
+// that never opens. Named explicitly here so packaging fails instead.
+const screenChunkFiles = ["player.chunk.js"];
+
+// Build metadata, useful on a workstation and dead weight on a TV.
+const distDevelopmentOnlyFiles = ["app.bundle.meta.json", "player.chunk.js.meta.json"];
+
 async function assertDistExists() {
   try {
     await access(path.join(distDir, "app.bundle.js"), fsConstants.R_OK);
     await access(path.join(distDir, "appinfo.json"), fsConstants.R_OK);
+    for (const chunkFile of screenChunkFiles) {
+      await access(path.join(distDir, chunkFile), fsConstants.R_OK);
+    }
   } catch {
     throw new Error(`Build output not found at ${distDir}. Run "npm run build" first.`);
   }
@@ -139,6 +152,19 @@ async function resolveWebOsScriptPath(targetDir) {
   return webOsRuntimeScriptPath;
 }
 
+/*
+ * Everything in this document is a serialized, blocking file:// request, so what
+ * is absent matters as much as what is present. Deliberately dropped:
+ *
+ * - css/layout.css and css/themes.css: 0 bytes at source, two round trips for
+ *   nothing.
+ * - assets/runtime/legacy-features.js: on this TV it only adds the five `no-*`
+ *   classes, and they are already in the <html class> below — its feature probes
+ *   are gated behind ?modernFeatures=1 and never run here. (The browser and
+ *   Tizen documents still load it; they do not hardcode the classes.)
+ * - assets/libs/qrcode-generator.js: 59 KB, unminified, needed by three screens.
+ *   js/core/qr/qrCodeGenerator.js now loads it on first use.
+ */
 function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   const webOsScriptTag = webOsScriptPath ? `  <script src="${webOsScriptPath}"></script>\n` : "";
   const compatibilityOptions = JSON.stringify({
@@ -149,24 +175,21 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   });
 
   return `<!DOCTYPE html>
-<html lang="en" class="no-flex-gap no-css-math no-backdrop-filter no-aspect-ratio">
+<html lang="en" class="no-flex-gap no-css-grid no-css-math no-backdrop-filter no-aspect-ratio">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>${appName}</title>
-  <script src="assets/runtime/legacy-features.js"></script>
+  <script src="assets/runtime/legacy-dom-shims.js"></script>
   <link rel="stylesheet" href="css/base.css" />
-  <link rel="stylesheet" href="css/layout.css" />
   <link rel="stylesheet" href="css/components.css" />
-  <link rel="stylesheet" href="css/themes.css" />
 </head>
 <body>
   <script src="boot-guard.js"></script>
   <script src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
   <script>window.__NUVIO_PLATFORM__ = "webos";</script>
   <script src="nuvio.env.js"></script>
-  <script src="assets/libs/qrcode-generator.js"></script>
 ${webOsScriptTag}  <script>
     window.NuvioBootGuard.runCompatibilityGate(${compatibilityOptions}, function startNuvioApp() {
       window.NuvioBootGuard.loadScript("app.bundle.js");
@@ -177,9 +200,71 @@ ${webOsScriptTag}  <script>
 `;
 }
 
+/*
+ * The strings.xml files under the res/values directories are the pre-build
+ * source for the locale bundles in res/i18n. Both were being shipped, which put
+ * ~5.4 MB of XML in the package that nothing reads: the runtime prefers the
+ * JSON, and a parity check on device confirmed all 2,814 keys match exactly for
+ * the active locale. Keep the JSON, drop the XML. The XML fallback stays in
+ * js/i18n/index.js for the browser and Tizen builds, which still ship it.
+ */
+async function pruneRedundantLocaleXml() {
+  const resDir = path.join(appStageDir, "res");
+  const bundleDir = path.join(resDir, "i18n");
+
+  if (!(await pathExists(bundleDir))) {
+    throw new Error(
+      "No precompiled locale bundles in res/i18n; refusing to drop the strings.xml " +
+        "fallback. Check buildI18nBundles in scripts/build.mjs."
+    );
+  }
+
+  const entries = await readdir(resDir, { withFileTypes: true });
+  const localeDirs = entries.filter(
+    (entry) => entry.isDirectory() && /^values(-|$)/.test(entry.name)
+  );
+  const bundles = new Set(
+    (await readdir(bundleDir))
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.slice(0, -5))
+  );
+
+  for (const dir of localeDirs) {
+    const locale = dir.name === "values" ? "en" : dir.name.replace(/^values-/, "");
+    if (!bundles.has(locale)) {
+      throw new Error(
+        `res/${dir.name} has no precompiled bundle (expected res/i18n/${locale}.json); ` +
+          "keeping the XML would be the only way to serve it."
+      );
+    }
+    await rm(path.join(resDir, dir.name), { recursive: true, force: true });
+  }
+
+  return { removed: localeDirs.length, kept: bundles.size };
+}
+
 async function stageApp() {
   const { version } = await readAppMetadata();
   await cp(distDir, appStageDir, { recursive: true });
+
+  // Fail loudly here rather than shipping a package where the player route
+  // silently refuses to open.
+  for (const chunkFile of screenChunkFiles) {
+    if (!(await pathExists(path.join(appStageDir, chunkFile)))) {
+      throw new Error(`Screen chunk ${chunkFile} is missing from the webOS package.`);
+    }
+  }
+  await Promise.all(
+    distDevelopmentOnlyFiles.map((fileName) =>
+      rm(path.join(appStageDir, fileName), { force: true })
+    )
+  );
+
+  const prunedLocales = await pruneRedundantLocaleXml();
+  console.log(
+    `dropped ${prunedLocales.removed} strings.xml locale directories ` +
+      `(${prunedLocales.kept} precompiled bundles kept)`
+  );
 
   const appInfoPath = path.join(appStageDir, "appinfo.json");
   const appInfo = JSON.parse(await readFile(appInfoPath, "utf8"));
@@ -249,11 +334,25 @@ async function stageService() {
       `${JSON.stringify(servicesManifest, null, 2)}\n`,
       "utf8"
     ),
-    cp(
-      path.join(webOsServiceSourceDir, "runtime", "media-http.cjs"),
-      path.join(serviceStageDir, "runtime", "media-http.cjs")
-    )
+    buildWebOsMediaRuntime({
+      sourcePath: path.join(webOsServiceSourceDir, "runtime", "media-http.cjs"),
+      outputPath: path.join(serviceStageDir, "runtime", "media-http.cjs"),
+      cacheDir: path.join(cacheDir, "webos-media-runtime")
+    }).then(function reportMediaRuntime(result) {
+      console.log(
+        `media runtime transpiled to ES5 for Node ${compatibilityPolicy.webOsServiceNodeVersion}` +
+          ` (${Math.round(result.bytes / 1024)} KB${result.cached ? ", cached" : ""})`
+      );
+    })
   ]);
+
+  // The prelude installs the ES6+ builtins Node 0.12 lacks. It has to run
+  // before any module body, and it patches globals, so the media runtime that
+  // serverHost.js later loads through Module._compile inherits the same fixes.
+  const preludeSource = await readFile(
+    path.join(webOsServiceSourceDir, "src", "legacyNodePrelude.js"),
+    "utf8"
+  );
 
   await build({
     entryPoints: [path.join(webOsServiceSourceDir, "src", "index.js")],
@@ -261,10 +360,38 @@ async function stageService() {
     bundle: true,
     platform: "node",
     format: "cjs",
-    target: [`node${compatibilityPolicy.webOsServiceNodeVersion}`],
+    target: [compatibilityPolicy.webOsServiceSyntax.target],
+    supported: { ...compatibilityPolicy.webOsServiceSyntax.supported },
+    banner: { js: preludeSource },
     external: ["webos-service"],
     logLevel: "silent"
   });
+
+  await assertServiceBundleIsLegacySafe(path.join(serviceStageDir, "src", "index.js"));
+}
+
+// Node 0.12 fails to *parse* ES6 syntax, so a regression here does not surface
+// as a bad response — the whole service never registers and every Luna command
+// times out. Fail the build instead.
+async function assertServiceBundleIsLegacySafe(bundlePath) {
+  const raw = await readFile(bundlePath, "utf8");
+  // Comments are not code: prose about `Buffer.from` or an arrow in a diagram
+  // would otherwise fail the build. This is a smoke test, not a parser.
+  const source = raw.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|\n)\s*\/\/[^\n]*/g, "$1");
+  const offenders = [
+    ["arrow function", /=>/],
+    ["const declaration", /(^|[^.\w])const\s/],
+    ["let declaration", /(^|[^.\w])let\s/],
+    ["class declaration", /(^|[^.\w])class\s+[A-Za-z_$]/],
+    ["template literal", /`/]
+  ].filter(([, pattern]) => pattern.test(source));
+
+  if (offenders.length) {
+    throw new Error(
+      `webOS service bundle contains syntax Node ${compatibilityPolicy.webOsServiceNodeVersion} ` +
+        `cannot parse: ${offenders.map(([name]) => name).join(", ")}.`
+    );
+  }
 }
 
 async function packageWebOs() {
@@ -292,8 +419,34 @@ async function packageWebOs() {
   }
 }
 
+/**
+ * ares-package names the artifact from the appinfo id and version. A distributable
+ * build wants a name a human can read in a downloads folder, so it is renamed
+ * afterwards instead of by faking the app id.
+ *
+ * NUVIO_IPK_NAME overrides it. Note it changes the FILENAME only — appinfo.json
+ * still declares the real version, which is what the TV installs and what the
+ * in-app update check compares against.
+ */
+async function renameIpk() {
+  const requested = String(process.env.NUVIO_IPK_NAME || "").trim();
+  if (!requested) {
+    return;
+  }
+  const { version } = await readAppMetadata();
+  const source = path.join(rootDir, `space.nuvio.webos_${version}_all.ipk`);
+  if (!(await pathExists(source))) {
+    console.warn(`skipping rename: ${source} not found`);
+    return;
+  }
+  const target = path.join(rootDir, requested.endsWith(".ipk") ? requested : `${requested}.ipk`);
+  await rename(source, target);
+  console.log(`IPK renomeado para: ${path.basename(target)}`);
+}
+
 try {
   await packageWebOs();
+  await renameIpk();
 } catch (error) {
   console.error("\nwebOS packaging failed:");
   console.error(error);

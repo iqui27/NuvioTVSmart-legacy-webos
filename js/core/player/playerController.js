@@ -22,6 +22,8 @@ import {
 import { WebOsLunaService } from "../../platform/webos/webosLunaService.js";
 import { WebOSPlayerExtensions } from "../../platform/webos/webosPlayerExtensions.js";
 import { loadStreamingLibs } from "../../runtime/loadStreamingLibs.js";
+import { WATCH_PROGRESS_UNKNOWN_DURATION_PERCENT } from "../../domain/model/watchProgress.js";
+import { parseAspectRatio } from "./playerAspect.js";
 
 const MIN_PROGRESS_SYNC_DURATION_MS = 1000;
 const WEBOS_AUDIO_TRACK_SELECTION_TIMEOUT_MS = 4000;
@@ -2161,6 +2163,28 @@ export const PlayerController = {
       extraInfo.videoHeight,
       extraInfo.video_height
     ];
+    const displayAspectCandidates = [
+      videoTrack.display_aspect_ratio,
+      videoTrack.displayAspectRatio,
+      videoTrack.video_aspect_ratio,
+      videoTrack.videoAspectRatio,
+      videoTrack.dar,
+      videoTrack.aspect,
+      extraInfo.display_aspect_ratio,
+      extraInfo.displayAspectRatio,
+      extraInfo.video_aspect_ratio,
+      extraInfo.videoAspectRatio,
+      extraInfo.dar,
+      extraInfo.aspect
+    ];
+    const pixelAspectCandidates = [
+      videoTrack.pixel_aspect_ratio,
+      videoTrack.pixelAspectRatio,
+      videoTrack.par,
+      extraInfo.pixel_aspect_ratio,
+      extraInfo.pixelAspectRatio,
+      extraInfo.par
+    ];
     let width =
       widthCandidates.map(Number).find((value) => Number.isFinite(value) && value > 0) || 0;
     let height =
@@ -2179,7 +2203,16 @@ export const PlayerController = {
         height = Number(match[2]);
       }
     }
-    return width > 0 && height > 0 ? { width, height } : null;
+    if (!width || !height) {
+      return null;
+    }
+    const displayAspect = displayAspectCandidates.map(parseAspectRatio).find(Boolean) || null;
+    const pixelAspect = pixelAspectCandidates.map(parseAspectRatio).find(Boolean) || 1;
+    return {
+      width,
+      height,
+      aspect: displayAspect || (width / height) * pixelAspect
+    };
   },
 
   mapAvPlayErrorToMediaCode(errorValue) {
@@ -3018,11 +3051,17 @@ export const PlayerController = {
     const normalized = String(itemType || "")
       .trim()
       .toLowerCase();
+    const hasEpisodeIdentity =
+      this.currentSeason != null &&
+      this.currentEpisode != null &&
+      Number.isFinite(Number(this.currentSeason)) &&
+      Number.isFinite(Number(this.currentEpisode));
     return (
       normalized === "channel" ||
       normalized === "live" ||
       normalized === "tvchannel" ||
-      normalized === "stream"
+      normalized === "stream" ||
+      (normalized === "tv" && !hasEpisodeIdentity)
     );
   },
 
@@ -3468,15 +3507,34 @@ export const PlayerController = {
         return;
       }
       this.captureHlsErrorDiagnostic(data);
+      const responseCode = Number(data?.response?.code || data?.networkDetails?.status || 0);
+      const hlsErrorDetails = String(data?.details || "");
+      const isTransientPlaylist404 =
+        data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+        responseCode === 404 &&
+        (hlsErrorDetails === "levelLoadError" || hlsErrorDetails === "audioTrackLoadError");
+      // hls.js reports an alternate-audio 404 as non-fatal. Recover only while
+      // startup has no media data; established playback must not be restarted
+      // because an optional track briefly disappears.
+      const isStartupAudioPlaylist404 =
+        !data?.fatal &&
+        isTransientPlaylist404 &&
+        hlsErrorDetails === "audioTrackLoadError" &&
+        Number(this.video?.readyState || 0) === 0 &&
+        !this.isPlaying;
+      if (isStartupAudioPlaylist404) {
+        if (
+          transientPlaylist404Retries[hlsErrorDetails] < HLS_TRANSIENT_PLAYLIST_404_RETRY_LIMIT &&
+          !transientPlaylist404RetryTimer
+        ) {
+          scheduleTransientPlaylist404Retry(hlsErrorDetails);
+        }
+        return;
+      }
       if (!data?.fatal) {
         return;
       }
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        const responseCode = Number(data?.response?.code || data?.networkDetails?.status || 0);
-        const hlsErrorDetails = String(data?.details || "");
-        const isTransientPlaylist404 =
-          responseCode === 404 &&
-          (hlsErrorDetails === "levelLoadError" || hlsErrorDetails === "audioTrackLoadError");
         if (
           isTransientPlaylist404 &&
           transientPlaylist404Retries[hlsErrorDetails] < HLS_TRANSIENT_PLAYLIST_404_RETRY_LIMIT
@@ -4537,9 +4595,10 @@ export const PlayerController = {
       this.syncWebOsPlaybackKeepAwake();
       const context = this.createProgressContext();
       const durationMs = Math.floor(this.getDurationSeconds() * 1000);
-      const completedMs =
-        durationMs > 0 ? durationMs : Math.floor(this.getCurrentTimeSeconds() * 1000);
-      this.flushProgress(completedMs, durationMs > 0 ? durationMs : completedMs, false, context);
+      const positionMs = Math.floor(this.getCurrentTimeSeconds() * 1000);
+      // Android keeps an unknown-duration playback in progress. Do not turn
+      // the current live position into a synthetic finite duration here.
+      this.flushProgress(positionMs, durationMs, false, context);
     });
 
     this.video.addEventListener("error", (e) => {
@@ -5290,7 +5349,8 @@ export const PlayerController = {
       // source instead of reopening the stream picker.
       streamIdentity: active.streamIdentity || null,
       positionMs: Math.max(0, Math.trunc(safePosition)),
-      durationMs: hasFiniteDuration ? Math.max(0, Math.trunc(safeDuration)) : 0
+      durationMs: hasFiniteDuration ? Math.max(0, Math.trunc(safeDuration)) : 0,
+      progressPercent: hasFiniteDuration ? null : WATCH_PROGRESS_UNKNOWN_DURATION_PERCENT
     });
     if (!allowCloudSync) {
       return true;

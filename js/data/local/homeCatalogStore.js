@@ -65,6 +65,44 @@ function queueHomeCatalogSettingsSync(profileId = null) {
     });
 }
 
+// Read-path memo, keyed on the raw localStorage string.
+//
+// `store.get()` is not a cheap accessor: it parses the envelope, re-normalizes
+// every profile, stringifies the result twice to decide whether to write the
+// normalized value back, and finally deep-clones the profile value. With an
+// addon that declares 605 catalogs the `order` array alone dominates that work,
+// and `sortAndFilterRows` used to pay for it twice per call, once per
+// progressively painted row. The raw string is the exact identity of what is
+// stored, so memoizing against it is safe: any write through this module (or any
+// other tab) changes the string and invalidates the entry. Same pattern already
+// proven in watchProgressStore.
+let prefsCacheRaw = null;
+let prefsCacheProfileId = null;
+let prefsCacheValue = null;
+
+function readRawPrefs() {
+  try {
+    return localStorage.getItem(KEY);
+  } catch (_) {
+    return null;
+  }
+}
+
+function readCachedPrefs(profileId = null) {
+  const raw = readRawPrefs();
+  const normalizedProfileId = String(profileId ?? "");
+  if (prefsCacheValue && raw === prefsCacheRaw && normalizedProfileId === prefsCacheProfileId) {
+    return prefsCacheValue;
+  }
+  const value = normalizeHomeCatalogPrefs(store.getForProfile(profileId) || {});
+  // Re-read: getForProfile can seed a missing profile and write, which changes
+  // the raw string that this entry has to be keyed on.
+  prefsCacheRaw = readRawPrefs();
+  prefsCacheProfileId = normalizedProfileId;
+  prefsCacheValue = value;
+  return value;
+}
+
 export const HomeCatalogStore = {
   getForProfile(profileId) {
     return store.getForProfile(profileId);
@@ -118,15 +156,24 @@ export const HomeCatalogStore = {
   },
 
   ensureOrderKeys(keys) {
-    const current = this.get();
+    return this.ensureOrderKeysWithPrefs(keys).orderedKeys;
+  },
+
+  // Single-read variant of ensureOrderKeys. The caller in sortAndFilterRows
+  // needs both the ordered keys and the disabled/customTitles maps, and reading
+  // them through two separate accessors parsed and normalized the whole
+  // (605-key) envelope twice on every row paint.
+  ensureOrderKeysWithPrefs(keys, { profileId = null } = {}) {
+    const current = readCachedPrefs(profileId);
     const saved = unique(current.order || []).filter(Boolean);
     const savedSet = new Set(saved);
     const missing = unique(keys || []).filter((key) => key && !savedSet.has(key));
     const next = [...saved, ...missing];
     if (!sameArray(current.order, next)) {
-      this.set({ order: next }, { silentSync: true });
+      this.setForProfile(profileId, { order: next }, { silentSync: true });
+      return { orderedKeys: next, prefs: readCachedPrefs(profileId) };
     }
-    return next;
+    return { orderedKeys: next, prefs: current };
   },
 
   reset(options = {}) {

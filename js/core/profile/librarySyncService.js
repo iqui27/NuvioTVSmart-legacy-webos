@@ -10,11 +10,15 @@ const TABLE = "tv_addons";
 // visible sync state on TV.
 let lastPullStatus = { state: "idle", count: 0, error: null, at: 0 };
 
-function recordPullStatus(state, { count = 0, error = null } = {}) {
+function recordPullStatus(state, { count = 0, error = null, keptLocal = false } = {}) {
   lastPullStatus = {
     state,
     count: Number(count) || 0,
     error: error ? String(error.message || error) : null,
+    // True when the pull succeeded but returned nothing and the local addon list
+    // was preserved instead of being wiped. Surfaced so the Addons screen can
+    // tell "synced" apart from "kept what you had because the cloud said none".
+    keptLocal: Boolean(keptLocal),
     at: Date.now()
   };
 }
@@ -110,12 +114,77 @@ function extractAddonEntries(rows = []) {
     .filter((entry) => entry.url);
 }
 
+/**
+ * Applies a cloud addon list locally, or declines to.
+ *
+ * Returns null when the pull came back empty while addons exist locally. A read
+ * that returns no rows is indistinguishable from "the table is briefly
+ * unavailable", and the old behaviour was to treat it as "the user deleted
+ * everything": setAddonOrder([]) plus two replace:true writes wiped
+ * installedAddonUrls, installedAddonDisplayNames and installedAddonEnabledStates
+ * for the profile, with no error and no confirmation. Observed on a real device
+ * while the backend was under load — the addon list vanished and the app fell
+ * back to the onboarding screen.
+ *
+ * A sync read that returns nothing must never be able to destroy local state.
+ * The local list is left alone and the next successful pull (or an explicit
+ * removal, which goes through removeAddon) reconciles it.
+ */
 function applyPulledAddons(rows = []) {
   const entries = extractAddonEntries(rows);
-  const urls = entries.map((entry) => entry.url).filter(Boolean);
+  if (!entries.length) {
+    const localUrls = addonRepository.getInstalledAddonUrls();
+    if (localUrls.length) {
+      console.warn(
+        "Addon sync pull returned no rows while addons exist locally; keeping the local list",
+        { localCount: localUrls.length }
+      );
+      return null;
+    }
+  }
+  const cloudUrls = entries.map((entry) => entry.url).filter(Boolean);
+
+  // Union rather than replace, cloud order first.
+  //
+  // The startup cycle pulls before it pushes (startupSyncService.requestSyncNow
+  // with pushAfterPull), so a replace here deletes any addon that exists only on
+  // this device and the following push then propagates the deletion. An addon
+  // installed while the backend was unreachable — which is exactly when the push
+  // that would have uploaded it failed — could never survive the next boot.
+  //
+  // The tradeoff is deliberate and worth stating: a removal performed on another
+  // device no longer wins against this device's local copy, so it can reappear
+  // here until removed locally too. Losing an addon the user installed is the
+  // worse failure, and local removal still works and still pushes.
+  const cloudSet = new Set(cloudUrls.map((url) => addonRepository.canonicalizeUrl(url)));
+  const localOnlyUrls = addonRepository
+    .getInstalledAddonUrls()
+    .filter((url) => !cloudSet.has(addonRepository.canonicalizeUrl(url)));
+  if (localOnlyUrls.length) {
+    console.info("Addon sync keeping addons present only on this device", {
+      count: localOnlyUrls.length
+    });
+  }
+  const urls = [...cloudUrls, ...localOnlyUrls];
+
   const currentNames = addonRepository.getAddonDisplayNameOverrides();
+  const currentEnabled = addonRepository.getAddonEnabledStates();
+  // The name and enabled writes below are replace:true, so the local-only
+  // addons have to be represented here too or they would keep their place in
+  // the list while losing their display name and enabled flag.
+  const localOnlyEntries = localOnlyUrls.map((url) => {
+    const cleanUrl = addonRepository.canonicalizeUrl(url);
+    return {
+      url,
+      displayName: currentNames[cleanUrl] || "",
+      name: currentNames[cleanUrl] || "",
+      enabled: currentEnabled[cleanUrl] !== false
+    };
+  });
+  const mergedEntries = [...entries, ...localOnlyEntries];
+
   addonRepository.setAddonDisplayNameOverrides(
-    entries.map((entry) => {
+    mergedEntries.map((entry) => {
       const cleanUrl = addonRepository.canonicalizeUrl(entry.url);
       return {
         url: entry.url,
@@ -124,7 +193,7 @@ function applyPulledAddons(rows = []) {
     }),
     { replace: true }
   );
-  addonRepository.setAddonEnabledStates(entries, { replace: true });
+  addonRepository.setAddonEnabledStates(mergedEntries, { replace: true });
   return urls;
 }
 
@@ -152,6 +221,10 @@ export const LibrarySyncService = {
           true
         );
         const addonUrls = applyPulledAddons(addonRows);
+        if (addonUrls === null) {
+          recordPullStatus("ok", { count: localUrls.length, keptLocal: true });
+          return localUrls;
+        }
         await addonRepository.setAddonOrder(addonUrls, { silent: true });
         recordPullStatus("ok", { count: addonUrls.length });
         return addonUrls;
@@ -171,6 +244,10 @@ export const LibrarySyncService = {
           true
         );
         const urls = applyPulledAddons(rows);
+        if (urls === null) {
+          recordPullStatus("ok", { count: localUrls.length, keptLocal: true });
+          return localUrls;
+        }
         await addonRepository.setAddonOrder(urls, { silent: true });
         recordPullStatus("ok", { count: urls.length });
         return urls;
@@ -190,6 +267,10 @@ export const LibrarySyncService = {
             true
           );
           const urls = applyPulledAddons(rpcRows);
+          if (urls === null) {
+            recordPullStatus("ok", { count: localUrls.length, keptLocal: true });
+            return localUrls;
+          }
           await addonRepository.setAddonOrder(urls, { silent: true });
           recordPullStatus("ok", { count: urls.length });
           return urls;

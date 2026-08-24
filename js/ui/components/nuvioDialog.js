@@ -1,3 +1,4 @@
+import { focusWithoutScroll } from "../../platform/legacyDom.js";
 /**
  * NuvioDialog — reusable dialog component matching ATV NuvioDialog.kt
  *
@@ -253,7 +254,7 @@ export class NuvioDialog {
     this._buttonEls.forEach((el, idx) => {
       el.classList.toggle("focused", idx === clamped);
     });
-    this._buttonEls[clamped]?.focus({ preventScroll: true });
+    focusWithoutScroll(this._buttonEls[clamped]);
   }
 
   _onKey(e) {

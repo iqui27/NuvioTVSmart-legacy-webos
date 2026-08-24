@@ -20,6 +20,7 @@ import {
   scrollSettingsContentItem,
   settingsScrollIndicatorMarkup
 } from "../settings/settingsScreen.js";
+import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 
 const TABS = ["supporters", "sponsors", "contributors"];
 const DEFAULT_TAB = "contributors";
@@ -117,7 +118,7 @@ function contributorSupportLink(login) {
 function focusNode(node) {
   if (!node || typeof node.focus !== "function") return;
   try {
-    node.focus({ preventScroll: true });
+    focusWithoutScroll(node);
   } catch (_) {
     node.focus();
   }
@@ -648,7 +649,7 @@ export const SupportersContributorsScreen = {
       if (!content) return;
       const size = canvas.classList.contains("supporters-dialog-qr") ? 376 : 440;
       try {
-        QrCodeGenerator.generate(canvas, content, size);
+        void QrCodeGenerator.generate(canvas, content, size);
       } catch (error) {
         console.warn("Failed to generate supporters QR", error);
       }

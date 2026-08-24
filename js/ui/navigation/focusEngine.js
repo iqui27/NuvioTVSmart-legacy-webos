@@ -1,5 +1,6 @@
 import { Router } from "./router.js";
 import { Platform } from "../../platform/index.js";
+import { focusWithoutScroll } from "../../platform/legacyDom.js";
 
 function buildNormalizedEvent(event) {
   const normalizedKey = Platform.normalizeKey(event);
@@ -240,13 +241,7 @@ export const FocusEngine = {
       }
     });
     target.classList.add("focused");
-    try {
-      target.focus({ preventScroll: true });
-    } catch (_) {
-      try {
-        target.focus();
-      } catch (_) {}
-    }
+    focusWithoutScroll(target);
     currentScreen?.onPointerFocus?.(target, event);
     this.lastPointerFocusTarget = target;
     return true;

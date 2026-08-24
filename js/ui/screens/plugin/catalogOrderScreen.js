@@ -9,6 +9,7 @@ import {
 } from "../../../core/addons/homeCatalogs.js";
 import { Platform } from "../../../platform/index.js";
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
+import { renderInlineIcon } from "../../components/inlineIcons.js";
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -168,12 +169,12 @@ export const CatalogOrderScreen = {
             <button type="button"
                     class="catalog-order-action ${item.canMoveUp ? "catalog-order-focusable" : "is-disabled"}"
                     ${item.canMoveUp ? `data-row="${index}" data-col="0" data-action="up" data-key="${escapeHtml(item.key)}" tabindex="-1"` : 'tabindex="-1" aria-disabled="true"'}>
-              <span class="material-icons" aria-hidden="true">arrow_upward</span>
+              ${renderInlineIcon("arrow_upward")}
             </button>
             <button type="button"
                     class="catalog-order-action ${item.canMoveDown ? "catalog-order-focusable" : "is-disabled"}"
                     ${item.canMoveDown ? `data-row="${index}" data-col="1" data-action="down" data-key="${escapeHtml(item.key)}" tabindex="-1"` : 'tabindex="-1" aria-disabled="true"'}>
-              <span class="material-icons" aria-hidden="true">arrow_downward</span>
+              ${renderInlineIcon("arrow_downward")}
             </button>
             <button type="button"
                     class="catalog-order-action catalog-order-focusable catalog-order-toggle${item.isDisabled ? " is-disabled-state" : ""}"

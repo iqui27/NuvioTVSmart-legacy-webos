@@ -46,4 +46,23 @@ export const HOME_BACKGROUND_RENDER_DELAY_MS = 120;
 export const HOME_BACKGROUND_RENDER_DELAY_LEGACY_MS = 180;
 export const HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS = 400;
 export const HOME_RETURN_FOCUS_STATE_KEY = "homeReturnFocusState";
-export const HOME_PERF_DEBUG = Boolean(globalThis.__NUVIO_DEBUG_HOME_PERF__);
+// Read at call time, not at module-evaluation time. As a `const` snapshot this
+// was effectively unusable: by the time you can reach a console the bundle has
+// long since captured `false`, so flipping the global did nothing and the
+// instrumentation could only be enabled by rebuilding. Now it can be turned on
+// mid-session from the debugger, which is the only way to attribute a render
+// that happens while browsing.
+export function isHomePerfDebugEnabled() {
+  return Boolean(globalThis.__NUVIO_DEBUG_HOME_PERF__);
+}
+
+// Ceiling on how many catalog rows are mounted at once. Only per-row item counts
+// were capped before, so a large addon set had no bound on DOM size at all —
+// measured 3363 nodes and 926 <img> after scrolling ten rows on a C9, still
+// climbing. This is insurance, not the fix: deferred rows emit `<img data-src>`
+// with no fetch and no decode, so their cost is structural, and the real win is
+// not rebuilding the whole screen on every update. If these limits are never
+// reached in practice the constants are inert.
+export const HOME_MAX_ROWS_DEFAULT = 40;
+export const HOME_MAX_ROWS_CONSTRAINED = 24;
+export const HOME_MAX_ROWS_LEGACY_TV = 16;

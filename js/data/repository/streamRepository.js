@@ -7,10 +7,14 @@ import { TmdbService } from "../../core/tmdb/tmdbService.js";
 import { LocalDebridAvailabilityService } from "../../core/debrid/localDebridAvailabilityService.js";
 import { DebridStreamPresentation } from "../../core/debrid/directDebridStreamPresentation.js";
 
+const STREAM_SOURCE_REQUEST_TIMEOUT_MS = 60_000;
+
 class StreamRepository {
   async getStreamsFromAddon(baseUrl, type, videoId) {
     const url = this.buildStreamUrl(baseUrl, type, videoId);
-    const result = await safeApiCall(() => StreamApi.getStreams(url));
+    const result = await safeApiCall(() =>
+      StreamApi.getStreams(url, { timeoutMs: STREAM_SOURCE_REQUEST_TIMEOUT_MS })
+    );
     if (result.status !== "success") {
       return result;
     }
@@ -53,7 +57,7 @@ class StreamRepository {
       }
     };
 
-    const prepareDebridGroup = async (group) => {
+    const prepareDebridGroup = async (group, shouldNotify = null) => {
       const checkingGroup =
         DebridStreamPresentation.apply(LocalDebridAvailabilityService.markChecking([group]))[0] ||
         group;
@@ -61,21 +65,23 @@ class StreamRepository {
         (await LocalDebridAvailabilityService.annotateCachedAvailability([checkingGroup]))[0] ||
         checkingGroup;
       const presentedGroup = DebridStreamPresentation.apply([checkedGroup])[0] || checkedGroup;
-      notifyChunk(presentedGroup);
+      if (typeof shouldNotify !== "function" || shouldNotify()) {
+        notifyChunk(presentedGroup);
+      }
       return presentedGroup;
     };
 
     const addonTasks = installedAddons.map(async (addon) => {
       try {
-        // Secondary/aggregator catalogs sometimes expose a channel row while
-        // the original addon owns the ID under `tv`. Exact type remains the
-        // default; an explicit, unambiguous idPrefix may recover the owner type.
+        // Match Android's stream capability filter: an addon is eligible only
+        // when its stream resource supports the requested type and ID prefix.
+        // Do not infer a different request type from an ID prefix here; Android
+        // deliberately does not make that fallback for stream requests.
         const streamRequestType = addonRepository.resolveResourceRequestType(
           addon,
           "stream",
           type,
-          videoId,
-          { allowIdTypeFallback: true }
+          videoId
         );
         const metaRequestType = addonRepository.resolveResourceRequestType(
           addon,
@@ -168,12 +174,16 @@ class StreamRepository {
       }
     });
 
+    let acceptPluginChunks = true;
     const pluginTask = (async () => {
       try {
         const pluginStreams = await this.getPluginStreams(type, videoId, options);
         const preparedPluginStreams = [];
         for (const group of pluginStreams) {
-          preparedPluginStreams.push(await prepareDebridGroup(group));
+          if (!acceptPluginChunks) {
+            return [];
+          }
+          preparedPluginStreams.push(await prepareDebridGroup(group, () => acceptPluginChunks));
         }
         return preparedPluginStreams;
       } catch (error) {
@@ -182,13 +192,29 @@ class StreamRepository {
       }
     })();
 
-    const results = await Promise.all(addonTasks);
-    const addonsWithStreams = results
+    // Start the plugin deadline before waiting for addon requests so a slow
+    // plugin cannot keep the whole source load open beyond the same budget.
+    let pluginTimeoutId = 0;
+    const pluginTimeout = new Promise((resolve) => {
+      pluginTimeoutId = setTimeout(() => {
+        acceptPluginChunks = false;
+        resolve([]);
+      }, STREAM_SOURCE_REQUEST_TIMEOUT_MS);
+    });
+    const pluginStreamsPromise = Promise.race([pluginTask, pluginTimeout]);
+
+    const settledResults = await Promise.allSettled(addonTasks);
+    const addonsWithStreams = settledResults
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => result.value)
       .filter(Boolean)
       .sort(
         (left, right) => Number(left.addonOrderIndex || 0) - Number(right.addonOrderIndex || 0)
       );
-    const pluginStreams = await pluginTask;
+    const pluginStreams = await pluginStreamsPromise;
+    if (pluginTimeoutId) {
+      clearTimeout(pluginTimeoutId);
+    }
     return { status: "success", data: [...addonsWithStreams, ...pluginStreams] };
   }
 
@@ -303,7 +329,9 @@ class StreamRepository {
 
     for (const metaId of candidateMetaIds) {
       const url = this.buildMetaUrl(addon.baseUrl, type, metaId);
-      const result = await safeApiCall(() => MetaApi.getMeta(url));
+      const result = await safeApiCall(() =>
+        MetaApi.getMeta(url, { timeoutMs: STREAM_SOURCE_REQUEST_TIMEOUT_MS })
+      );
 
       if (result.status !== "success") {
         continue;

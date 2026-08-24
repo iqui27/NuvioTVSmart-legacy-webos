@@ -1,11 +1,17 @@
 var http = require("http");
 var https = require("https");
 var zlib = require("zlib");
+var URL = require("./legacyUrl").URL;
 
 var HEADER_PROBE_BYTES = 2 * 1024 * 1024;
 var CUES_PROBE_BYTES = 64 * 1024;
 var MAX_CUES_BYTES = 8 * 1024 * 1024;
-var MAX_CLUSTER_BYTES = 20 * 1024 * 1024;
+// Cluster reads are range requests against the same media server that is
+// feeding the <video> element. At 20 MiB each with three in flight this could
+// put ~60 MiB of concurrent reads in front of the video's own sequential
+// requests, and it re-runs on every seek and at every window boundary. A
+// subtitle window never needs a whole 20 MiB cluster.
+var MAX_CLUSTER_BYTES = 6 * 1024 * 1024;
 var MAX_WINDOW_BYTES = 3 * 1024 * 1024;
 var MAX_BLOCK_BYTES = 1024 * 1024;
 var CUED_BLOCK_PROBE_BYTES = 64 * 1024;
@@ -15,9 +21,12 @@ var MAX_CLUSTER_HEADER_BYTES = 12;
 var MAX_REDIRECTS = 4;
 var REQUEST_TIMEOUT_MS = 15000;
 var METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
-var WINDOW_CACHE_TTL_MS = 5 * 60 * 1000;
+// Re-fetching a window costs megabytes off the media server, so keep windows as
+// long as the metadata that describes them and hold more of them: seeking back
+// and forth across a film should hit cache, not re-read the container.
+var WINDOW_CACHE_TTL_MS = METADATA_CACHE_TTL_MS;
 var MAX_METADATA_CACHE_ENTRIES = 6;
-var MAX_WINDOW_CACHE_ENTRIES = 12;
+var MAX_WINDOW_CACHE_ENTRIES = 32;
 var WINDOW_BUCKET_SECONDS = 90;
 var WINDOW_END_QUANTUM_SECONDS = 30;
 var MIN_WINDOW_SECONDS = 120;
@@ -27,8 +36,10 @@ var MAX_TEXT_ASS_BODY_BYTES = 512 * 1024;
 var MAX_TEXT_CODEC_PRIVATE_BYTES = 256 * 1024;
 var DEFAULT_TEXT_CUE_DURATION_MS = 5000;
 var MAX_TEXT_CUE_DURATION_MS = 30000;
-var MAX_CONCURRENT_CLUSTER_REQUESTS = 3;
-var MAX_CONCURRENT_CUED_BLOCK_REQUESTS = 6;
+// Serialised on purpose: parallel subtitle reads only make the video's own
+// reads wait, and the subtitle is never the thing the user is waiting on.
+var MAX_CONCURRENT_CLUSTER_REQUESTS = 1;
+var MAX_CONCURRENT_CUED_BLOCK_REQUESTS = 2;
 var PGS_SYNC_SCAN_BATCH_CUES = 8;
 var PGS_MAX_SYNC_SCAN_CUES = 96;
 var PGS_MAX_SYNC_LOOKBACK_MS = 15 * 60 * 1000;

@@ -34,6 +34,7 @@ import {
   setLegacySidebarExpanded
 } from "../../components/sidebarNavigation.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
+import { scrollIntoNearestView } from "../../../platform/legacyDom.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const PICKER_MENU_EXIT_MS = 160;
@@ -75,21 +76,6 @@ function selectorValue(value) {
     return CSS.escape(raw);
   }
   return raw.replace(/["\\]/g, "\\$&");
-}
-
-function scrollIntoNearestView(node) {
-  if (!node || typeof node.scrollIntoView !== "function") {
-    return;
-  }
-  try {
-    node.scrollIntoView({
-      behavior: "auto",
-      block: "nearest",
-      inline: "nearest"
-    });
-  } catch (_) {
-    node.scrollIntoView();
-  }
 }
 
 function findNearestNodeByCenterX(referenceNode, nodes = []) {

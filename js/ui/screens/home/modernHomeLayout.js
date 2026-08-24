@@ -53,76 +53,38 @@ export function renderModernHomeLayout({
 } = {}) {
   const catalogSeeAllMap = new Map();
   const sectionsMarkup = [];
+  // Kept alongside the joined markup so render() can seed
+  // homeRowMarkupCache; without it the first reconcile after a full render sees
+  // no cached markup for any row and replaces every one of them.
+  const sections = [];
 
   rows.forEach((rowData, rowIndex) => {
-    const isCollectionRow = rowData?.rowKind === "collection";
-    const items = Array.isArray(rowData?.result?.data?.items) ? rowData.result.data.items : [];
-    const isLoading = rowData?.result?.status === "loading";
-    const rowItems = items.length ? items : rowData.loadingItems || [];
-    if (!rowItems.length) {
+    const section = renderModernRowSection(rowData, rowIndex, {
+      rowItemLimit,
+      focusedRowKey,
+      focusedItemIndex,
+      expandFocusedPoster,
+      showPosterLabels,
+      showCatalogTypeSuffix,
+      preferLandscapePosters,
+      shouldDeferRowImages,
+      watchedTitleIds,
+      createPosterCardMarkup,
+      formatCatalogRowTitle,
+      escapeHtml
+    });
+    if (!section) {
       return;
     }
-
-    const rowKey = String(rowData?.homeCatalogKey || buildModernRowKey(rowData));
-    const seeAllId = `${rowData.addonId || "addon"}_${rowData.catalogId || "catalog"}_${rowData.type || "movie"}`;
-    if (!isLoading && !isCollectionRow) {
-      catalogSeeAllMap.set(seeAllId, {
-        addonBaseUrl: rowData.addonBaseUrl || "",
-        addonId: rowData.addonId || "",
-        addonName: rowData.addonName || "",
-        catalogId: rowData.catalogId || "",
-        catalogName: rowData.catalogName || "",
-        type: rowData.type || "movie",
-        initialItems: items
-      });
+    if (section.seeAllEntry) {
+      catalogSeeAllMap.set(section.seeAllId, section.seeAllEntry);
     }
-
-    const maxItems = Math.max(1, Number(rowItemLimit || 15));
-    const focusedItemLimit =
-      focusedRowKey === rowKey && Number.isFinite(focusedItemIndex)
-        ? Math.max(0, Number(focusedItemIndex)) + 1
-        : 0;
-    const visibleItems = isCollectionRow
-      ? rowItems
-      : rowItems.slice(0, Math.max(maxItems, focusedItemLimit));
-    const rowTitle = isCollectionRow
-      ? String(rowData.collectionTitle || rowData.collection?.title || "Collection")
-      : formatCatalogRowTitle(rowData.catalogName, rowData.type, showCatalogTypeSuffix);
-    const deferRowImages =
-      typeof shouldDeferRowImages === "function"
-        ? shouldDeferRowImages(rowIndex, rowKey, focusedRowKey)
-        : false;
-    const cardsMarkup = visibleItems
-      .map((item, itemIndex) =>
-        createPosterCardMarkup(
-          item,
-          rowIndex,
-          itemIndex,
-          rowData.type,
-          rowData,
-          showPosterLabels,
-          "modern",
-          expandFocusedPoster && focusedRowKey === rowKey && focusedItemIndex === itemIndex,
-          preferLandscapePosters,
-          deferRowImages,
-          watchedTitleIds
-        )
-      )
-      .join("");
-
-    sectionsMarkup.push(`
-      <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}">
-        <div class="home-row-head">
-          <h2 class="home-row-title">${escapeHtml(rowTitle)}</h2>
-        </div>
-        <div class="home-track" data-track-row-key="${escapeHtml(rowKey)}">
-          ${cardsMarkup}
-        </div>
-      </section>
-    `);
+    sectionsMarkup.push(section.markup);
+    sections.push(section);
   });
 
   return {
+    sections,
     catalogSeeAllMap,
     markup: `
       <section class="home-modern-stage">
@@ -323,4 +285,117 @@ function renderModernHeroSkeletonMarkup() {
       </article>
     </section>
   `;
+}
+
+/**
+ * Builds one catalog row's markup.
+ *
+ * Extracted verbatim from the rows.forEach above so that rendering a single row
+ * on its own produces byte-identical markup to what a full render would have
+ * produced for it. That equivalence is what makes keyed row reconciliation safe:
+ * the reconciler compares generated markup per row to decide whether a live
+ * section can be left untouched, and any drift between the two paths would show
+ * up as rows being needlessly replaced — or worse, not replaced when they should.
+ *
+ * Returns null for a row the layout skips (no items and no loading placeholders).
+ */
+export function renderModernRowSection(rowData, rowIndex, options = {}) {
+  const {
+    rowItemLimit,
+    focusedRowKey = "",
+    focusedItemIndex = -1,
+    expandFocusedPoster = false,
+    showPosterLabels = true,
+    showCatalogTypeSuffix = true,
+    preferLandscapePosters = false,
+    shouldDeferRowImages = null,
+    watchedTitleIds = null,
+    createPosterCardMarkup,
+    formatCatalogRowTitle,
+    escapeHtml
+  } = options;
+
+  const isCollectionRow = rowData?.rowKind === "collection";
+  const items = Array.isArray(rowData?.result?.data?.items) ? rowData.result.data.items : [];
+  const isLoading = rowData?.result?.status === "loading";
+  const rowItems = items.length ? items : rowData.loadingItems || [];
+  if (!rowItems.length) {
+    return null;
+  }
+
+  const rowKey = getHomeRowKey(rowData);
+  const seeAllId = `${rowData.addonId || "addon"}_${rowData.catalogId || "catalog"}_${rowData.type || "movie"}`;
+  const seeAllEntry =
+    !isLoading && !isCollectionRow
+      ? {
+          addonBaseUrl: rowData.addonBaseUrl || "",
+          addonId: rowData.addonId || "",
+          addonName: rowData.addonName || "",
+          catalogId: rowData.catalogId || "",
+          catalogName: rowData.catalogName || "",
+          type: rowData.type || "movie",
+          initialItems: items
+        }
+      : null;
+
+  const maxItems = Math.max(1, Number(rowItemLimit || 15));
+  const focusedItemLimit =
+    focusedRowKey === rowKey && Number.isFinite(focusedItemIndex)
+      ? Math.max(0, Number(focusedItemIndex)) + 1
+      : 0;
+  const visibleItems = isCollectionRow
+    ? rowItems
+    : rowItems.slice(0, Math.max(maxItems, focusedItemLimit));
+  const rowTitle = isCollectionRow
+    ? String(rowData.collectionTitle || rowData.collection?.title || "Collection")
+    : formatCatalogRowTitle(rowData.catalogName, rowData.type, showCatalogTypeSuffix);
+  const deferRowImages =
+    typeof shouldDeferRowImages === "function"
+      ? shouldDeferRowImages(rowIndex, rowKey, focusedRowKey)
+      : false;
+  const cardsMarkup = visibleItems
+    .map((item, itemIndex) =>
+      createPosterCardMarkup(
+        item,
+        rowIndex,
+        itemIndex,
+        rowData.type,
+        rowData,
+        showPosterLabels,
+        "modern",
+        expandFocusedPoster && focusedRowKey === rowKey && focusedItemIndex === itemIndex,
+        preferLandscapePosters,
+        deferRowImages,
+        watchedTitleIds
+      )
+    )
+    .join("");
+
+  return {
+    rowKey,
+    seeAllId,
+    seeAllEntry,
+    markup: `
+      <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}">
+        <div class="home-row-head">
+          <h2 class="home-row-title">${escapeHtml(rowTitle)}</h2>
+        </div>
+        <div class="home-track" data-track-row-key="${escapeHtml(rowKey)}">
+          ${cardsMarkup}
+        </div>
+      </section>
+    `
+  };
+}
+
+/**
+ * The single source of truth for a row's identity.
+ *
+ * setupModernTrackScrollPagination used to look rows up with
+ * `buildModernRowKey(row) === rowKey`, which silently missed every row whose DOM
+ * key came from `homeCatalogKey` — pagination was simply dead on those rows. The
+ * reconciler re-runs that setup far more often, so the two had to agree.
+ */
+export function getHomeRowKey(rowData) {
+  return String(rowData?.homeCatalogKey || buildModernRowKey(rowData));
 }

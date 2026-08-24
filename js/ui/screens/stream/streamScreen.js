@@ -1,4 +1,5 @@
 import { Router } from "../../navigation/router.js";
+import { renderStreamChipRow, streamIsMp4Container } from "../../components/streamBadgeChip.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { streamRepository } from "../../../data/repository/streamRepository.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
@@ -59,6 +60,7 @@ import {
   STREAM_VIRTUALIZATION_THRESHOLD
 } from "./streamVirtualizer.js";
 import { isStreamEmptyStateVisible } from "./streamEmptyState.js";
+import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 
 const STREAM_BADGE_LIMIT = 9;
 // Number of rows on each side of the focused source to keep badge-hydrated.
@@ -524,43 +526,60 @@ function getStreamDescriptionLines(stream = {}) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .filter((line) => !looksLikeReleaseFilename(line, stream))
     .slice(0, 12);
 }
 
-function renderImageBadgeChip(badge = {}) {
-  const imageUrl = normalizeAddonLogoUrl(badge.imageURL);
-  if (!imageUrl) {
-    return "";
+/**
+ * The release filename is deliberately kept in the addon's description template —
+ * it is where the container chip (MP4 / MKV) is derived from, and the trimmed name
+ * template no longer carries those tokens. But printing it on the card duplicates
+ * what the chips already say, in the least readable form available.
+ *
+ * So it is dropped from the DISPLAY only, by three tests in order of confidence:
+ *
+ *   1. It equals a filename the stream itself declares. Exact, no guessing.
+ *   2. It contains a media extension anywhere. Catches
+ *      `Noche de bodas 2 (2026) MP4 AVC x264][Castellano AAC 2.0].mp4`, which an
+ *      end-anchored test missed only because of the trailing bracket, and which a
+ *      no-spaces test missed because scene names sometimes keep spaces.
+ *   3. It is dot-separated scene notation: six or more dots and at most one space.
+ *      Catches `Ready.Or.Not.2.Here.I.Come.2026.2160P.WEB-DL.DV.HDR10+.MULTI.
+ *      Atmos.H264.MP4-BTM`, which carries no extension at all.
+ *
+ * The six-dot floor is what keeps real metadata safe: `3.45 GB · 4.26 Mbps` has
+ * two dots and several spaces, so it can never match.
+ */
+const MEDIA_EXTENSION_PATTERN = /\.(mkv|mp4|avi|m4v|mov|ts|m2ts|wmv|flv|webm)\b/i;
+
+function looksLikeReleaseFilename(line = "", stream = {}) {
+  const value = String(line).trim();
+  if (!value) {
+    return false;
   }
-  let displayImageUrl = getCachedAddonLogoDisplayUrl(imageUrl);
-  if (imageUrl && !displayImageUrl && !hasFailedAddonLogo(imageUrl)) {
-    requestAddonLogo(imageUrl);
-    if (Environment.isWebOS()) {
-      displayImageUrl = getCachedAddonLogoDisplayUrl(imageUrl);
-    }
+  const declared = [
+    stream?.behaviorHints?.filename,
+    stream?.raw?.behaviorHints?.filename,
+    stream?.raw?.filename,
+    stream?.filename
+  ].map((entry) => String(entry || "").trim());
+  if (declared.some((entry) => entry && entry === value)) {
+    return true;
   }
-  const backgroundColor = normalizeStreamBadgeChipColor(badge.tagColor);
-  const outlineColor = normalizeStreamBadgeChipColor(badge.borderColor);
-  const textColor = normalizeStreamBadgeChipColor(badge.textColor);
-  const filled =
-    String(badge.tagStyle || "")
-      .trim()
-      .toLowerCase() === "filled";
-  const fallbackImageUrl = Environment.isWebOS() ? "" : imageUrl;
-  const safeImageUrl = displayImageUrl || fallbackImageUrl;
-  if (!safeImageUrl) {
-    return "";
+  if (MEDIA_EXTENSION_PATTERN.test(value)) {
+    return true;
   }
-  const style = [
-    filled && backgroundColor ? `background:${backgroundColor};` : "",
-    outlineColor ? `border-color:${outlineColor};` : "",
-    textColor ? `color:${textColor};` : ""
-  ].join("");
-  return `
-    <span class="stream-route-stream-badge image${filled ? " filled" : ""}"${style ? ` style="${escapeHtml(style)}"` : ""}>
-      <img src="${escapeHtml(safeImageUrl)}" alt="${escapeHtml(badge.name || "")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
-    </span>
-  `;
+  const dots = (value.match(/\./g) || []).length;
+  const spaces = (value.match(/\s/g) || []).length;
+  return dots >= 6 && spaces <= 1;
+}
+
+function renderImageBadgeChip() {
+  // The imported badge rules no longer drive the chips: their labels produced
+  // near-duplicates (HDR next to HDR10 on the same card, two rules matching one
+  // trait) and addons without a customised formatter produced none at all. The
+  // tokens are parsed from the release text in streamBadgeChip.js instead.
+  return "";
 }
 
 function renderImportedStreamBadgeChipContents(
@@ -570,17 +589,17 @@ function renderImportedStreamBadgeChipContents(
 ) {
   const sizeBytes = stream.behaviorHints?.videoSize;
   const chips = [];
-  badges.slice(0, STREAM_BADGE_LIMIT).forEach((badge) => {
-    const chip = renderImageBadgeChip(badge);
-    if (chip) {
-      chips.push(chip);
-    }
-  });
-  if (showFileSizeBadges && sizeBytes != null) {
-    chips.push(
-      `<span class="stream-route-stream-badge size">${escapeHtml(t("streams_size", [formatBytes(sizeBytes)], `SIZE ${formatBytes(sizeBytes)}`))}</span>`
-    );
+  const parsedChips = renderStreamChipRow(stream, escapeHtml);
+  if (parsedChips) {
+    chips.push(parsedChips);
   }
+  // The size chip is gone. It repeated the first description line, in a different
+  // unit (the chip reads behaviorHints.videoSize as GiB while the addon reports
+  // GB, so 17.4 GB and 16.2 GB were the same file), and it was the widest chip in
+  // a row that has to fit on one line. `showFileSizeBadges` is left in place for
+  // the settings screen but no longer draws a chip here.
+  void showFileSizeBadges;
+  void sizeBytes;
   return chips.join("");
 }
 
@@ -686,6 +705,14 @@ function sortStreamsByAddonOrder(streams = [], sourceChips = []) {
   return (streams || [])
     .map((stream, index) => ({ stream, index }))
     .sort((left, right) => {
+      // MP4 first, above the addon grouping. This TV outputs Dolby Vision only
+      // from an MP4 container — the same release in MKV plays as its HDR10 base
+      // layer — so the container decides more than the addon does.
+      const leftMp4 = streamIsMp4Container(left.stream) ? 0 : 1;
+      const rightMp4 = streamIsMp4Container(right.stream) ? 0 : 1;
+      if (leftMp4 !== rightMp4) {
+        return leftMp4 - rightMp4;
+      }
       const leftOrder = order.has(left.stream?.addonName)
         ? order.get(left.stream.addonName)
         : Number(left.stream?.addonOrderIndex ?? Number.MAX_SAFE_INTEGER);
@@ -2102,7 +2129,7 @@ export const StreamScreen = {
       const visible = isStreamEmptyStateVisible({
         filteredStreams: visibleStreams,
         isLoading: this.loading,
-        hasPendingSourceLoads: this.hasPendingSourceLoads(targetFilter)
+        hasPendingSourceLoads: this.hasPendingSourceLoads("all")
       });
       emptyState.hidden = !visible;
       emptyState.style.display = visible ? "" : "none";
@@ -2209,11 +2236,7 @@ export const StreamScreen = {
     }
     target.classList.add("focused");
     this.focusedElement = target;
-    try {
-      target.focus({ preventScroll: true });
-    } catch (_) {
-      target.focus();
-    }
+    focusWithoutScroll(target);
 
     const chipTrack = target.closest(".stream-route-chip-track");
     if (chipTrack) {
@@ -2938,7 +2961,7 @@ export const StreamScreen = {
 
   renderStableStreamLoadingRow() {
     return `
-      <div class="stream-route-card-row" data-stream-loading-row hidden>
+      <div class="stream-route-card-row" data-stream-loading-row hidden style="display:none">
         <div class="stream-route-card skeleton">
           <div class="stream-route-card-copy">
             <div class="stream-route-skeleton-line"></div>
@@ -2952,7 +2975,7 @@ export const StreamScreen = {
   },
 
   renderStableStreamEmptyState() {
-    return `<div class="stream-route-empty" data-stream-empty hidden>${escapeHtml(t("sources_no_streams", {}, "No streams found"))}</div>`;
+    return `<div class="stream-route-empty" data-stream-empty hidden style="display:none">${escapeHtml(t("sources_no_streams", {}, "No streams found"))}</div>`;
   },
 
   render() {
@@ -2997,6 +3020,9 @@ export const StreamScreen = {
     const filtered = this.getFilteredStreams();
     const allStreams = this.getFilteredStreams("all");
     const hasPendingForFilter = this.hasPendingSourceLoads();
+    // Keep the empty state global: a selected source can be empty while
+    // another compatible addon is still resolving and may provide streams.
+    const hasPendingForAllSources = this.hasPendingSourceLoads("all");
     const streamBadgesEnabled = DebridSettingsStore.get().streamBadgesEnabled !== false;
     const badgeSettings = StreamBadgeSettingsStore.snapshot();
     const showAddonLogo = badgeSettings.showAddonLogo === true;
@@ -3071,7 +3097,7 @@ export const StreamScreen = {
     } else if (filtered.length && showAddonLogo) {
       this.requestAddonLogoPrerender(filtered);
       body = this.renderLoadingCards(Math.min(3, filtered.length));
-    } else if (hasPendingForFilter) {
+    } else if (hasPendingForFilter || hasPendingForAllSources) {
       body = this.renderLoadingCards();
     } else if (this.error) {
       body = `<div class="stream-route-empty">${escapeHtml(this.error)}</div>`;

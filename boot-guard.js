@@ -374,7 +374,16 @@
       (palmInfo.platformVersionMajor
         ? String(palmInfo.platformVersionMajor) + "." + String(palmInfo.platformVersionMinor || 0)
         : "");
-    var platformVersion = palmInfo.sdkVersion || "";
+    // PalmSystem.deviceInfo has no sdkVersion; that field only comes from the
+    // webOSTV.js deviceInfo Luna round-trip. Fall back to the platformVersion
+    // fields PalmSystem does expose so the gate sees a real major on webOS 4.x.
+    var platformVersion =
+      palmInfo.sdkVersion ||
+      (palmInfo.platformVersionMajor
+        ? String(palmInfo.platformVersionMajor) + "." + String(palmInfo.platformVersionMinor || 0)
+        : "") ||
+      palmInfo.platformVersion ||
+      "";
     return {
       platform: "webos",
       platformVersion: platformVersion,

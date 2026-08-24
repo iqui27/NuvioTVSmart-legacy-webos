@@ -4,7 +4,6 @@ favicon.svg
 
 nuvio.env.js
 local.properties
-local.example.properties
 node_modules/
 *.ipk
 *.wgt
@@ -16,3 +15,16 @@ app.bundle.js
 ecosystem.config.cjs
 scripts/commit-build-poller.mjs
 .DS_Store
+
+# Gerado em todo build por writeSharedRegistry() em scripts/build.mjs; o proprio
+# cabecalho do arquivo diz "GENERATED FILE - do not edit". Um clone limpo nao precisa.
+js/runtime/generated/
+
+# Tarballs de comparacao com upstream, logs, estado de editor e de agente
+*.tgz
+*.tar.gz
+*.log
+.idea/
+.vscode/
+.claude/
+.agents/

@@ -18,6 +18,7 @@ import {
   bindSettingsScrollIndicators,
   scrollSettingsContentItem
 } from "../settings/settingsScreen.js";
+import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -41,7 +42,7 @@ function focusNode(node) {
     return;
   }
   try {
-    node.focus({ preventScroll: true });
+    focusWithoutScroll(node);
   } catch (_) {
     node.focus();
   }

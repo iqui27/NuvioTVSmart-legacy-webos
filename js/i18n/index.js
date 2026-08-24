@@ -508,6 +508,51 @@ function loadXmlFileXhr(url) {
   });
 }
 
+function loadJsonFileXhr(url) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.onload = () => {
+      // status 0 is returned for successful file:// loads in webOS
+      if (xhr.status !== 200 && xhr.status !== 0) {
+        reject(new Error(`XHR status ${xhr.status} for ${url}`));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(xhr.responseText);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          reject(new Error(`Unexpected locale bundle shape in ${url}`));
+          return;
+        }
+        resolve(parsed);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    xhr.onerror = () => reject(new Error(`XHR error for ${url}`));
+    xhr.send();
+  });
+}
+
+/**
+ * Locale bundles are precompiled at build time (scripts/i18nBundle.mjs) into one
+ * already-merged JSON per locale. Parsing 465 KB of XML through DOMParser and
+ * walking ~5,400 nodes used to happen before the router existed, which on a
+ * Chromium 53 TV is a visible chunk of startup. Returns null when no bundle is
+ * available so the caller can fall back to the XML path.
+ */
+async function loadLocaleBundle(locale) {
+  const candidates = [`res/i18n/${locale}.json`, `dist/res/i18n/${locale}.json`];
+  for (const candidate of candidates) {
+    try {
+      return await loadJsonFileXhr(candidate);
+    } catch (_) {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
 async function loadXmlFile(relativePath) {
   const candidates = [`res/${relativePath}`, `dist/res/${relativePath}`];
 
@@ -540,6 +585,12 @@ async function loadLocaleMessages(locale) {
   }
 
   const promise = (async () => {
+    // One fetch, one JSON.parse, already merged with the base locale.
+    const bundled = await loadLocaleBundle(locale);
+    if (bundled) {
+      return bundled;
+    }
+
     const base = await loadBaseMessages();
     if (locale === DEFAULT_LOCALE) {
       return { ...base };

@@ -6,6 +6,8 @@ import {
 import { Platform } from "../../../platform/index.js";
 import { Router } from "../../navigation/router.js";
 import { ScreenUtils } from "../../navigation/screen.js";
+import { focusWithoutScroll } from "../../../platform/legacyDom.js";
+import { renderInlineIcon } from "../../components/inlineIcons.js";
 
 function t(key, params = {}, fallback = key) {
   return I18n.t(key, params, { fallback });
@@ -38,7 +40,7 @@ function focusNode(node) {
     return;
   }
   try {
-    node.focus({ preventScroll: true });
+    focusWithoutScroll(node);
   } catch (_) {
     node.focus();
   }
@@ -114,7 +116,7 @@ export const ConsoleDebugScreen = {
     if (!events.length) {
       return `
         <div class="debug-console-empty">
-          <div class="debug-console-empty-icon material-icons" aria-hidden="true">terminal</div>
+          ${renderInlineIcon("terminal", "debug-console-empty-icon")}
           <div class="debug-console-empty-title">${escapeHtml(t("debug_console_empty_title", {}, "No warnings or errors"))}</div>
           <p class="debug-console-empty-copy">${escapeHtml(t("debug_console_empty_subtitle", {}, "Console warning/error events will appear here until the app is closed."))}</p>
         </div>
@@ -146,7 +148,7 @@ export const ConsoleDebugScreen = {
       <div class="debug-console-shell">
         <header class="debug-console-header">
           <button class="debug-console-back focusable" data-focus-key="back" data-action="back">
-            <span class="material-icons" aria-hidden="true">arrow_back</span>
+            ${renderInlineIcon("arrow_back")}
             <span>${escapeHtml(t("auth_qr_back", {}, "Back"))}</span>
           </button>
           <div class="debug-console-heading">

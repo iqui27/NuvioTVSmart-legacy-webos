@@ -37,6 +37,7 @@ import {
   buildSearchTargets,
   catalogSupportsExtra
 } from "./searchCatalogTargets.js";
+import { renderInlineIcon } from "../../components/inlineIcons.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const SEARCH_RESULTS_PER_ROW_DEFAULT = 18;
@@ -781,7 +782,7 @@ export const SearchScreen = {
       if (this.mode === "search") {
         return `
           <div class="search-empty-state search-empty-state-results">
-            <span class="search-empty-icon material-icons" aria-hidden="true">search</span>
+            ${renderInlineIcon("search", "search-empty-icon")}
             <h2>${escapeHtml(t("search_no_results_title", {}, "No Results"))}</h2>
             <p>${escapeHtml(t("search_no_results_subtitle", {}, "Try searching with different keywords"))}</p>
           </div>
@@ -789,7 +790,7 @@ export const SearchScreen = {
       }
       return `
         <div class="search-empty-state">
-          <span class="search-empty-icon material-icons" aria-hidden="true">search</span>
+          ${renderInlineIcon("search", "search-empty-icon")}
           <h2>${escapeHtml(t("search_start_title", {}, "Start Searching"))}</h2>
           <p>${escapeHtml(
             this.layoutPrefs?.discoverLocation === "in_search"
@@ -884,7 +885,7 @@ export const SearchScreen = {
               this.layoutPrefs?.discoverLocation === "in_search"
                 ? `
               <button class="search-discover-btn focusable" data-action="openDiscover">
-                <span class="search-action-icon material-icons" aria-hidden="true">explore</span>
+                ${renderInlineIcon("explore", "search-action-icon")}
               </button>
             `
                 : ""
@@ -896,7 +897,7 @@ export const SearchScreen = {
               data-action="openVoice"
               aria-label="Voice search"
             >
-              <span class="search-action-icon material-icons" aria-hidden="true">mic</span>
+              ${renderInlineIcon("mic", "search-action-icon")}
             </button>`
                 : ""
             }

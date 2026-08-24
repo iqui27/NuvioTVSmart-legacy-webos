@@ -30,6 +30,7 @@ import {
   requestJson as traktRequestJson,
   TraktAuthService
 } from "../../../data/repository/traktAuthService.js";
+import { toTraktImageUrl } from "../../../core/trakt/traktImageUrl.js";
 import { Environment } from "../../../platform/environment.js";
 import { Platform } from "../../../platform/index.js";
 import {
@@ -53,6 +54,7 @@ import {
   isWatchProgressInProgress,
   resolveWatchProgressResumePositionMs
 } from "../../../domain/model/watchProgress.js";
+import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const EPISODE_HOLD_DELAY_MS = 650;
@@ -78,6 +80,10 @@ const LOCAL_YOUTUBE_PROXY_URL = "youtube-proxy.html";
 
 function t(key, params = {}, fallback = key) {
   return I18n.t(key, params, { fallback });
+}
+
+function detailImageLoadingMode() {
+  return Environment.isTizen() || Environment.isWebOS() ? "eager" : "lazy";
 }
 
 // Returns the first value that is a non-negative integer (number or numeric
@@ -182,6 +188,7 @@ function toEpisodeEntry(video = {}) {
       video.imdb_score ??
       video.ratings?.imdb ??
       video.mdbListRatings?.imdb ??
+      video.rating ??
       null
   };
 }
@@ -190,10 +197,11 @@ function shouldSynthesizeAddonVideoEpisodes(contentType = "") {
   const normalizedType = String(contentType || "")
     .trim()
     .toLowerCase();
-  return (
-    normalizedType !== "" &&
-    !["movie", "film", "series", "tv", "show", "tvshow", "channel"].includes(normalizedType)
-  );
+  // Match Android TV: a non-empty videos array is enough to expose an
+  // episodic detail, and missing season/episode fields become S1E<n>.
+  // Keep movie/film/channel metadata non-episodic so live TV without videos
+  // continues through the direct `tv` stream path.
+  return normalizedType !== "" && !["movie", "film", "channel"].includes(normalizedType);
 }
 
 function sortEpisodeEntries(episodes = []) {
@@ -443,7 +451,7 @@ function extractCast(meta = {}) {
     if (raw.startsWith("/")) {
       return `https://image.tmdb.org/t/p/w300${raw}`;
     }
-    return raw;
+    return toTraktImageUrl(raw);
   };
   const normalizeCastValue = (value) =>
     String(value || "")
@@ -739,6 +747,47 @@ function resolveImdbRating(meta = {}) {
   return null;
 }
 
+// Ratings the addon supplied on meta.videos[].rating, in the same shape the
+// episode-ratings service returns. Merged under it, so the service still wins.
+function addonRatingsBySeason(episodes = []) {
+  const seasons = {};
+  episodes.forEach((episode) => {
+    const season = Number(episode?.season);
+    const number = Number(episode?.episode);
+    const normalizedRating = normalizeEpisodeImdbRating(episode?.imdbRating);
+    const rating = normalizedRating == null ? null : Number(normalizedRating.toFixed(1));
+    if (!Number.isFinite(season) || !Number.isFinite(number) || rating == null) {
+      return;
+    }
+    if (!Array.isArray(seasons[season])) {
+      seasons[season] = [];
+    }
+    seasons[season].push({ episode: number, rating });
+  });
+  Object.keys(seasons).forEach((season) => {
+    seasons[season].sort((left, right) => left.episode - right.episode);
+  });
+  return seasons;
+}
+
+function mergeSeasonRatings(addon = {}, service = {}) {
+  const merged = {};
+  new Set([...Object.keys(addon), ...Object.keys(service)]).forEach((season) => {
+    const byEpisode = new Map();
+    (addon[season] || []).forEach((entry) => byEpisode.set(Number(entry.episode), entry));
+    (service[season] || []).forEach((entry) => {
+      const episode = Number(entry?.episode);
+      const hasUsableRating = normalizeEpisodeImdbRating(entry?.rating) != null;
+      if (!hasUsableRating && byEpisode.has(episode)) {
+        return;
+      }
+      byEpisode.set(episode, entry);
+    });
+    merged[season] = [...byEpisode.values()].sort((l, r) => l.episode - r.episode);
+  });
+  return merged;
+}
+
 function resolveEpisodeImdbRating(episode = {}, seriesRatingsBySeason = {}) {
   const seasonRating = seriesRatingsBySeason?.[episode.season]?.find(
     (entry) => Number(entry?.episode || 0) === Number(episode.episode || 0)
@@ -915,14 +964,38 @@ function normalizePreviewItem(item = {}, fallbackType = "movie") {
 
 function bestTraktArtwork(images = {}, kind) {
   const candidates = images?.[kind];
+  const normalize = (value) => toTraktImageUrl(value);
   if (Array.isArray(candidates)) {
-    return candidates.find((entry) => typeof entry === "string" && entry) || "";
+    return (
+      candidates
+        .filter((entry) => typeof entry === "string" && entry.trim())
+        .map(normalize)
+        .find(Boolean) || ""
+    );
   }
-  if (typeof candidates === "string") return candidates;
+  if (typeof candidates === "string") return normalize(candidates);
   if (candidates && typeof candidates === "object") {
-    return candidates.full || candidates.medium || candidates.thumb || "";
+    return (
+      [candidates.full, candidates.medium, candidates.thumb].map(normalize).find(Boolean) || ""
+    );
   }
   return "";
+}
+
+function bestTraktLandscapeArtwork(images = {}) {
+  return (
+    ["thumb", "fanart", "banner", "poster"]
+      .map((kind) => bestTraktArtwork(images, kind))
+      .find(Boolean) || ""
+  );
+}
+
+function bestTraktBackdropArtwork(images = {}) {
+  return (
+    ["fanart", "banner", "thumb", "poster"]
+      .map((kind) => bestTraktArtwork(images, kind))
+      .find(Boolean) || ""
+  );
 }
 
 function traktRelatedPreview(media = {}, type = "movie") {
@@ -935,15 +1008,16 @@ function traktRelatedPreview(media = {}, type = "movie") {
         ? `trakt:${ids.trakt}`
         : "";
   if (!id || !(media.title || media.original_title)) return null;
-  const landscape = bestTraktArtwork(media.images, "fanart");
-  const poster = bestTraktArtwork(media.images, "poster");
+  const landscape = bestTraktLandscapeArtwork(media.images);
+  const backdrop = bestTraktBackdropArtwork(media.images);
   return normalizePreviewItem(
     {
       id,
       name: media.title || media.original_title,
       type,
-      poster: landscape || poster,
-      landscapePoster: landscape || poster,
+      poster: landscape,
+      background: backdrop,
+      landscapePoster: backdrop || landscape,
       releaseInfo: media.year == null ? "" : String(media.year)
     },
     type
@@ -1940,7 +2014,10 @@ export const MetaDetailsScreen = {
         return;
       }
       if (isSeriesDetailMeta(this.meta, this.episodes)) {
-        this.seriesRatingsBySeason = results[0] || {};
+        this.seriesRatingsBySeason = mergeSeasonRatings(
+          addonRatingsBySeason(this.episodes),
+          results[0] || {}
+        );
         if (this.meta?.ids?.trakt && results[1] instanceof Map) {
           this.enrichedWatchedState = results[1];
           this.buildEpisodeState(allProgressItems, allWatchedItems, this.enrichedWatchedState);
@@ -3636,21 +3713,31 @@ export const MetaDetailsScreen = {
     const className = kind === "movie" ? "movie-cast-track" : "series-cast-track";
     const cards = this.castItems
       .slice(0, 18)
-      .map(
-        (person) => `
+      .map((person) => {
+        const name = String(person.name || "").trim();
+        const initial = name.charAt(0).toUpperCase() || "?";
+        const photo = String(person.photo || "").trim();
+        return `
       <article class="movie-cast-card focusable series-cast-card"
                data-action="openCastDetail"
                data-cast-id="${person.tmdbId || ""}"
-               data-cast-key="${escapeHtml(String(person.tmdbId || `${person.name || ""}:${person.character || ""}`))}"
-               data-cast-name="${escapeHtml(person.name || "")}"
+               data-cast-key="${escapeHtml(String(person.tmdbId || `${name}:${person.character || ""}`))}"
+               data-cast-name="${escapeHtml(name)}"
                data-cast-role="${escapeHtml(person.character || "")}"
-               data-cast-photo="${escapeHtml(person.photo || "")}">
-        <div class="movie-cast-avatar"${person.photo ? ` style="background-image:url('${String(person.photo).replace(/'/g, "%27")}')"` : ""}></div>
-        <div class="movie-cast-name">${escapeHtml(person.name || "")}</div>
+               data-cast-photo="${escapeHtml(photo)}">
+        <div class="movie-cast-avatar">
+          <span class="movie-cast-avatar-fallback" aria-hidden="true">${escapeHtml(initial)}</span>
+          ${
+            photo
+              ? `<img class="movie-cast-avatar-image" src="${escapeAttribute(photo)}" alt="${escapeAttribute(name || "Cast")}" loading="${detailImageLoadingMode()}" decoding="async" onerror="this.hidden=true" />`
+              : ""
+          }
+        </div>
+        <div class="movie-cast-name">${escapeHtml(name)}</div>
         <div class="movie-cast-role">${escapeHtml(person.character || "")}</div>
       </article>
-    `
-      )
+    `;
+      })
       .join("");
     return `<div class="${className}" data-scroll-key="cast:${kind}">${cards}</div>`;
   },
@@ -5569,7 +5656,7 @@ export const MetaDetailsScreen = {
         <div class="detail-morelike-poster-wrap">
           ${
             primaryImage
-              ? `<img class="detail-morelike-poster-image" src="${escapeHtml(primaryImage)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async"${fallbackImage ? ` data-fallback-src="${escapeHtml(fallbackImage)}"` : ""} onerror="var next=this.dataset.fallbackSrc||''; if(next && this.src !== next){ this.src = next; this.dataset.fallbackSrc=''; return; } this.hidden = true; var placeholder = this.nextElementSibling; if(placeholder){ placeholder.hidden = false; }" />`
+              ? `<img class="detail-morelike-poster-image" src="${escapeHtml(primaryImage)}" alt="${escapeHtml(item.name || "content")}" loading="${detailImageLoadingMode()}" decoding="async"${fallbackImage ? ` data-fallback-src="${escapeHtml(fallbackImage)}"` : ""} onerror="var next=this.dataset.fallbackSrc||''; if(next && this.src !== next){ this.src = next; this.dataset.fallbackSrc=''; return; } this.hidden = true; var placeholder = this.nextElementSibling; if(placeholder){ placeholder.hidden = false; }" />`
               : ""
           }
           <div class="detail-morelike-poster placeholder"${primaryImage ? " hidden" : ""}></div>
@@ -6683,7 +6770,7 @@ export const MetaDetailsScreen = {
       `;
       this.cacheTrailerRefs();
       if (this.trailerPlaybackMode === "manual") {
-        this.trailerUiRefs?.overlay?.focus?.({ preventScroll: true });
+        focusWithoutScroll(this.trailerUiRefs?.overlay);
         this.startTrailerProgressTimer();
       }
       this.initYoutubeTrailerPlayer();
@@ -6699,7 +6786,7 @@ export const MetaDetailsScreen = {
     `;
     this.cacheTrailerRefs();
     if (this.trailerPlaybackMode === "manual") {
-      this.trailerUiRefs?.overlay?.focus?.({ preventScroll: true });
+      focusWithoutScroll(this.trailerUiRefs?.overlay);
     }
     this.applyTrailerVideoSubtitleState(this.trailerUiRefs?.video || null);
     this.bindTrailerVideoEvents(this.trailerUiRefs?.video || null);
@@ -7617,7 +7704,7 @@ export const MetaDetailsScreen = {
       .querySelectorAll(".focusable")
       .forEach((node) => node.classList.remove("focused"));
     target.classList.add("focused");
-    target.focus({ preventScroll: true });
+    focusWithoutScroll(target);
     this.rememberEpisodeFocus(target, list);
     this.rememberRailFocus(target, list);
     const horizontalTrack = target.closest(
@@ -7664,7 +7751,7 @@ export const MetaDetailsScreen = {
         }
       }
     } else if (typeof target.scrollIntoView === "function") {
-      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      scrollIntoNearestView(target);
     }
     if (!preserveVerticalScroll) {
       this.syncDetailScrollBounds(target);

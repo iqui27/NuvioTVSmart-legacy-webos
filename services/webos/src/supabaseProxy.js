@@ -1,6 +1,6 @@
 var http = require("http");
 var https = require("https");
-var URL = require("url").URL;
+var URL = require("./legacyUrl").URL;
 
 var SUPABASE_PROXY_PATH = "/supabase-proxy";
 var MAX_REQUEST_BYTES = 2 * 1024 * 1024;

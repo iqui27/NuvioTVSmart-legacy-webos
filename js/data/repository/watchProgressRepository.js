@@ -547,6 +547,31 @@ async function fetchSimklProgressSnapshot() {
 const enrichedMetaCache = new Map();
 const ENRICHED_META_CACHE_TTL_MS = 5 * 60 * 1000;
 
+function progressMetadataTypeCandidates(contentType) {
+  const normalized = String(contentType || "")
+    .trim()
+    .toLowerCase();
+  const candidates = normalized ? [normalized] : [];
+  if (normalized === "series" || normalized === "tv") {
+    candidates.push("series", "tv");
+  } else {
+    candidates.push("movie");
+  }
+  return [...new Set(candidates)];
+}
+
+async function getProgressItemMetadata(contentType, lookupId) {
+  for (const candidateType of progressMetadataTypeCandidates(contentType)) {
+    const result = await metaRepository
+      .getMetaFromAllAddons(candidateType, lookupId)
+      .catch(() => null);
+    if (result?.status === "success" && result?.data) {
+      return result.data;
+    }
+  }
+  return null;
+}
+
 async function batchEnrichProgressItems(items) {
   if (!items.length) return [];
   const now = Date.now();
@@ -558,13 +583,11 @@ async function batchEnrichProgressItems(items) {
     if (cached && now - cached.timestamp < ENRICHED_META_CACHE_TTL_MS) {
       meta = cached.meta;
     } else {
-      const canonicalType = item.contentType === "series" ? "series" : "movie";
-      const result = await withTimeout(
-        metaRepository.getMetaFromAllAddons(canonicalType, lookupId),
+      meta = await withTimeout(
+        getProgressItemMetadata(item.contentType, lookupId),
         PROGRESS_META_TIMEOUT_MS,
         null
       ).catch(() => null);
-      meta = result?.status === "success" && result?.data ? result.data : null;
       // Only cache real metadata. Caching a null (timeout/miss) would leave the
       // item unenriched for the full TTL after a single slow response.
       if (meta) {

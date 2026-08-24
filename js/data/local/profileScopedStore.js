@@ -62,7 +62,46 @@ function normalizeEnvelopeProfiles(profiles = {}, normalize) {
   return normalized;
 }
 
+// Read-path memo, keyed on the raw localStorage string.
+//
+// `readEnvelope` backs every profile-scoped settings store, and it is not a
+// cheap accessor: it parses the whole envelope, re-normalizes every profile in
+// it, and stringifies the result twice to decide whether the renormalized value
+// needs writing back. For `collectionsState` that is ~380 KB of JSON per read,
+// and the per-key storage profiler measured 3 reads totalling 1147.8 KB in a
+// single Home load.
+//
+// The raw stored string is the exact identity of what is stored, so memoizing
+// against it is safe: any write (from here or anywhere else, including another
+// tab) changes the string and invalidates the entry. Same pattern already proven
+// in addonRepository.readProfileScopedEnvelope and homeCatalogStore.
+const envelopeCache = new Map();
+
+function readRawStoredValue(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
 function readEnvelope(key, normalize) {
+  const rawString = readRawStoredValue(key);
+  const cached = envelopeCache.get(key);
+  if (cached && cached.raw === rawString) {
+    return cached.envelope;
+  }
+  const envelope = readEnvelopeUncached(key, normalize);
+  envelopeCache.set(key, {
+    // Re-read: the uncached path can write a migrated or renormalized envelope,
+    // which changes the string this entry has to be keyed on.
+    raw: readRawStoredValue(key),
+    envelope
+  });
+  return envelope;
+}
+
+function readEnvelopeUncached(key, normalize) {
   const raw = LocalStore.get(key, null);
   if (isProfileScopedEnvelope(raw)) {
     const next = {
@@ -91,6 +130,11 @@ function readEnvelope(key, normalize) {
 
 function persistEnvelope(key, envelope) {
   LocalStore.set(key, envelope);
+  // Callers mutate the (memoized) envelope in place before persisting it, so the
+  // cached object already matches what was just written. Only the raw key it is
+  // memoized against has to be refreshed, otherwise the very next read throws
+  // away a correct envelope and pays the full parse again.
+  envelopeCache.set(key, { raw: readRawStoredValue(key), envelope });
 }
 
 function readPendingSettingsSyncProfiles() {

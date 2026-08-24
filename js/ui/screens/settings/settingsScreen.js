@@ -74,6 +74,7 @@ import {
   TraktSettingsStore,
   WatchProgressSource
 } from "../../../data/local/traktSettingsStore.js";
+import { renderInlineIcon } from "../../components/inlineIcons.js";
 import {
   activateLegacySidebarAction,
   bindRootSidebarEvents,
@@ -90,6 +91,7 @@ import {
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { getLatestAppUpdate } from "../../../core/update/appUpdateService.js";
 import { showAppUpdatePrompt } from "../../components/appUpdatePrompt.js";
+import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
 
 const SETTINGS_UI_STATE_KEY = "settingsScreenUiState";
 const SETTINGS_RAIL_SCROLL_TARGET_RATIO = 0.42;
@@ -972,7 +974,7 @@ function translateSectionCopy(section) {
 
 function renderSectionNavIcon(sectionId) {
   if (sectionId === "trakt") {
-    return '<span class="settings-nav-icon settings-nav-icon-material material-icons" aria-hidden="true">sync</span>';
+    return renderInlineIcon("sync", "settings-nav-icon settings-nav-icon-material");
   }
   if (sectionId === "playback") {
     return iconSvg(
@@ -981,7 +983,7 @@ function renderSectionNavIcon(sectionId) {
     );
   }
   const iconName = SECTION_ICONS[sectionId] || "settings";
-  return `<span class="settings-nav-icon settings-nav-icon-material material-icons" aria-hidden="true">${iconName}</span>`;
+  return renderInlineIcon(iconName, "settings-nav-icon settings-nav-icon-material");
 }
 
 function maskValue(value, fallback) {
@@ -1067,7 +1069,7 @@ function createTraktQrDataUrl(userCode) {
   }
   try {
     const canvas = document.createElement("canvas");
-    QrCodeGenerator.generate(
+    void QrCodeGenerator.generate(
       canvas,
       `https://trakt.tv/activate/${encodeURIComponent(userCode)}`,
       420
@@ -1494,20 +1496,6 @@ function isSettingsActivateEvent(event) {
     key === "OK" ||
     key === "Select"
   );
-}
-
-function scrollIntoNearestView(node) {
-  if (!node || typeof node.scrollIntoView !== "function") {
-    return;
-  }
-  try {
-    node.scrollIntoView({
-      block: "nearest",
-      inline: "nearest"
-    });
-  } catch (_) {
-    node.scrollIntoView();
-  }
 }
 
 function getScrollMax(node, axis = "y") {
@@ -1985,7 +1973,7 @@ function focusSettingsNode(node) {
   }
 
   try {
-    node.focus({ preventScroll: true });
+    focusWithoutScroll(node);
   } catch (_) {
     node.focus();
   }
@@ -2437,7 +2425,7 @@ export const SettingsScreen = {
               aria-disabled="${inert ? "true" : "false"}"
               ${this.registerAction(focusKey, inert ? () => {} : this.actionMap.get(focusKey))}
               data-role="action">
-        ${leadingIconSrc ? `<img class="settings-row-leading-image" src="${escapeHtml(leadingIconSrc)}" alt="" aria-hidden="true">` : leadingIcon ? `<span class="settings-row-leading-icon material-icons" aria-hidden="true">${escapeHtml(leadingIcon)}</span>` : ""}
+        ${leadingIconSrc ? `<img class="settings-row-leading-image" src="${escapeHtml(leadingIconSrc)}" alt="" aria-hidden="true">` : leadingIcon ? `${renderInlineIcon(leadingIcon, "settings-row-leading-icon")}` : ""}
         <span class="settings-row-copy">
           <span class="settings-row-title">${escapeHtml(title)}</span>
           ${subtitle ? `<span class="settings-row-subtitle">${escapeHtml(subtitle)}</span>` : ""}
@@ -2970,7 +2958,7 @@ export const SettingsScreen = {
           "";
         if (canvas && content) {
           try {
-            QrCodeGenerator.generate(canvas, content, 420);
+            void QrCodeGenerator.generate(canvas, content, 420);
           } catch (error) {
             console.warn("Failed to generate Debrid authorization QR", error);
           }
@@ -3180,7 +3168,7 @@ export const SettingsScreen = {
   renderAccountStatusCard(value) {
     return `
       <div class="settings-account-status-card">
-        <span class="settings-account-status-icon material-icons" aria-hidden="true">check_circle</span>
+        ${renderInlineIcon("check_circle", "settings-account-status-icon")}
         <span class="settings-account-status-label">${escapeHtml(t("account_signed_in_label", {}, "Signed in"))}</span>
         <strong class="settings-account-status-value">${escapeHtml(value)}</strong>
       </div>
@@ -3193,7 +3181,7 @@ export const SettingsScreen = {
               data-zone="content"
               ${this.registerAction(focusKey, this.actionMap.get(focusKey))}
               data-role="action">
-        <span class="settings-account-button-icon material-icons" aria-hidden="true">${escapeHtml(icon)}</span>
+        ${renderInlineIcon(icon, "settings-account-button-icon")}
         <span class="settings-account-button-copy">
           <span class="settings-account-button-title">${escapeHtml(title)}</span>
           <span class="settings-account-button-subtitle">${escapeHtml(subtitle)}</span>
@@ -3208,7 +3196,7 @@ export const SettingsScreen = {
               data-zone="content"
               ${this.registerAction("account:signout", this.actionMap.get("account:signout"))}
               data-role="action">
-        <span class="settings-account-signout-icon material-icons" aria-hidden="true">logout</span>
+        ${renderInlineIcon("logout", "settings-account-signout-icon")}
         <span class="settings-account-signout-label">${escapeHtml(t("account_sign_out", {}, "Sign Out"))}</span>
       </button>
     `;

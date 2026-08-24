@@ -4,7 +4,7 @@ var http = require("http");
 var https = require("https");
 var os = require("os");
 var path = require("path");
-var URL = require("url").URL;
+var URL = require("./legacyUrl").URL;
 
 var IMAGE_PROXY_PATH = "/image-proxy";
 var CACHE_DIR = path.join(os.tmpdir(), "nuvio-webos-image-proxy");

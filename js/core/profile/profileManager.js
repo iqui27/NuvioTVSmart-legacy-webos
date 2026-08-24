@@ -6,6 +6,27 @@ const REMEMBER_LAST_PROFILE_KEY = "rememberLastProfile";
 const HAS_EVER_SELECTED_PROFILE_KEY = "hasEverSelectedProfile";
 export const MAX_PROFILES = 6;
 
+// Read-path memo for the active profile id.
+//
+// `getActiveProfileId()` is the innermost accessor of every profile-scoped
+// store: normalizeProfileId(), getActiveStorageProfileId() and friends call it
+// once per envelope entry, per store, per read. A single logged-in Home load was
+// measured at 573 reads of the `activeProfileId` key. The value is a 1-3 byte
+// string, so the cost is entirely the synchronous localStorage round trip.
+//
+// `activeProfileId` is written from this module and nowhere else in the app
+// (verified by grep), so invalidating the memo in the three writers below is
+// sufficient. `LocalStore.clear()` is not reachable from app code.
+let activeProfileIdCache = null;
+
+function setActiveProfileIdCache(value) {
+  activeProfileIdCache = value == null ? null : String(value);
+}
+
+function invalidateActiveProfileIdCache() {
+  activeProfileIdCache = null;
+}
+
 const DEFAULT_PROFILES = [
   {
     id: "1",
@@ -66,7 +87,13 @@ export const ProfileManager = {
     const stored = LocalStore.get(PROFILES_KEY, null);
     if (Array.isArray(stored) && stored.length) {
       const normalized = stored.map((profile, index) => normalizeProfile(profile, index));
-      LocalStore.set(PROFILES_KEY, normalized);
+      // This used to write back on every read. localStorage.setItem is a
+      // synchronous disk-backed write on webOS and getProfiles() is called
+      // several times on the boot path, so persisting a value identical to the
+      // one just read was blocking the main thread for nothing.
+      if (JSON.stringify(normalized) !== JSON.stringify(stored)) {
+        LocalStore.set(PROFILES_KEY, normalized);
+      }
       return normalized;
     }
     LocalStore.set(PROFILES_KEY, DEFAULT_PROFILES);
@@ -86,6 +113,7 @@ export const ProfileManager = {
 
   async setActiveProfile(id) {
     LocalStore.set(ACTIVE_PROFILE_ID_KEY, String(id));
+    setActiveProfileIdCache(String(id));
     LocalStore.set(HAS_EVER_SELECTED_PROFILE_KEY, true);
   },
 
@@ -106,6 +134,7 @@ export const ProfileManager = {
 
   clearActiveProfile() {
     LocalStore.remove(ACTIVE_PROFILE_ID_KEY);
+    invalidateActiveProfileIdCache();
   },
 
   async createProfile({
@@ -187,15 +216,24 @@ export const ProfileManager = {
     LocalStore.set(PROFILES_KEY, nextProfiles);
     if (this.getActiveProfileId() === normalizedId) {
       LocalStore.set(ACTIVE_PROFILE_ID_KEY, "1");
+      setActiveProfileIdCache("1");
     }
     return true;
   },
 
   getActiveProfileId() {
-    const raw = LocalStore.get(ACTIVE_PROFILE_ID_KEY, null);
-    if (raw == null) {
-      return "1";
+    if (activeProfileIdCache != null) {
+      return activeProfileIdCache;
     }
-    return String(raw);
+    const raw = LocalStore.get(ACTIVE_PROFILE_ID_KEY, null);
+    const resolved = raw == null ? "1" : String(raw);
+    setActiveProfileIdCache(resolved);
+    return resolved;
+  },
+
+  // Escape hatch for the rare case where the key is changed outside this module
+  // (a test harness, or a future storage reset path).
+  invalidateActiveProfileIdCache() {
+    invalidateActiveProfileIdCache();
   }
 };

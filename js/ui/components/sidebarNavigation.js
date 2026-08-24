@@ -4,6 +4,8 @@ import { AvatarRepository } from "../../data/remote/supabase/avatarRepository.js
 import { MemberAccessRepository } from "../../data/remote/supabase/memberAccessRepository.js";
 import { I18n } from "../../i18n/index.js";
 import { Platform } from "../../platform/index.js";
+import { focusWithoutScroll } from "../../platform/legacyDom.js";
+import { renderInlineIcon } from "./inlineIcons.js";
 
 const ROOT_SIDEBAR_ITEMS = [
   {
@@ -73,7 +75,7 @@ function profileInitial(name) {
 
 function iconMarkup(item, className = "root-sidebar-icon") {
   if (item?.iconType === "material") {
-    return `<span class="${className} root-sidebar-icon-material material-icons" aria-hidden="true">${item.iconName}</span>`;
+    return renderInlineIcon(item.iconName, `${className} root-sidebar-icon-material`);
   }
 
   return `
@@ -754,7 +756,7 @@ export function focusWithoutAutoScroll(node) {
     return;
   }
   try {
-    node.focus({ preventScroll: true });
+    focusWithoutScroll(node);
   } catch (_) {
     node.focus();
   }

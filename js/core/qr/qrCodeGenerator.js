@@ -1,7 +1,45 @@
 // js/core/qr/qrCodeGenerator.js
 
+// qrcode-generator is 59 KB of unminified script that only three screens ever
+// need, and it used to be a blocking <script> in the boot path. Load it the
+// first time a QR is actually drawn instead.
+const QR_LIBRARY_SRC = "assets/libs/qrcode-generator.js";
+let qrLibraryPromise = null;
+
+function loadQrLibrary() {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = QR_LIBRARY_SRC;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`Failed to load ${QR_LIBRARY_SRC}`));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureQrLibrary() {
+  if (typeof globalThis.qrcode === "function") {
+    return;
+  }
+  if (!qrLibraryPromise) {
+    qrLibraryPromise = loadQrLibrary().catch((error) => {
+      // Allow a later attempt to retry rather than caching the failure.
+      qrLibraryPromise = null;
+      throw error;
+    });
+  }
+  await qrLibraryPromise;
+  if (typeof globalThis.qrcode !== "function") {
+    throw new Error("qrcode-generator loaded without defining qrcode()");
+  }
+}
+
 export const QrCodeGenerator = {
-  generate(canvas, content, size = 512) {
+  async generate(canvas, content, size = 512) {
+    await ensureQrLibrary();
     const qr = qrcode(0, "M");
     qr.addData(content);
     qr.make();

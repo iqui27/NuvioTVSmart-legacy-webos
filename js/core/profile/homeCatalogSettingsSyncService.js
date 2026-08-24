@@ -12,6 +12,7 @@ import {
   buildCatalogOrderKey,
   catalogRequiresExtras
 } from "../addons/homeCatalogs.js";
+import { isHomePerfDebugEnabled } from "../../ui/screens/home/homeConstants.js";
 
 const PULL_RPC = "sync_pull_home_catalog_settings";
 const PUSH_RPC = "sync_push_home_catalog_settings";
@@ -21,6 +22,46 @@ const PUSH_DEBOUNCE_MS = 500;
 const HIDE_UNRELEASED_CONTENT_KEY = "hide_unreleased_content";
 const HIDE_CATALOG_UNDERLINE_KEY = "hide_catalog_underline";
 const PENDING_PUSH_TOKENS_KEY = "homeCatalogSettingsPendingPushTokens";
+
+function syncPerfNow() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+// Gated by the same flag as the Home render instrumentation
+// (`__NUVIO_DEBUG_HOME_PERF__`, read at call time) so one CDP call attributes
+// both. This service runs on the startup sync, i.e. concurrently with the first
+// Home load and before any row exists in the DOM, which is exactly the window
+// where the worst long frame was measured.
+function logSyncPerf(stage, data = {}) {
+  if (!isHomePerfDebugEnabled()) {
+    return;
+  }
+  try {
+    console.info(`[home-perf] homeCatalogSettingsSync.${stage}`, data);
+  } catch (_) {}
+}
+
+// Order-preserving dedupe. The previous form was
+// `array.filter((key, index, array) => array.indexOf(key) === index && ...)`,
+// which is O(n^2): with 605 catalog keys that is ~366k string comparisons, and
+// the `order` array is append-only (ensureOrderKeys never prunes), so the cost
+// grows quadratically with every addon the user has ever installed. Measured in
+// node: 0.59ms at n=605, 39.7ms at n=5000 versus 0.07ms / 0.35ms for this
+// version — and the C9 SoC multiplies that by an order of magnitude.
+function uniqueKnownKeys(keys = [], isKnown) {
+  const seen = new Set();
+  const result = [];
+  (keys || []).forEach((key) => {
+    if (seen.has(key) || !isKnown(key)) {
+      return;
+    }
+    seen.add(key);
+    result.push(key);
+  });
+  return result;
+}
 
 function resolveProfileId(profileId = null) {
   const raw = Number(profileId ?? ProfileManager.getActiveProfileId() ?? 1);
@@ -244,9 +285,7 @@ function buildLocalPayload(profileId = null) {
       ...catalogEntries.map((entry) => entry.key),
       ...collectionEntries.map((entry) => entry.key)
     ];
-    const savedValid = (prefs.order || []).filter(
-      (key, index, array) => array.indexOf(key) === index && entryByKey.has(key)
-    );
+    const savedValid = uniqueKnownKeys(prefs.order || [], (key) => entryByKey.has(key));
     const savedSet = new Set(savedValid);
     const mergedOrder = [...savedValid, ...allKeys.filter((key) => !savedSet.has(key))];
     const disabledSet = new Set(prefs.disabled || []);
@@ -338,9 +377,7 @@ function decodePayload(settingsJson = {}, localPayload = {}) {
 
   const localByKey = new Map((localPayload.items || []).map((item) => [syncItemKey(item), item]));
   const disabledSet = new Set(disabled || []);
-  const savedValid = (order || []).filter((key, index, array) => {
-    return array.indexOf(key) === index && localByKey.has(key);
-  });
+  const savedValid = uniqueKnownKeys(order || [], (key) => localByKey.has(key));
   const savedSet = new Set(savedValid);
   const mergedKeys = [
     ...savedValid,
@@ -574,8 +611,15 @@ export const HomeCatalogSettingsSyncService = {
         await this.push(resolvedProfileId);
         return false;
       }
+      const buildStart = syncPerfNow();
       const localPayload = await buildLocalPayload(resolvedProfileId);
+      const buildMs = syncPerfNow() - buildStart;
       const remote = await fetchBestRemotePayload(resolvedProfileId, localPayload);
+      logSyncPerf("pull", {
+        buildLocalPayloadMs: Number(buildMs.toFixed(1)),
+        localItems: Number(localPayload?.items?.length || 0),
+        remoteItems: Number(remote?.payload?.items?.length || 0)
+      });
       if (!remote || !(remote.payload.items || []).length) {
         if (pullToken) {
           this.completedInitialPullTokens.add(pullToken);
@@ -589,7 +633,13 @@ export const HomeCatalogSettingsSyncService = {
         await this.push(resolvedProfileId);
         return false;
       }
-      if (payloadSignature(remote.payload) === payloadSignature(localPayload)) {
+      const signatureStart = syncPerfNow();
+      const remoteSignature = payloadSignature(remote.payload);
+      const localSignature = payloadSignature(localPayload);
+      logSyncPerf("pull-signature", {
+        ms: Number((syncPerfNow() - signatureStart).toFixed(1))
+      });
+      if (remoteSignature === localSignature) {
         if (pullToken) {
           this.completedInitialPullTokens.add(pullToken);
         }
@@ -617,8 +667,13 @@ export const HomeCatalogSettingsSyncService = {
       return false;
     }
     try {
+      const pushStart = syncPerfNow();
       const localPayload = await buildLocalPayload(resolvedProfileId);
       const payload = await mergedSharedPayload(resolvedProfileId, localPayload);
+      logSyncPerf("push", {
+        ms: Number((syncPerfNow() - pushStart).toFixed(1)),
+        items: Number(payload?.items?.length || 0)
+      });
       await SupabaseApi.rpc(
         PUSH_RPC,
         {

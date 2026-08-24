@@ -25,11 +25,7 @@ let lastFailedPushSignature = "";
 let lastFailedPushAt = 0;
 
 function progressKey(item = {}) {
-  const contentId = String(item.contentId || "").trim();
-  const videoId = String(item.videoId || "main").trim();
-  const season = item.season == null ? "" : String(Number(item.season));
-  const episode = item.episode == null ? "" : String(Number(item.episode));
-  return `${contentId}::${videoId}::${season}::${episode}`;
+  return toProgressKey(item);
 }
 
 function normalizeProgressItems(items = []) {
@@ -327,13 +323,7 @@ function toProgressKey(item = {}) {
 }
 
 function syncIdentityKey(item = {}) {
-  const contentId = String(item.contentId || "").trim();
-  const season = toNonNegativeIntegerOrNull(item.season);
-  const episode = toPositiveIntegerOrNull(item.episode);
-  if (contentId && season != null && episode != null) {
-    return `${contentId}:episode:${season}:${episode}`;
-  }
-  return `${contentId}:video:${toRemoteVideoId(item)}`;
+  return toProgressKey(item);
 }
 
 function dedupeSyncItems(items = []) {

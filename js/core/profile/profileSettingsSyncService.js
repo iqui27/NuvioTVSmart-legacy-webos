@@ -2095,9 +2095,30 @@ async function pullRemoteBlob(profileId) {
   return extractBlobFromResponse(response);
 }
 
+// Gated by the same flag as the Home render instrumentation
+// (`__NUVIO_DEBUG_HOME_PERF__`, read at call time). This function is awaited on
+// the Home critical path — loadData -> StartupSyncService.requestHomeSyncNow ->
+// requestContinueWatchingSyncNow -> ProfileSettingsSyncService.pull — so it runs
+// before any Home row exists, and every feature adapter `import()` is a
+// synchronous profile-scoped store read plus a localStorage write. On webOS each
+// of those flushes to disk synchronously, so per-feature attribution is the only
+// way to name the offender rather than guess at it.
+function syncPerfEnabled() {
+  return Boolean(globalThis.__NUVIO_DEBUG_HOME_PERF__);
+}
+
+function syncPerfNow() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
 function applyRemoteBlob(profileId, blob) {
   let applied = false;
+  const debug = syncPerfEnabled();
+  const timings = debug ? [] : null;
   SUPPORTED_FEATURE_NAMES.forEach((featureName) => {
+    const featureStart = debug ? syncPerfNow() : 0;
     const featurePayload = withoutExcludedProfileSettingsKeys(
       featureName,
       blob?.features?.[featureName] || {}
@@ -2106,7 +2127,23 @@ function applyRemoteBlob(profileId, blob) {
     if (didApply) {
       applied = true;
     }
+    if (debug) {
+      timings.push({
+        feature: featureName,
+        ms: Number((syncPerfNow() - featureStart).toFixed(1)),
+        applied: Boolean(didApply)
+      });
+    }
   });
+  if (debug) {
+    timings.sort((left, right) => right.ms - left.ms);
+    try {
+      console.info("[home-perf] profileSettingsSync.applyRemoteBlob", {
+        totalMs: Number(timings.reduce((sum, entry) => sum + entry.ms, 0).toFixed(1)),
+        features: timings
+      });
+    } catch (_) {}
+  }
   return applied;
 }
 
@@ -2128,8 +2165,16 @@ export const ProfileSettingsSyncService = {
 
       setCachedBlob(resolvedProfileId, blob);
 
+      const signatureStart = syncPerfEnabled() ? syncPerfNow() : 0;
       const remoteSignature = buildComparableSignatureFromBlob(blob);
       const localSignature = buildComparableSignatureFromLocal(resolvedProfileId);
+      if (syncPerfEnabled()) {
+        try {
+          console.info("[home-perf] profileSettingsSync.signature", {
+            ms: Number((syncPerfNow() - signatureStart).toFixed(1))
+          });
+        } catch (_) {}
+      }
       if (remoteSignature === localSignature) {
         return false;
       }

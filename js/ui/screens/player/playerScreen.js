@@ -18,6 +18,13 @@ import {
   isTerminalHlsHttpStatus
 } from "../../../core/player/hlsNetworkErrorPolicy.js";
 import { deltaMsForKeyRepeat } from "../../../core/player/playerScrubRates.js";
+import {
+  ASPECT_MODE_DEFINITIONS,
+  aspectModeIndex,
+  normalizeAspectMode,
+  parseAspectRatio,
+  resolveAspectRender
+} from "../../../core/player/playerAspect.js";
 import { buildClockFormatOptions, resolveSystemHour12 } from "../../../core/player/clockFormat.js";
 import { resolveSubtitleStyleControlAvailability } from "../../../core/player/subtitlePresentationCapabilities.js";
 import { shouldTreatAsNaturalPlaybackCompletion } from "../../../core/player/naturalPlaybackCompletion.js";
@@ -43,6 +50,7 @@ import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { parentalGuideRepository } from "../../../data/repository/parentalGuideRepository.js";
 import { skipIntroRepository } from "../../../data/repository/skipIntroRepository.js";
 import { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
+import { DeviceLocalPlayerPreferences } from "../../../data/local/deviceLocalPlayerPreferences.js";
 import { StreamBadgeSettingsStore } from "../../../data/local/streamBadgeSettingsStore.js";
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
@@ -54,6 +62,7 @@ import { I18n } from "../../../i18n/index.js";
 import { Environment } from "../../../platform/environment.js";
 import { TizenCapabilities } from "../../../platform/tizen/tizenCapabilities.js";
 import { Router } from "../../navigation/router.js";
+import { renderStreamChipRow } from "../../components/streamBadgeChip.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { DirectDebridResolver } from "../../../core/debrid/directDebridResolver.js";
 import { TrackingScrobbleService } from "../../../data/repository/trackingScrobbleService.js";
@@ -69,6 +78,10 @@ import { StreamPreferencesStore } from "../../../data/local/streamPreferencesSto
 import { buildStreamResumeIdentity } from "../../../core/streams/streamResumeIdentity.js";
 import { TrackPreferencesStore } from "../../../data/local/trackPreferencesStore.js";
 import {
+  getEarliestOutroStartSeconds,
+  hasEpisodeAired as hasEpisodeAiredRule,
+  normalizeThresholdMinutesBeforeEnd,
+  normalizeThresholdPercent,
   shouldEnterStillWatchingPrompt,
   shouldShowNextEpisodeCard as shouldShowNextEpisodeCardRule
 } from "./playerNextEpisodeRules.js";
@@ -99,6 +112,7 @@ import {
 } from "../../../core/player/bitmapSubtitleDecoder.js";
 import { isAssSubtitle, convertAssBodyToVtt } from "../../../core/player/assSubtitle.js";
 import { createAssRenderer } from "../../../core/player/assRenderer.js";
+import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
 
 const CLOCK_FORMATTER_CACHE = new Map();
 const LANGUAGE_DISPLAY_NAME_CACHE = new Map();
@@ -111,9 +125,20 @@ const LOADING_LOGO_FILL_FRAME_MS = 80;
 const NEXT_EPISODE_SOURCE_RESOLVE_TIMEOUT_MS = 45000;
 const STARTUP_AUDIO_PREFERENCE_RETRY_WINDOW_MS = 6000;
 const STARTUP_AUDIO_PREFERENCE_RETRY_INTERVAL_MS = 250;
-const WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS = 30000;
+// This gate calls play() and then immediately pauses again, waiting for track
+// discovery so the preferred audio stream can be selected before the first
+// frame. But on a large remote MKV the thing it waits for is the /tracks probe,
+// which is reading the same file the video needs — so the longer the gate, the
+// longer the probe has to starve playback. Bound it to the audio-preference
+// retry window below: past that point there is nothing left to wait for, and a
+// late audio switch on a playing video beats a black screen.
+const WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS = STARTUP_AUDIO_PREFERENCE_RETRY_WINDOW_MS;
 const WEBOS_NATIVE_STARTUP_LOADING_EXTENSION_MS = 120000;
 const WEBOS_HLS_REBUFFER_STALL_TIMEOUT_MS = 20000;
+const WEBOS_NATIVE_FILE_REBUFFER_STALL_TIMEOUT_MS = 35000;
+// How much the buffer must grow between a stall guard being armed and firing for
+// the stall to count as "still making progress" rather than dead.
+const PLAYBACK_STALL_BUFFER_PROGRESS_EPSILON_SECONDS = 0.25;
 const WEBOS_HLS_PLAYBACK_RECOVERY_MAX_ATTEMPTS = 1;
 const EPISODE_PANEL_TRANSITION_MS = 220;
 const activeEngineFsPlaybackClaims = new Map();
@@ -272,6 +297,23 @@ const AUDIO_TRACK_LANGUAGE_KEY_BY_CODE = {
   pt: "common.portuguese",
   ro: "common.romanian",
   ru: "common.russian",
+  bg: "common.bulgarian",
+  ca: "common.catalan",
+  cs: "common.czech",
+  da: "common.danish",
+  el: "common.greek",
+  fa: "common.persian",
+  fi: "common.finnish",
+  he: "common.hebrew",
+  hr: "common.croatian",
+  id: "common.indonesian",
+  ms: "common.malay",
+  no: "common.norwegian",
+  sr: "common.serbian",
+  ta: "common.tamil",
+  te: "common.telugu",
+  th: "common.thai",
+  uk: "common.ukrainian",
   sk: "common.slovak",
   sl: "common.slovenian",
   sv: "common.swedish",
@@ -456,6 +498,18 @@ const AUDIO_AMPLIFICATION_MIN_DB = 0;
 const AUDIO_AMPLIFICATION_MAX_DB = 10;
 const PLAYER_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const NEXT_EPISODE_PREFETCH_PERCENT = 0.9;
+// updateUiTick() is driven by both `timeupdate` (~4 Hz) and a 1 s interval. Only
+// the position readout needs that rate; the remaining subsystems are gated to
+// the cadence their own inputs can change at.
+const UI_TICK_SLOW_SUBSYSTEM_INTERVAL_MS = 900;
+// Safety-net resync for the action-overlay offset. The offset is normally
+// recomputed from events (controls toggle, viewport resize) because measuring it
+// forces a layout; this keeps a slow heartbeat for anything that mutates the
+// controls row without going through those paths.
+const UI_TICK_OVERLAY_LAYOUT_RESYNC_INTERVAL_MS = 2000;
+// Extra slack added to the computed next-episode endgame window so the trigger
+// is never evaluated late because of settings churn or duration drift.
+const NEXT_EPISODE_ENDGAME_MARGIN_SECONDS = 20;
 const SKIP_INTERVAL_CHECK_MS = 250;
 const SKIP_INTERVAL_SEEK_SUPPRESSION_MS = 12000;
 const BITMAP_SUBTITLE_WINDOW_SECONDS = 120;
@@ -845,6 +899,31 @@ function isUnknownAudioTrackLanguageValue(value) {
     ["und", "unk", "zxx"].includes(baseCode) ||
     ["unknown", "unknown language", "undetermined", "undefined"].includes(normalized)
   );
+}
+
+/**
+ * A native `AudioTrack` / `TextTrack` exposes id/label/language/kind as prototype
+ * getters, so object spread and Object.assign copy NOTHING from one. Measured on
+ * the C9 with a direct MKV: `track.language` is "en" while `Object.keys(track)`
+ * is `[]` and `{...track}` is `{}`. Every merge path below spreads its input, so
+ * without this the language is silently dropped and the audio menu falls back to
+ * a positional label ("Áudio 1") instead of naming the language.
+ *
+ * Returns a plain object carrying the interesting fields explicitly. A track that
+ * is already a plain object passes through unchanged, so this is safe to apply on
+ * the manifest and avplay paths too.
+ */
+function toPlainTrackShape(track) {
+  if (!track || typeof track !== "object") {
+    return {};
+  }
+  const plain = { ...track };
+  ["id", "label", "language", "kind", "name", "lang"].forEach((key) => {
+    if (plain[key] === undefined && track[key] !== undefined) {
+      plain[key] = track[key];
+    }
+  });
+  return plain;
 }
 
 function getUsableAudioTrackLanguageValue(track = {}) {
@@ -1278,7 +1357,14 @@ function formatAudioTrackDisplay(track = {}, index = 0) {
   const rawLabel = getMeaningfulTrackLabel(track);
   const rawLanguage = cleanDisplayText(getUsableAudioTrackLanguageValue(track));
   const languageLabel = capitalizeDisplayLabel(getAudioTrackLanguageLabel(track));
-  const rawLanguageLabel = capitalizeDisplayLabel(rawLanguage);
+  // languageLabel already filters undetermined codes, but this second fallback
+  // did not, so a track declaring ISO 639-2 "und" rendered as the title-cased
+  // "Und". It only became visible once the native language stopped being lost by
+  // object spread (see toPlainTrackShape). For a genuinely undetermined track the
+  // right answer is the positional label below, not a fake language name.
+  const rawLanguageLabel = isUnknownAudioTrackLanguageValue(rawLanguage)
+    ? ""
+    : capitalizeDisplayLabel(rawLanguage);
   const authoritativeCodecValue = getAuthoritativeAudioCodecValue(track);
   const codecName = formatAudioCodecName(
     authoritativeCodecValue || getTrackMetadataStrings(track).join(" ")
@@ -1597,28 +1683,10 @@ function normalizeStreamBadgeChipColor(value = "") {
   return `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")})`;
 }
 
-function renderPlayerImageBadgeChip(badge = {}) {
-  const imageUrl = normalizeImageUrl(badge.imageURL);
-  if (!imageUrl) {
-    return "";
-  }
-  const backgroundColor = normalizeStreamBadgeChipColor(badge.tagColor);
-  const outlineColor = normalizeStreamBadgeChipColor(badge.borderColor);
-  const textColor = normalizeStreamBadgeChipColor(badge.textColor);
-  const filled =
-    String(badge.tagStyle || "")
-      .trim()
-      .toLowerCase() === "filled";
-  const style = [
-    filled && backgroundColor ? `background:${backgroundColor};` : "",
-    outlineColor ? `border-color:${outlineColor};` : "",
-    textColor ? `color:${textColor};` : ""
-  ].join("");
-  return `
-    <span class="stream-route-stream-badge image${filled ? " filled" : ""}"${style ? ` style="${escapeHtml(style)}"` : ""}>
-      <img src="${escapeAttribute(imageUrl)}" alt="${escapeAttribute(badge.name || "")}" loading="lazy" decoding="async" />
-    </span>
-  `;
+function renderPlayerImageBadgeChip() {
+  // See streamBadgeChip.js: chips are parsed from the release text, not from the
+  // imported badge rules.
+  return "";
 }
 
 function getPlayerSourceLogoDisplayUrl(value = "", onSettled = null) {
@@ -1644,14 +1712,12 @@ function renderPlayerSourceBadges(
   const matchedBadges = matchStreamBadges(stream, badgeSettings.rules);
   const chips = [];
   const sizeBytes = stream.behaviorHints?.videoSize;
-  if (badgeSettings.showFileSizeBadges !== false && sizeBytes != null) {
-    const label = formatBytes(sizeBytes);
-    if (label) {
-      chips.push(
-        `<span class="stream-route-stream-badge size">${escapeHtml(t("streams_size", [label], `SIZE ${label}`))}</span>`
-      );
-    }
+  const parsedChips = renderStreamChipRow(stream, escapeHtml);
+  if (parsedChips) {
+    chips.push(parsedChips);
   }
+  // No size chip here either; see the source list for why.
+  void sizeBytes;
   matchedBadges.slice(0, 8).forEach((badge) => {
     const chip = renderPlayerImageBadgeChip(badge);
     if (chip) {
@@ -1743,9 +1809,16 @@ function subtitleLanguageLabel(languageKey) {
         }
       }
     } catch (_) {
-      // Older TV engines use the stable English fallback below.
+      // Older TV engines fall through to the localized strings below.
     }
-    return normalizedCode === "pt-br" ? "Portuguese (Brazil)" : "Spanish (Latin America)";
+    // Intl.DisplayNames is Chrome 81, so on webOS 4 / Chromium 53 this branch is
+    // always taken. It used to return an English literal, which put
+    // "Portuguese (Brazil)" in the middle of an otherwise pt-BR subtitle menu.
+    // The strings live in res/values (English) and res/values-pt-br; every other
+    // locale still falls back to English, exactly as before.
+    return normalizedCode === "pt-br"
+      ? t("subtitle_language_pt_br", {}, "Portuguese (Brazil)")
+      : t("subtitle_language_es_419", {}, "Spanish (Latin America)");
   }
   const baseCode = normalizedCode?.split("-")[0] || "";
   let label = "";
@@ -2289,11 +2362,10 @@ export const PlayerScreen = {
       void ensureWebOsImageProxyReady();
     }
 
-    this.aspectModes = [
-      { objectFit: "contain", label: t("player_aspect_fit", {}, "Fit") },
-      { objectFit: "cover", label: t("player_aspect_fill", {}, "Fill") },
-      { objectFit: "fill", label: t("player_aspect_stretch", {}, "Stretch") }
-    ];
+    this.aspectModes = ASPECT_MODE_DEFINITIONS.map((definition) => ({
+      ...definition,
+      label: t(definition.labelKey, {}, definition.fallbackLabel)
+    }));
 
     this.streamCandidates = this.normalizeStreamCandidates(
       Array.isArray(params.streamCandidates) ? params.streamCandidates : []
@@ -2438,12 +2510,13 @@ export const PlayerScreen = {
     this.streamCandidatesByVideoId = new Map();
     this.streamCandidatesLoadPromises = new Map();
 
-    this.aspectModeIndex = 0;
+    this.aspectModeIndex = aspectModeIndex(DeviceLocalPlayerPreferences.getAspectMode());
     this.aspectToastTimer = null;
     this.speedDialogVisible = false;
     this.speedDialogIndex = Math.max(0, PLAYER_SPEEDS.indexOf(1));
 
     this.episodes = Array.isArray(params.episodes) ? params.episodes : [];
+    this.invalidateNextEpisodeInfoCache();
     this.episodePanelVisible = false;
     const explicitEpisodeIndex = this.episodes.findIndex((entry) => entry.id === params.videoId);
     const fallbackEpisodeIndex = this.episodes.findIndex((entry) => {
@@ -2486,6 +2559,8 @@ export const PlayerScreen = {
     this.nextEpisodeLaunchToken = Number(this.nextEpisodeLaunchToken || 0) + 1;
     this.nextEpisodeCardTriggered = false;
     this.nextEpisodeCardRenderedKey = "";
+    this.nextEpisodeCardFocusCycleKey = "";
+    this.nextEpisodeCardPlacedFocused = false;
     this.nextEpisodeCardSearching = false;
     this.nextEpisodeCardSourceName = "";
     this.nextEpisodeCardCountdownSec = null;
@@ -3403,7 +3478,7 @@ export const PlayerScreen = {
 
   isNextEpisodeCardFocusable() {
     const card = this.uiRefs?.nextEpisodeCard;
-    const target = card?.querySelector(".player-next-episode-card-inner.is-playable");
+    const target = card?.querySelector(".player-next-episode-card-inner");
     return Boolean(target && target.isConnected && !card.classList.contains("hidden"));
   },
 
@@ -3437,7 +3512,7 @@ export const PlayerScreen = {
 
   syncNextEpisodeCardFocusState() {
     const card = this.uiRefs?.nextEpisodeCard;
-    const target = card?.querySelector(".player-next-episode-card-inner.is-playable");
+    const target = card?.querySelector(".player-next-episode-card-inner");
     if (!target) {
       return;
     }
@@ -3463,7 +3538,7 @@ export const PlayerScreen = {
     }
     if (document.activeElement !== target && typeof target.focus === "function") {
       try {
-        target.focus({ preventScroll: true });
+        focusWithoutScroll(target);
       } catch (_) {
         try {
           target.focus();
@@ -3490,6 +3565,10 @@ export const PlayerScreen = {
   focusNextEpisodeCard() {
     if (!this.isNextEpisodeCardFocusable()) {
       return false;
+    }
+    if (this.skipIntroFocusFrame != null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(this.skipIntroFocusFrame);
+      this.skipIntroFocusFrame = null;
     }
     this.stickyProgressFocus = false;
     this.autoHideControlsAfterSeek = false;
@@ -3577,6 +3656,9 @@ export const PlayerScreen = {
           this.skipIntroFocusFrame = null;
           const focusTarget = this.uiRefs?.skipIntro?.querySelector(".player-skip-intro-btn");
           if (!focusTarget || !focusTarget.isConnected) {
+            return;
+          }
+          if (this.controlFocusZone === "nextEpisode") {
             return;
           }
           if (document.activeElement === focusTarget) {
@@ -5428,6 +5510,9 @@ export const PlayerScreen = {
   },
 
   cachePlayerUiRefs(root = null) {
+    // The cached render keys describe nodes that are about to be replaced.
+    this.skipIntroTickStateKey = "";
+    this.invalidatePlayerOverlayLayout();
     const uiRoot = root || this.container?.querySelector("#playerUiRoot");
     this.uiRefs = uiRoot
       ? {
@@ -6944,19 +7029,41 @@ export const PlayerScreen = {
   },
 
   hasEpisodeAired(released) {
-    const raw = String(released || "").trim();
-    if (!raw) {
-      return true;
-    }
-    const datePortion = raw.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0] || raw;
-    const parsedTime = Date.parse(datePortion);
-    if (!Number.isFinite(parsedTime)) {
-      return true;
-    }
-    return parsedTime <= Date.now();
+    return hasEpisodeAiredRule(released);
   },
 
+  // resolveNextEpisodeInfo() used to run several full scans of `this.episodes`
+  // (plus a filter allocation) on every call, and the tick called it through four
+  // different subsystems. The lookup only depends on the route params and the
+  // episode list, so it is memoized; `hasAired` is the one time-dependent field
+  // and stays recomputed per call.
   resolveNextEpisodeInfo() {
+    const episodes = Array.isArray(this.episodes) ? this.episodes : null;
+    const cacheKey = [
+      String(this.params?.itemType || ""),
+      String(this.params?.videoId || ""),
+      String(this.params?.nextEpisodeVideoId || ""),
+      String(this.params?.season ?? ""),
+      String(this.params?.episode ?? ""),
+      episodes ? episodes.length : -1
+    ].join("|");
+    const cached = this.nextEpisodeInfoCache;
+    if (!cached || cached.key !== cacheKey || cached.episodes !== episodes) {
+      const computed = this.computeNextEpisodeInfo();
+      this.nextEpisodeInfoCache = { key: cacheKey, episodes, value: computed };
+      return computed;
+    }
+    if (!cached.value) {
+      return null;
+    }
+    return { ...cached.value, hasAired: this.hasEpisodeAired(cached.value.released) };
+  },
+
+  invalidateNextEpisodeInfoCache() {
+    this.nextEpisodeInfoCache = null;
+  },
+
+  computeNextEpisodeInfo() {
     const itemType = normalizeItemType(this.params?.itemType || "movie");
     if (itemType !== "series") {
       return null;
@@ -7866,6 +7973,7 @@ export const PlayerScreen = {
           title: nextEpisode.episodeTitle || nextEpisode.episodeLabel || ""
         }
       ];
+      this.invalidateNextEpisodeInfoCache();
       episodeIndex = this.episodes.length - 1;
     }
 
@@ -9050,6 +9158,7 @@ export const PlayerScreen = {
     };
 
     const onTrackListChanged = () => {
+      this.applyAspectMode({ showToast: false });
       this.refreshTrackDialogs();
       if (this.refreshSubtitleCueStyles()) {
         this.refreshWebOsEmbeddedSubtitleAfterCueMutation();
@@ -9357,6 +9466,21 @@ export const PlayerScreen = {
       video.addEventListener(eventName, handler);
       this.videoListeners.push({ target: video, eventName, handler });
     });
+
+    if (typeof window?.addEventListener === "function") {
+      const onViewportResize = () => {
+        // The action-overlay offset is measured lazily; a viewport change is one
+        // of the only two things that can move it.
+        this.invalidatePlayerOverlayLayout();
+        this.applyAspectMode({ showToast: false });
+      };
+      window.addEventListener("resize", onViewportResize);
+      this.videoListeners.push({
+        target: window,
+        eventName: "resize",
+        handler: onViewportResize
+      });
+    }
 
     const trackTargets = [this.getVideoTextTrackList(), this.getVideoAudioTrackList()].filter(
       Boolean
@@ -9721,6 +9845,7 @@ export const PlayerScreen = {
 
   setControlsVisible(visible, { focus = false } = {}) {
     this.controlsVisible = Boolean(visible);
+    this.invalidatePlayerOverlayLayout();
     if (this.isExternalFrameMode()) {
       return;
     }
@@ -9753,7 +9878,7 @@ export const PlayerScreen = {
       return;
     }
     try {
-      root.focus({ preventScroll: true });
+      focusWithoutScroll(root);
     } catch (_) {
       try {
         root.focus();
@@ -10438,11 +10563,23 @@ export const PlayerScreen = {
     this.ensureNextEpisodeStreamsPrefetch();
     const nextEpisode = this.resolveNextEpisodeInfo();
     const hidden = !this.isNextEpisodeCardVisible();
+    const focusCycleKey =
+      !hidden && nextEpisode
+        ? `${nextEpisode.videoId}|controls:${this.controlsVisible ? "visible" : "hidden"}`
+        : "";
+    if (focusCycleKey !== this.nextEpisodeCardFocusCycleKey) {
+      this.nextEpisodeCardFocusCycleKey = focusCycleKey;
+      this.nextEpisodeCardPlacedFocused = false;
+    }
 
     card.classList.toggle("hidden", hidden);
     if (hidden) {
       card.innerHTML = "";
       this.nextEpisodeCardRenderedKey = "";
+      if (this.controlFocusZone === "nextEpisode") {
+        this.controlFocusZone =
+          this.controlsVisible && this.isSeekBarAvailable() ? "progress" : "buttons";
+      }
       return;
     }
 
@@ -10480,7 +10617,7 @@ export const PlayerScreen = {
       !card.querySelector(".player-next-episode-card-inner")
     ) {
       card.innerHTML = `
-        <div class="player-next-episode-card-inner${nextEpisode.hasAired ? " focusable is-playable" : ""}${!this.controlsVisible ? " is-selected" : ""}"${nextEpisode.hasAired ? ' tabindex="-1" role="button" data-player-pointer-action="nextEpisode"' : ""}>
+        <div class="player-next-episode-card-inner focusable${nextEpisode.hasAired ? " is-playable" : ""}${!this.controlsVisible ? " is-selected" : ""}" tabindex="-1" role="button" data-player-pointer-action="nextEpisode">
           <div class="player-next-episode-thumb-wrap">
             ${thumb ? `<img class="player-next-episode-thumb" src="${escapeHtml(thumb)}" alt="" aria-hidden="true" />` : `<div class="player-next-episode-thumb player-next-episode-thumb-fallback"></div>`}
             <div class="player-next-episode-thumb-shade"></div>
@@ -10498,20 +10635,132 @@ export const PlayerScreen = {
       `;
       this.nextEpisodeCardRenderedKey = renderKey;
     }
+    if (!this.controlsVisible && !this.nextEpisodeCardPlacedFocused) {
+      this.nextEpisodeCardPlacedFocused = true;
+      this.stickyProgressFocus = false;
+      this.autoHideControlsAfterSeek = false;
+      this.controlFocusZone = "nextEpisode";
+      this.resetControlsAutoHide();
+    }
     this.syncNextEpisodeCardFocusState();
+  },
+
+  // Number of seconds before the end of the item at which the next-episode
+  // subsystems (stream prefetch, card, autoplay) can first become relevant.
+  // Computed from every trigger that exists rather than from the active mode, so
+  // a settings change mid-playback cannot make the window too small.
+  getNextEpisodeEndgameLeadSeconds(durationSeconds = this.getPlaybackDurationSeconds()) {
+    const duration = Number(durationSeconds || 0);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return 0;
+    }
+    const settings = PlayerSettingsStore.get();
+    let lead = duration * (1 - NEXT_EPISODE_PREFETCH_PERCENT);
+    lead = Math.max(
+      lead,
+      duration * (1 - normalizeThresholdPercent(settings.nextEpisodeThresholdPercent) / 100)
+    );
+    lead = Math.max(
+      lead,
+      normalizeThresholdMinutesBeforeEnd(settings.nextEpisodeThresholdMinutesBeforeEnd) * 60
+    );
+    if (settings.skipIntroEnabled) {
+      const earliestOutroStart = getEarliestOutroStartSeconds(this.skipIntervals);
+      if (Number.isFinite(earliestOutroStart)) {
+        lead = Math.max(lead, duration - Number(earliestOutroStart));
+      }
+    }
+    return lead + NEXT_EPISODE_ENDGAME_MARGIN_SECONDS;
+  },
+
+  isNextEpisodeEndgameActive(
+    currentSeconds = this.getPlaybackCurrentSeconds(),
+    durationSeconds = this.getPlaybackDurationSeconds()
+  ) {
+    // Anything already in flight has to keep being serviced regardless of
+    // position, otherwise a backward seek would leave the card stuck on screen.
+    if (
+      this.nextEpisodeCardTriggered ||
+      this.nextEpisodeLaunching ||
+      this.stillWatchingPromptVisible ||
+      this.controlFocusZone === "nextEpisode"
+    ) {
+      return true;
+    }
+    const duration = Number(durationSeconds || 0);
+    const current = Number(currentSeconds || 0);
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(current)) {
+      // Without a usable duration none of the thresholds can be evaluated, so
+      // there is nothing to gate — let the subsystems run and bail themselves.
+      return true;
+    }
+    return duration - current <= this.getNextEpisodeEndgameLeadSeconds(duration);
+  },
+
+  // The skip-intro button re-renders (and re-reads computed styles for its
+  // theme) only when one of the inputs that shapes it actually changed.
+  syncSkipIntroButtonForTick() {
+    const interval = this.activeSkipInterval;
+    const stateKey = interval
+      ? [
+          String(interval.type || ""),
+          String(interval.startTime),
+          String(interval.endTime),
+          this.isSkipIntroPlaybackReady() ? 1 : 0,
+          this.controlsVisible ? 1 : 0,
+          this.skipIntroAutoHidden ? 1 : 0,
+          this.skipIntervalDismissed ? 1 : 0,
+          String(this.controlFocusZone || "")
+        ].join(":")
+      : "none";
+    if (stateKey === this.skipIntroTickStateKey) {
+      return;
+    }
+    this.skipIntroTickStateKey = stateKey;
+    this.renderSkipIntroButton();
+  },
+
+  invalidatePlayerOverlayLayout() {
+    this.playerOverlayLayoutDirty = true;
   },
 
   updateUiTick() {
     if (this.isExternalFrameMode()) {
       return;
     }
-    this.ensureNextEpisodeStreamsPrefetch();
-    this.shouldShowNextEpisodeCard();
-    void this.refreshLoadingOverlayProgress();
+    const now = Date.now();
+    const uiState = this.lastUiTickState || (this.lastUiTickState = {});
+    // Subsystems whose input cannot change faster than roughly once a second.
+    // The 1 s interval timer already provided this cadence; the extra
+    // `timeupdate` ticks only ever repeated the same result.
+    const slowSubsystemsDue =
+      !Number.isFinite(uiState.slowSubsystemsAt) ||
+      now - Number(uiState.slowSubsystemsAt) >= UI_TICK_SLOW_SUBSYSTEM_INTERVAL_MS;
+    if (slowSubsystemsDue) {
+      uiState.slowSubsystemsAt = now;
+    }
     const current = this.getPlaybackCurrentSeconds();
     this.updateActiveSkipInterval(current);
-    this.updateSkipIntroCountdown(Date.now());
+    this.updateSkipIntroCountdown(now);
     const duration = this.getPlaybackDurationSeconds();
+    // Stream prefetch, the next-episode card and autoplay-next can only be
+    // triggered by proximity to the end of the item (or by a cycle that is
+    // already in flight), so outside that window they are not evaluated at all.
+    const nextEpisodeEndgameActive =
+      slowSubsystemsDue && this.isNextEpisodeEndgameActive(current, duration);
+    if (nextEpisodeEndgameActive) {
+      this.ensureNextEpisodeStreamsPrefetch();
+      this.shouldShowNextEpisodeCard();
+    }
+    if (
+      slowSubsystemsDue &&
+      (this.currentEngineFsStream ||
+        this.loadingProgress != null ||
+        this.loadingTorrentStatus ||
+        this.torrentOverlayData)
+    ) {
+      void this.refreshLoadingOverlayProgress();
+    }
     const effectiveProgressSeconds =
       this.controlsVisible &&
       this.controlFocusZone === "progress" &&
@@ -10520,8 +10769,9 @@ export const PlayerScreen = {
         : current;
     const progress = duration > 0 ? clamp(effectiveProgressSeconds / duration, 0, 1) : 0;
     const uiRefs = this.uiRefs || {};
-    const uiState = this.lastUiTickState || (this.lastUiTickState = {});
-    const progressBuffered = uiRefs.progressBuffered;
+    // The buffered range advances in multi-second jumps, so reading it (and the
+    // paint that follows) at ~1 Hz is visually identical to reading it at 4 Hz.
+    const progressBuffered = slowSubsystemsDue ? uiRefs.progressBuffered : null;
     if (progressBuffered) {
       const bufferedSeconds = this.getPlaybackBufferedSeconds();
       const bufferedVisible =
@@ -10545,29 +10795,48 @@ export const PlayerScreen = {
         uiState.progressWidth = nextWidth;
       }
     }
-    this.syncSkipIntroButtonProgress();
-    this.renderSkipIntroButton();
-    this.syncPlayerOverlayLayoutState();
+    this.syncSkipIntroButtonForTick();
+    if (uiState.controlsVisible !== Boolean(this.controlsVisible)) {
+      uiState.controlsVisible = Boolean(this.controlsVisible);
+      this.invalidatePlayerOverlayLayout();
+    }
+    // Measuring the action-overlay offset forces a layout, and its inputs only
+    // move on a controls toggle or a viewport change. Run it when something
+    // marked it dirty, with a slow heartbeat as a safety net.
+    if (
+      this.playerOverlayLayoutDirty ||
+      !Number.isFinite(uiState.overlayLayoutAt) ||
+      now - Number(uiState.overlayLayoutAt) >= UI_TICK_OVERLAY_LAYOUT_RESYNC_INTERVAL_MS
+    ) {
+      this.playerOverlayLayoutDirty = false;
+      uiState.overlayLayoutAt = now;
+      this.syncPlayerOverlayLayoutState();
+    }
+    // Left on the per-tick path on purpose: it returns on the first property
+    // read when there is no bitmap subtitle track, and when there is one the
+    // frame must be repainted as soon as its key changes or subtitles visibly
+    // lag. The function already short-circuits on an unchanged render key.
     this.renderBitmapSubtitleAtCurrentTime();
-    this.maybeAutoplayNextEpisode();
+    if (nextEpisodeEndgameActive) {
+      this.maybeAutoplayNextEpisode();
+    }
 
-    const clock = uiRefs.clock;
+    const clock = slowSubsystemsDue ? uiRefs.clock : null;
     if (clock) {
-      const now = new Date();
-      const nextClockMinuteKey = `${now.getHours()}:${now.getMinutes()}`;
+      const clockNow = new Date(now);
+      const nextClockMinuteKey = `${clockNow.getHours()}:${clockNow.getMinutes()}`;
       if (uiState.clockMinuteKey !== nextClockMinuteKey) {
-        const nextClockText = formatClock(now, this.webOsClockLocaleInfo);
+        const nextClockText = formatClock(clockNow, this.webOsClockLocaleInfo);
         clock.textContent = nextClockText;
         uiState.clockText = nextClockText;
         uiState.clockMinuteKey = nextClockMinuteKey;
       }
     }
 
-    const endsAt = uiRefs.endsAt;
+    const endsAt = slowSubsystemsDue ? uiRefs.endsAt : null;
     if (endsAt) {
       const remainingMs = Math.max(0, (Number(duration || 0) - Number(current || 0)) * 1000);
-      const nextEndsAtMinuteBucket =
-        duration > 0 ? Math.floor((Date.now() + remainingMs) / 60000) : -1;
+      const nextEndsAtMinuteBucket = duration > 0 ? Math.floor((now + remainingMs) / 60000) : -1;
       if (uiState.endsAtMinuteBucket !== nextEndsAtMinuteBucket) {
         const nextEndsAtText = t(
           "player_ends_at",
@@ -10580,7 +10849,11 @@ export const PlayerScreen = {
       }
     }
 
-    if (this.pauseOverlayVisible) {
+    if (
+      this.pauseOverlayVisible &&
+      (slowSubsystemsDue || uiState.pauseOverlaySyncedVisible !== true)
+    ) {
+      uiState.pauseOverlaySyncedVisible = true;
       const overlayClock = this.uiRefs?.pauseOverlay?.querySelector(".player-pause-overlay-clock");
       if (overlayClock && overlayClock.textContent !== uiState.clockText) {
         overlayClock.textContent = uiState.clockText || "--:--";
@@ -10603,8 +10876,16 @@ export const PlayerScreen = {
       }
     }
 
-    this.syncPauseOverlayState();
-    this.renderNextEpisodeCard();
+    if (!this.pauseOverlayVisible) {
+      uiState.pauseOverlaySyncedVisible = false;
+    }
+
+    if (slowSubsystemsDue) {
+      this.syncPauseOverlayState();
+    }
+    if (nextEpisodeEndgameActive) {
+      this.renderNextEpisodeCard();
+    }
 
     if (this.seekOverlayVisible && this.seekPreviewSeconds == null) {
       this.renderSeekOverlay();
@@ -11804,7 +12085,16 @@ export const PlayerScreen = {
         // retry run before the screen-level recovery policy takes over.
         return WEBOS_HLS_REBUFFER_STALL_TIMEOUT_MS;
       }
-      return playbackEngine.endsWith("avplay") ? 16000 : 12000;
+      // A rebuffer on native-file means tearing the stream down and re-opening
+      // it (removeAttribute("src") -> load() -> re-seek). For a large file
+      // served over BitTorrent a 12 s underrun is ordinary, so that budget
+      // turned every slow patch into a restart — and each restart discards the
+      // buffer it was waiting for, which is how it becomes a loop. Wait longer,
+      // and the buffered-progress check in the guard aborts the restart outright
+      // whenever the stream is still moving.
+      return playbackEngine.endsWith("avplay")
+        ? 16000
+        : WEBOS_NATIVE_FILE_REBUFFER_STALL_TIMEOUT_MS;
     }
     return 9000;
   },
@@ -11819,9 +12109,25 @@ export const PlayerScreen = {
       Number.isFinite(Number(timeoutOverrideMs)) && Number(timeoutOverrideMs) > 0
         ? Number(timeoutOverrideMs)
         : this.getPlaybackStallTimeoutMs({ startup });
+    const armedBufferedSeconds = this.getPlaybackBufferedSeconds();
     this.playbackStallTimer = setTimeout(async () => {
       this.playbackStallTimer = null;
       if (this.isExternalFrameMode() || !this.loadingVisible || !this.activePlaybackUrl) {
+        return;
+      }
+
+      // A slow stream is not a broken one. Recovery below tears the source down
+      // and re-opens it, discarding whatever was buffered — so if the buffer
+      // grew at all while we waited, re-arm instead. Without this a large file
+      // on a thin swarm restarts forever and never gets ahead.
+      const currentBufferedSeconds = this.getPlaybackBufferedSeconds();
+      if (
+        armedBufferedSeconds != null &&
+        currentBufferedSeconds != null &&
+        currentBufferedSeconds >
+          armedBufferedSeconds + PLAYBACK_STALL_BUFFER_PROGRESS_EPSILON_SECONDS
+      ) {
+        this.schedulePlaybackStallGuard({ timeoutMs });
         return;
       }
 
@@ -12723,7 +13029,7 @@ export const PlayerScreen = {
     }
     if (!embeddedTrack) {
       return {
-        ...track,
+        ...toPlainTrackShape(track),
         ...getAudioTrackSupportState(track)
       };
     }
@@ -12783,7 +13089,7 @@ export const PlayerScreen = {
     }
     if (!embeddedTrack) {
       return {
-        ...track,
+        ...toPlainTrackShape(track),
         ...getAudioTrackSupportState(track)
       };
     }
@@ -12845,7 +13151,7 @@ export const PlayerScreen = {
       null;
     if (!manifestTrack) {
       return {
-        ...track,
+        ...toPlainTrackShape(track),
         ...getAudioTrackSupportState(track)
       };
     }
@@ -13307,7 +13613,15 @@ export const PlayerScreen = {
           return null;
         }
         const layout = parseVttCueLayout(lines[timingIndex]);
-        return { start, end, text, line: layout.line, align: layout.align };
+        return {
+          start,
+          end,
+          text,
+          line: layout.line,
+          position: layout.position,
+          align: layout.align,
+          size: layout.size
+        };
       })
       .filter(Boolean)
       .sort((left, right) => left.start - right.start || left.end - right.end);
@@ -13404,6 +13718,20 @@ export const PlayerScreen = {
   prepareWebOsEmbeddedTextSubtitleForSeek(timeSeconds) {
     const track = this.webOsEmbeddedTextSubtitleTrack;
     if (!track) {
+      return;
+    }
+    // Mirrors the `outsideWindow` guard in prepareBitmapSubtitleForSeek. A seek
+    // that lands inside the window we already hold needs no work at all —
+    // reloading it costs a multi-megabyte container read on the media server
+    // feeding the video, and re-parsing the ASS body rebuilds the whole
+    // subtitle DOM subtree. Scrubbing within a scene used to pay that every
+    // time.
+    const targetSeconds = Math.max(0, Number(timeSeconds) || 0);
+    const windowStart = Number(this.webOsEmbeddedTextSubtitleWindowStart || 0);
+    const windowEnd = Number(this.webOsEmbeddedTextSubtitleWindowEnd || 0);
+    const insideLoadedWindow =
+      windowEnd > windowStart && targetSeconds >= windowStart && targetSeconds < windowEnd;
+    if (insideLoadedWindow && !this.webOsEmbeddedTextSubtitleLoading) {
       return;
     }
     this.webOsEmbeddedTextSubtitleLoadToken =
@@ -13736,8 +14064,10 @@ export const PlayerScreen = {
     const sizeScale = normalizeSubtitleFontSize(style.fontSize) / 100;
     const verticalOffsetPx =
       splitSubtitleVerticalOffset(style.verticalOffset).value * -0.02 * viewportHeight;
-    const mode = this.aspectModes[this.aspectModeIndex] || this.aspectModes[0];
-    const rect = this.calculateAspectRect(mode.objectFit, PlayerController.video);
+    const mode = this.getAspectModeDefinition();
+    const rect = this.calculateAspectRect(mode.id, PlayerController.video);
+    const modeScaleX = Number(rect.scaleX || 1);
+    const modeScaleY = Number(rect.scaleY || 1);
     const renderKey = [
       frame.key,
       viewportWidth,
@@ -13746,6 +14076,8 @@ export const PlayerScreen = {
       Math.round(rect.y),
       Math.round(rect.width),
       Math.round(rect.height),
+      modeScaleX,
+      modeScaleY,
       sizeScale,
       verticalOffsetPx
     ].join(":");
@@ -13762,8 +14094,14 @@ export const PlayerScreen = {
     ) {
       return hasRenderableCompositions;
     }
-    canvas.width = viewportWidth;
-    canvas.height = viewportHeight;
+    // Assigning width/height reallocates the backing store — a fresh 1920x1080
+    // buffer on every subtitle frame change. Only resize when the viewport
+    // actually changed; the clearRect below already wipes the surface, which is
+    // the only reason the assignment appeared to be needed.
+    if (canvas.width !== viewportWidth || canvas.height !== viewportHeight) {
+      canvas.width = viewportWidth;
+      canvas.height = viewportHeight;
+    }
     const context = canvas.getContext("2d");
     if (!context) {
       return false;
@@ -13781,8 +14119,8 @@ export const PlayerScreen = {
     if (!scratchContext) {
       return false;
     }
-    const scaleX = rect.width / frame.screenWidth;
-    const scaleY = rect.height / frame.screenHeight;
+    const contentScaleX = rect.width / frame.screenWidth;
+    const contentScaleY = rect.height / frame.screenHeight;
     let renderedCompositions = 0;
     compositions.forEach((composition) => {
       if (
@@ -13797,11 +14135,13 @@ export const PlayerScreen = {
       const imageData = scratchContext.createImageData(composition.width, composition.height);
       imageData.data.set(composition.rgba);
       scratchContext.putImageData(imageData, 0, 0);
-      const targetWidth = composition.width * scaleX * sizeScale;
-      const targetHeight = composition.height * scaleY * sizeScale;
-      const targetCenterX = rect.x + (composition.x + composition.width / 2) * scaleX;
+      const targetWidth = composition.width * contentScaleX * sizeScale * modeScaleX;
+      const targetHeight = composition.height * contentScaleY * sizeScale * modeScaleY;
+      const baseCenterX = rect.x + (composition.x + composition.width / 2) * contentScaleX;
+      const baseCenterY = rect.y + (composition.y + composition.height / 2) * contentScaleY;
+      const targetCenterX = viewportWidth / 2 + (baseCenterX - viewportWidth / 2) * modeScaleX;
       const targetCenterY =
-        rect.y + (composition.y + composition.height / 2) * scaleY + verticalOffsetPx;
+        viewportHeight / 2 + (baseCenterY - viewportHeight / 2) * modeScaleY + verticalOffsetPx;
       context.drawImage(
         scratch,
         targetCenterX - targetWidth / 2,
@@ -13831,7 +14171,7 @@ export const PlayerScreen = {
     const cueKey = activeCues
       .map(
         (cue) =>
-          `${cue.start}-${cue.end}-${cue.line ?? "default"}-${cue.align || "center"}-${cue.text}`
+          `${cue.start}-${cue.end}-${cue.line ?? "default"}-${cue.position ?? "default"}-${cue.align || "center"}-${cue.size ?? "default"}-${cue.text}`
       )
       .join("|");
     const hasRenderedActiveCue =
@@ -13857,12 +14197,16 @@ export const PlayerScreen = {
     }
     const cueGroups = new Map();
     activeCues.forEach((cue) => {
-      const line = cue?.line == null ? NaN : Number(cue.line);
-      const normalizedLine = Number.isFinite(line) ? clamp(line, 0, 100) : null;
+      const rawLine = cue?.line == null ? NaN : Number(cue.line);
+      const normalizedLine = Number.isFinite(rawLine) ? clamp(rawLine, 0, 100) : null;
+      const rawPosition = cue?.position == null ? NaN : Number(cue.position);
+      const position = Number.isFinite(rawPosition) ? clamp(rawPosition, 0, 100) : null;
       const align = ["start", "end", "center"].includes(cue?.align) ? cue.align : "center";
-      const groupKey = `${normalizedLine ?? "default"}:${align}`;
+      const rawSize = cue?.size == null ? NaN : Number(cue.size);
+      const size = Number.isFinite(rawSize) && rawSize > 0 ? clamp(rawSize, 10, 200) : null;
+      const groupKey = `${normalizedLine ?? "default"}:${position ?? "default"}:${align}:${size ?? ""}`;
       if (!cueGroups.has(groupKey)) {
-        cueGroups.set(groupKey, { line: normalizedLine, align, cues: [] });
+        cueGroups.set(groupKey, { line: normalizedLine, position, align, size, cues: [] });
       }
       cueGroups.get(groupKey).cues.push(cue);
     });
@@ -13874,6 +14218,15 @@ export const PlayerScreen = {
       } else {
         cueNode.classList.add("player-html-subtitle-positioned");
         cueNode.style.top = `${group.line}%`;
+        if (group.position != null) {
+          cueNode.style.left = `${group.position}%`;
+          cueNode.style.right = "auto";
+          const anchor = group.align === "start" ? "0%" : group.align === "end" ? "-100%" : "-50%";
+          cueNode.style.transform = `translate(${anchor}, -50%) translateY(var(--player-subtitle-offset))`;
+        }
+      }
+      if (group.size != null && group.line != null) {
+        cueNode.style.fontSize = `${group.size}%`;
       }
       group.cues.forEach((cue) =>
         String(cue.text || "")
@@ -18086,7 +18439,7 @@ export const PlayerScreen = {
 
     const focusedCard = panel.querySelector(".player-source-card.focused");
     if (focusedCard) {
-      focusedCard.scrollIntoView({ block: "nearest", inline: "nearest" });
+      scrollIntoNearestView(focusedCard);
     }
   },
 
@@ -18116,7 +18469,7 @@ export const PlayerScreen = {
     });
     focusedNode.classList.add("focused");
     if (focusedNode.classList.contains("player-source-card")) {
-      focusedNode.scrollIntoView({ block: "nearest", inline: "nearest" });
+      scrollIntoNearestView(focusedNode);
     }
   },
 
@@ -18281,11 +18634,65 @@ export const PlayerScreen = {
     }, 1400);
   },
 
+  getAspectModeDefinition(mode = this.aspectModes?.[this.aspectModeIndex]) {
+    const modeId = normalizeAspectMode(typeof mode === "object" ? mode?.id : mode);
+    return (
+      this.aspectModes?.find((candidate) => candidate.id === modeId) ||
+      this.aspectModes?.[0] ||
+      ASPECT_MODE_DEFINITIONS[0]
+    );
+  },
+
+  getVideoAspectRatio(video = PlayerController.video) {
+    const explicitAspectCandidates = [
+      video?.pixelWidthHeightRatio,
+      video?.pixelAspectRatio,
+      video?.videoAspectRatio,
+      video?.displayAspectRatio,
+      video?.aspectRatio
+    ];
+    for (const candidate of explicitAspectCandidates) {
+      const aspect = parseAspectRatio(candidate);
+      if (aspect && aspect > 0) {
+        const width = Number(video?.videoWidth || 0);
+        const height = Number(video?.videoHeight || 0);
+        if (candidate === video?.pixelWidthHeightRatio && width > 0 && height > 0) {
+          return (width / height) * aspect;
+        }
+        if (candidate === video?.pixelWidthHeightRatio) {
+          continue;
+        }
+        return aspect;
+      }
+    }
+
+    const videoWidth = Number(video?.videoWidth || 0);
+    const videoHeight = Number(video?.videoHeight || 0);
+    if (videoWidth > 0 && videoHeight > 0) {
+      return videoWidth / videoHeight;
+    }
+
+    const avplayDimensions =
+      typeof PlayerController.getAvPlayVideoDimensions === "function"
+        ? PlayerController.getAvPlayVideoDimensions()
+        : null;
+    const avplayAspect = parseAspectRatio(avplayDimensions?.aspect);
+    if (avplayAspect && avplayAspect > 0) {
+      return avplayAspect;
+    }
+    const avplayWidth = Number(avplayDimensions?.width || 0);
+    const avplayHeight = Number(avplayDimensions?.height || 0);
+    return avplayWidth > 0 && avplayHeight > 0 ? avplayWidth / avplayHeight : null;
+  },
+
   applyAspectMode({ showToast = false } = {}) {
-    const mode = this.aspectModes[this.aspectModeIndex] || this.aspectModes[0];
+    const mode = this.getAspectModeDefinition();
     const video = PlayerController.video;
     if (video) {
-      const rect = this.calculateAspectRect(mode.objectFit, video);
+      const rect = this.calculateAspectRect(mode.id, video);
+      const usingTizenAvPlay = Boolean(Environment.isTizen() && PlayerController.isUsingAvPlay?.());
+      const canTransformVideo = !Environment.isWebOS() && !usingTizenAvPlay;
+      const videoRect = usingTizenAvPlay ? rect.displayRect : rect;
       video.style.position = "fixed";
       if (Environment.isWebOS()) {
         // webOS suppresses its screensaver only when the video element itself
@@ -18296,17 +18703,22 @@ export const PlayerScreen = {
         video.style.height = "100vh";
         video.style.objectFit = mode.objectFit;
       } else {
-        video.style.left = `${Math.round(rect.x)}px`;
-        video.style.top = `${Math.round(rect.y)}px`;
-        video.style.width = `${Math.round(rect.width)}px`;
-        video.style.height = `${Math.round(rect.height)}px`;
+        video.style.left = `${Math.round(videoRect.x)}px`;
+        video.style.top = `${Math.round(videoRect.y)}px`;
+        video.style.width = `${Math.round(videoRect.width)}px`;
+        video.style.height = `${Math.round(videoRect.height)}px`;
         video.style.objectFit = "fill";
       }
       video.style.maxWidth = "none";
       video.style.maxHeight = "none";
       video.style.background = "black";
+      video.style.transformOrigin = "center center";
+      video.style.transform =
+        !canTransformVideo || (rect.scaleX === 1 && rect.scaleY === 1)
+          ? "none"
+          : `scale(${rect.scaleX}, ${rect.scaleY})`;
       if (typeof PlayerController.setAvPlayDisplayRect === "function") {
-        PlayerController.setAvPlayDisplayRect(rect, rect.displayMethod);
+        PlayerController.setAvPlayDisplayRect(rect.displayRect, rect.displayMethod);
       }
     }
     if (showToast) {
@@ -18315,7 +18727,7 @@ export const PlayerScreen = {
     this.renderBitmapSubtitleAtCurrentTime({ force: true });
   },
 
-  calculateAspectRect(objectFit = "contain", video = PlayerController.video) {
+  calculateAspectRect(mode = "ORIGINAL", video = PlayerController.video) {
     const viewport =
       typeof PlayerController.getPlayerViewportSize === "function"
         ? PlayerController.getPlayerViewportSize()
@@ -18341,42 +18753,28 @@ export const PlayerScreen = {
           };
     const viewportWidth = viewport.width;
     const viewportHeight = viewport.height;
-    if (objectFit === "fill") {
-      return {
-        x: 0,
-        y: 0,
-        width: viewportWidth,
-        height: viewportHeight,
-        displayMethod: "PLAYER_DISPLAY_MODE_FULL_SCREEN"
-      };
-    }
-
-    const avplayDimensions =
-      typeof PlayerController.getAvPlayVideoDimensions === "function"
-        ? PlayerController.getAvPlayVideoDimensions()
-        : null;
-    const videoWidth = Number(video?.videoWidth || avplayDimensions?.width || 0);
-    const videoHeight = Number(video?.videoHeight || avplayDimensions?.height || 0);
-    const mediaRatio = videoWidth > 0 && videoHeight > 0 ? videoWidth / videoHeight : 16 / 9;
-    const viewportRatio = viewportWidth / viewportHeight;
-    const shouldCover = objectFit === "cover";
-    const widthLimited = shouldCover ? viewportRatio > mediaRatio : viewportRatio < mediaRatio;
-    const width = widthLimited ? viewportWidth : viewportHeight * mediaRatio;
-    const height = widthLimited ? viewportWidth / mediaRatio : viewportHeight;
-
+    const normalizedMode = normalizeAspectMode(typeof mode === "object" ? mode?.id : mode);
+    const videoAspect = this.getVideoAspectRatio(video);
+    const render = resolveAspectRender(normalizedMode, viewportWidth, viewportHeight, videoAspect);
+    const displayRect = Environment.isTizen()
+      ? { x: 0, y: 0, width: viewportWidth, height: viewportHeight }
+      : {
+          x: render.x,
+          y: render.y,
+          width: render.width,
+          height: render.height
+        };
     return {
-      x: (viewportWidth - width) / 2,
-      y: (viewportHeight - height) / 2,
-      width,
-      height,
-      displayMethod: shouldCover
-        ? "PLAYER_DISPLAY_MODE_FULL_SCREEN"
-        : "PLAYER_DISPLAY_MODE_LETTER_BOX"
+      ...render,
+      mode: normalizedMode,
+      displayRect
     };
   },
 
   cycleAspectMode() {
     this.aspectModeIndex = (this.aspectModeIndex + 1) % this.aspectModes.length;
+    const mode = this.getAspectModeDefinition();
+    DeviceLocalPlayerPreferences.setAspectMode(mode.id);
     this.applyAspectMode({ showToast: true });
   },
   renderParentalGuideOverlay() {
@@ -19048,7 +19446,7 @@ export const PlayerScreen = {
 
     try {
       const focused = panel.querySelector(".focused");
-      focused?.focus?.({ preventScroll: true });
+      focusWithoutScroll(focused);
     } catch (_) {
       // Some TV WebKit builds reject programmatic focus during DOM replacement.
     }
@@ -20434,7 +20832,32 @@ export const PlayerScreen = {
           hasReleaseToken(text, "dv") ||
           hasReleaseToken(text, "dovi")
         ) {
-          score += supports("dolbyVision", true) ? 18 : -45;
+          // Measured on an OLED65C9: the webOS HTML5 pipeline delivers Dolby
+          // Vision only out of an MP4 container. canPlayType for
+          // 'video/mp4; codecs="dvhe.08.06"' is "probably", while every
+          // video/x-matroska variant is "" — and declaring video/x-matroska
+          // outright fails the load (networkState 3), which is why the player
+          // sends MKV with no type and lets the TV sniff it. Two releases of the
+          // same title with identical DV metadata (dv_profile 8, dv_level 6,
+          // bl_signal_compatibility_id 1) behaved differently on the device: the
+          // MP4 engaged Dolby Vision, the MKV played as its HDR10 base layer.
+          // So the DV bonus is only earned on webOS when the release is MP4. An
+          // MKV is not penalised — it plays fine and still collects the HDR bonus
+          // above — it just must not outrank a source that can really do DV.
+          // `text` already carries behaviorHints.filename, so when the addon
+          // supplies a filename the real container is in here as an extension —
+          // far better than guessing from the release name. Matroska is the
+          // default for torrent releases, so an unknown container is treated as
+          // undeliverable: that costs nothing when every candidate is MKV, and
+          // lets a labelled MP4 win when one exists.
+          const looksMatroska = /\.mkv\b/.test(text) || hasReleaseToken(text, "mkv");
+          const looksMp4 = /\.mp4\b/.test(text) || hasReleaseToken(text, "mp4");
+          const dolbyVisionDeliverable = !isWebOsRuntime || (looksMp4 && !looksMatroska);
+          if (!supports("dolbyVision", true)) {
+            score -= 45;
+          } else if (dolbyVisionDeliverable) {
+            score += 18;
+          }
         }
         if (text.includes("atmos") || text.includes("eac3") || text.includes("ec-3")) {
           score += supports("atmosLikely", true) || supports("audioEac3", true) ? 14 : -30;

@@ -16,6 +16,11 @@ var prepareBitmapSubtitleSource = bitmapSubtitles.prepareBitmapSubtitleSource;
 
 var RUNTIME_PATH = path.resolve(__dirname, "..", "runtime", "media-http.cjs");
 
+// Default window for a track probe when the caller does not ask for one. The
+// probe reads from the front of the container, which on a cold torrent may not
+// have arrived yet, so it needs more room than a plain local request.
+var TRACKS_REQUEST_TIMEOUT_MS = 12000;
+
 function createService() {
   try {
     var Service = require("webos-service");
@@ -37,7 +42,11 @@ var runtimeState = {
   booted: false,
   bootTimestamp: null,
   bootCount: 0,
-  error: null
+  error: null,
+  // "enginefs" when the full media runtime loaded, "proxy-only" when it could
+  // not be parsed by this Node build and only the HTTP proxies are served.
+  mode: null,
+  runtimeError: null
 };
 var keepAliveIntervals = {};
 
@@ -56,10 +65,16 @@ function ensureRuntimeStarted(force) {
         RUNTIME_PATH
       );
     }
-    bootLocalRuntime(RUNTIME_PATH);
+    var boot = bootLocalRuntime(RUNTIME_PATH) || { mode: "enginefs", runtimeError: null };
     runtimeState.booted = true;
     runtimeState.bootCount += 1;
-    console.log("[" + SERVICE_ID + "] local media runtime booted from", RUNTIME_PATH);
+    runtimeState.mode = boot.mode;
+    runtimeState.runtimeError = boot.runtimeError;
+    console.log(
+      "[" + SERVICE_ID + "] local media runtime booted from",
+      RUNTIME_PATH,
+      "mode=" + boot.mode
+    );
   } catch (error) {
     runtimeState.error = {
       message: String(error && error.message ? error.message : error),
@@ -115,6 +130,27 @@ function buildErrorPayload(error, extras) {
       errorText: String(error && error.message ? error.message : error || "Unknown service error")
     },
     extras || {}
+  );
+}
+
+// True when the media runtime could not be loaded and only the HTTP proxies are
+// up. Every route the runtime owns — torrent streams, embedded track listing,
+// subtitle extraction — has to fail with a clear reason instead of a bare 404
+// from the placeholder server.
+function isMediaRuntimeUnavailable() {
+  return runtimeState.mode === "proxy-only";
+}
+
+function buildMediaRuntimeUnavailablePayload() {
+  return buildErrorPayload(
+    "The local media runtime is unavailable on this platform. Torrent streams " +
+      "and embedded track/subtitle extraction are disabled; direct HTTP " +
+      "playback and the image and account proxies still work.",
+    {
+      errorCode: -2,
+      runtimeMode: runtimeState.mode,
+      runtimeError: runtimeState.runtimeError ? runtimeState.runtimeError.message : null
+    }
   );
 }
 
@@ -257,19 +293,35 @@ function registerTracksCommand() {
   service.register("tracks", function (message) {
     ensureRuntimeStarted();
 
+    if (isMediaRuntimeUnavailable()) {
+      respond(message, buildMediaRuntimeUnavailablePayload());
+      return;
+    }
+
     if (runtimeState.error) {
       respond(message, buildErrorPayload(runtimeState.error));
       return;
     }
 
-    var mediaUrl = String(getMessagePayload(message).url || "").trim();
+    var tracksPayload = getMessagePayload(message);
+    var mediaUrl = String(tracksPayload.url || "").trim();
     if (!mediaUrl) {
       respond(message, buildErrorPayload("Missing required parameter: url"));
       return;
     }
 
+    // The caller's timeout was being dropped here, so every track probe was
+    // capped at requestLocalHttp's 5 s default no matter what was asked for. On
+    // a cold torrent the first megabytes may not have arrived inside 5 s, which
+    // failed the probe and sent the client back for another round — more reads
+    // against the server already struggling to feed the video.
+    var tracksTimeoutMs = Math.max(
+      1000,
+      Math.min(30000, Math.trunc(Number(tracksPayload.timeoutMs)) || TRACKS_REQUEST_TIMEOUT_MS)
+    );
+
     var tracksPath = "/tracks/" + encodeURIComponent(mediaUrl);
-    requestActiveServerPath(tracksPath, function (error, status) {
+    requestActiveServerHttp(tracksPath, { timeoutMs: tracksTimeoutMs }, function (error, status) {
       if (error) {
         respond(
           message,
@@ -321,6 +373,11 @@ function registerTracksCommand() {
 function registerSubtitleTextCommand() {
   service.register("subtitleText", function (message) {
     ensureRuntimeStarted();
+
+    if (isMediaRuntimeUnavailable()) {
+      respond(message, buildMediaRuntimeUnavailablePayload());
+      return;
+    }
 
     if (runtimeState.error) {
       respond(message, buildErrorPayload(runtimeState.error));
@@ -467,6 +524,11 @@ function registerTorrentProxyCommand(commandName, buildPath) {
   service.register(commandName, function (message) {
     ensureRuntimeStarted();
 
+    if (isMediaRuntimeUnavailable()) {
+      respond(message, buildMediaRuntimeUnavailablePayload());
+      return;
+    }
+
     if (runtimeState.error) {
       respond(message, buildErrorPayload(runtimeState.error));
       return;
@@ -516,6 +578,11 @@ function registerTorrentProxyCommand(commandName, buildPath) {
 function registerTorrentCreateCommand() {
   service.register("torrentCreate", function (message) {
     ensureRuntimeStarted();
+
+    if (isMediaRuntimeUnavailable()) {
+      respond(message, buildMediaRuntimeUnavailablePayload());
+      return;
+    }
 
     if (runtimeState.error) {
       respond(message, buildErrorPayload(runtimeState.error));

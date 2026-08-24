@@ -43,6 +43,8 @@ import {
 } from "../../components/watchedTitleBadge.js";
 import {
   buildModernRowKey,
+  getHomeRowKey,
+  renderModernRowSection,
   MODERN_HOME_CONSTANTS,
   renderModernHomeLayout
 } from "./modernHomeLayout.js";
@@ -105,8 +107,11 @@ import {
   HOME_MAX_ITEMS_PER_ROW_CONSTRAINED,
   HOME_MAX_ITEMS_PER_ROW_DEFAULT,
   HOME_MAX_ITEMS_PER_ROW_LEGACY_TV,
+  HOME_MAX_ROWS_CONSTRAINED,
+  HOME_MAX_ROWS_DEFAULT,
+  HOME_MAX_ROWS_LEGACY_TV,
   HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS,
-  HOME_PERF_DEBUG,
+  isHomePerfDebugEnabled,
   HOME_RETURN_FOCUS_STATE_KEY,
   HOME_ROW_RETRY_TIMEOUT_MS,
   HOME_ROW_TIMEOUT_MS
@@ -145,6 +150,14 @@ const HOME_LAZY_IMAGE_SELECTOR =
   ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src]";
 const HOME_LAZY_IMAGE_ROW_SELECTOR =
   ".home-row, .home-modern-row, .home-grid-section, .home-row-continue";
+// The focused row used to hydrate every image it owned, unconditionally. Measured
+// on the C9: 16 cards mounted per row, only 7 inside the 1920px viewport, and all
+// 16 decoded. Poster decode is the dominant cost of the first downward traversal
+// (3983ms of jank over 12 rows with the images already in the HTTP cache, so it is
+// decode and not network). This margin keeps a buffer of roughly one and a half
+// cards on each side of the viewport, so a D-pad move lands on a hydrated poster,
+// while the off-screen tail waits for the user to actually scroll toward it.
+const HOME_FOCUSED_ROW_HORIZONTAL_MARGIN = 320;
 
 function homePerfNow() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -153,12 +166,204 @@ function homePerfNow() {
 }
 
 function logHomePerf(stage, data = {}) {
-  if (!HOME_PERF_DEBUG) {
+  if (!isHomePerfDebugEnabled()) {
     return;
   }
   try {
     console.info(`[home-perf] ${stage}`, data);
   } catch (_) {}
+}
+
+// Debug-only localStorage profiler.
+//
+// The worst measured long frame on the C9 (1972ms) happened with zero Home rows
+// and zero cards in the DOM, so it cannot be rendering, poster decode or the row
+// reconciler: it is synchronous JS on the data/load path. localStorage is the
+// prime suspect there. On webOS every read parses and every write flushes to
+// disk synchronously, and the profile-scoped envelopes are read many times per
+// load — several of them rewrite themselves whenever the normalized value
+// differs from what was read, which turns a read into a read plus a disk write.
+//
+// Per-key attribution is the only way to tell a hot key from a hot caller, so
+// this tallies calls, bytes and wall time per key. It is installed on demand and
+// never touches a normal session. Enable with:
+//   __NUVIO_DEBUG_HOME_PERF__ = true; __NUVIO_HOME_PERF_INSTALL_STORAGE__();
+let homeStorageProfilerInstalled = false;
+
+function homeStorageStats() {
+  if (!globalThis.__NUVIO_HOME_PERF_STORAGE__) {
+    globalThis.__NUVIO_HOME_PERF_STORAGE__ = { installedAt: 0, keys: {} };
+  }
+  return globalThis.__NUVIO_HOME_PERF_STORAGE__;
+}
+
+function homeStorageEntry(key) {
+  const stats = homeStorageStats();
+  const name = String(key == null ? "" : key);
+  if (!stats.keys[name]) {
+    stats.keys[name] = {
+      reads: 0,
+      readMs: 0,
+      readBytes: 0,
+      writes: 0,
+      writeMs: 0,
+      writeBytes: 0
+    };
+  }
+  return stats.keys[name];
+}
+
+function installHomeStoragePerfProfiler() {
+  if (homeStorageProfilerInstalled) {
+    return homeStorageStats();
+  }
+  let target = null;
+  try {
+    target =
+      typeof Storage === "function" && Storage.prototype
+        ? Storage.prototype
+        : globalThis.localStorage;
+  } catch (_) {
+    target = null;
+  }
+  if (!target || typeof target.getItem !== "function" || typeof target.setItem !== "function") {
+    return homeStorageStats();
+  }
+  const originalGetItem = target.getItem;
+  const originalSetItem = target.setItem;
+  target.getItem = function instrumentedGetItem(key) {
+    const start = homePerfNow();
+    const value = originalGetItem.call(this, key);
+    const entry = homeStorageEntry(key);
+    entry.reads += 1;
+    entry.readMs += homePerfNow() - start;
+    entry.readBytes += value == null ? 0 : String(value).length;
+    return value;
+  };
+  target.setItem = function instrumentedSetItem(key, value) {
+    const start = homePerfNow();
+    const result = originalSetItem.call(this, key, value);
+    const entry = homeStorageEntry(key);
+    entry.writes += 1;
+    entry.writeMs += homePerfNow() - start;
+    entry.writeBytes += value == null ? 0 : String(value).length;
+    return result;
+  };
+  homeStorageProfilerInstalled = true;
+  const stats = homeStorageStats();
+  stats.installedAt = homePerfNow();
+  return stats;
+}
+
+function homeStoragePerfReport(topCount = 12) {
+  const stats = homeStorageStats();
+  const rows = Object.keys(stats.keys || {}).map((key) => {
+    const entry = stats.keys[key];
+    return {
+      key,
+      reads: entry.reads,
+      writes: entry.writes,
+      readMs: Number(entry.readMs.toFixed(1)),
+      writeMs: Number(entry.writeMs.toFixed(1)),
+      totalMs: Number((entry.readMs + entry.writeMs).toFixed(1)),
+      readKB: Number((entry.readBytes / 1024).toFixed(1)),
+      writeKB: Number((entry.writeBytes / 1024).toFixed(1))
+    };
+  });
+  rows.sort((left, right) => right.totalMs - left.totalMs);
+  return {
+    installed: homeStorageProfilerInstalled,
+    totalMs: Number(rows.reduce((sum, row) => sum + row.totalMs, 0).toFixed(1)),
+    totalReads: rows.reduce((sum, row) => sum + row.reads, 0),
+    totalWrites: rows.reduce((sum, row) => sum + row.writes, 0),
+    top: rows.slice(0, Math.max(1, Number(topCount) || 12))
+  };
+}
+
+if (typeof globalThis === "object" && globalThis) {
+  globalThis.__NUVIO_HOME_PERF_INSTALL_STORAGE__ = installHomeStoragePerfProfiler;
+  globalThis.__NUVIO_HOME_PERF_STORAGE_REPORT__ = homeStoragePerfReport;
+}
+
+// Accumulator for the load-path stages. A single freeze is attributed by
+// comparing stage totals for one cold load, so the counters are reset at the
+// start of every non-background loadData() and dumped as one "load-stages"
+// record, which keeps the attribution readable in a single CDP call.
+const homeLoadStageTotals = {};
+
+function resetHomeLoadStages() {
+  Object.keys(homeLoadStageTotals).forEach((key) => {
+    delete homeLoadStageTotals[key];
+  });
+}
+
+function trackHomeLoadStage(stage, ms, calls = 1) {
+  if (!isHomePerfDebugEnabled()) {
+    return;
+  }
+  const name = String(stage || "unknown");
+  const entry = homeLoadStageTotals[name] || { ms: 0, calls: 0 };
+  entry.ms += Number(ms) || 0;
+  entry.calls += Number(calls) || 0;
+  homeLoadStageTotals[name] = entry;
+}
+
+// Times a synchronous step and folds it into the load-stage totals. The callback
+// runs unconditionally so behaviour never depends on whether debug is enabled.
+function measureHomeLoadStage(stage, run) {
+  if (!isHomePerfDebugEnabled()) {
+    return run();
+  }
+  const start = homePerfNow();
+  try {
+    return run();
+  } finally {
+    trackHomeLoadStage(stage, homePerfNow() - start);
+  }
+}
+
+async function measureHomeLoadStageAsync(stage, run) {
+  if (!isHomePerfDebugEnabled()) {
+    return run();
+  }
+  const start = homePerfNow();
+  try {
+    return await run();
+  } finally {
+    trackHomeLoadStage(stage, homePerfNow() - start);
+  }
+}
+
+function homeLoadStageReport() {
+  return Object.keys(homeLoadStageTotals)
+    .map((key) => ({
+      stage: key,
+      ms: Number(homeLoadStageTotals[key].ms.toFixed(1)),
+      calls: homeLoadStageTotals[key].calls
+    }))
+    .sort((left, right) => right.ms - left.ms);
+}
+
+if (typeof globalThis === "object" && globalThis) {
+  globalThis.__NUVIO_HOME_PERF_STAGE_REPORT__ = homeLoadStageReport;
+}
+
+function logHomeLoadStages(phase) {
+  if (!isHomePerfDebugEnabled()) {
+    return;
+  }
+  const stages = Object.keys(homeLoadStageTotals)
+    .map((key) => ({
+      stage: key,
+      ms: Number(homeLoadStageTotals[key].ms.toFixed(1)),
+      calls: homeLoadStageTotals[key].calls
+    }))
+    .sort((left, right) => right.ms - left.ms);
+  logHomePerf("load-stages", {
+    phase: String(phase || ""),
+    stages,
+    storage: homeStoragePerfReport(8)
+  });
 }
 
 function t(key, params = {}, fallback = key) {
@@ -3685,6 +3890,13 @@ export const HomeScreen = {
       : HOME_MAX_ITEMS_PER_ROW_DEFAULT;
   },
 
+  getHomeRowLimit() {
+    if (this.isLegacyTvRuntime()) {
+      return HOME_MAX_ROWS_LEGACY_TV;
+    }
+    return this.isPerformanceConstrained() ? HOME_MAX_ROWS_CONSTRAINED : HOME_MAX_ROWS_DEFAULT;
+  },
+
   getContinueWatchingRenderBatchSize() {
     if (this.isLegacyTvRuntime()) {
       return CW_RENDER_BATCH_ITEMS_LEGACY_TV;
@@ -3859,6 +4071,18 @@ export const HomeScreen = {
     }
   },
 
+  clearHomeProgressiveRows() {
+    if (this.homeProgressiveGrowTimer) {
+      if (typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(this.homeProgressiveGrowTimer);
+      } else {
+        clearTimeout(this.homeProgressiveGrowTimer);
+      }
+      this.homeProgressiveGrowTimer = null;
+    }
+    this.homeProgressiveRowBudget = 0;
+  },
+
   invalidateNavigationModel() {
     this.navigationDomVersion = Number(this.navigationDomVersion || 0) + 1;
     this.navModel = null;
@@ -3899,7 +4123,19 @@ export const HomeScreen = {
     });
   },
 
-  requestBackgroundRender() {
+  /**
+   * `reason` is diagnostic only. Every caller here rebuilds the entire screen,
+   * but almost none of them changed the entire screen — the reason string is
+   * what lets `[home-perf] render` say which cause paid for which full rebuild,
+   * so the expensive ones can be narrowed to the region they actually touched.
+   */
+  requestBackgroundRender(reason = "unspecified") {
+    if (!this.pendingRenderReasons) {
+      this.pendingRenderReasons = [];
+    }
+    if (this.pendingRenderReasons.indexOf(reason) === -1) {
+      this.pendingRenderReasons.push(reason);
+    }
     this.requestRender({ delayMs: this.getBackgroundRenderDelay() });
   },
 
@@ -7319,7 +7555,7 @@ export const HomeScreen = {
       return currentMain || null;
     }
     if (currentMain !== target) {
-      const syncStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
+      const syncStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
       if (currentMain && currentMain.isConnected) {
         currentMain.classList.remove("focused");
       }
@@ -7707,7 +7943,7 @@ export const HomeScreen = {
     if (!current || !target || current === target) {
       return false;
     }
-    const focusStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
+    const focusStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
     const scrollAdjustments = this.getExpandedPosterScrollAdjustments(current, target, direction);
     const shouldInstantCollapseExpandedPoster =
       this.layoutMode === "modern" && (direction === "left" || direction === "right");
@@ -8191,7 +8427,7 @@ export const HomeScreen = {
   },
 
   async mount(params = {}, navigationContext = {}) {
-    const mountStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
+    const mountStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
     const isBackNavigation = Boolean(navigationContext?.isBackNavigation);
     // Startup-only Home flags can be retained in the route stack when the
     // user opens Detail. Do not replay them when returning to the rendered TV
@@ -8377,12 +8613,16 @@ export const HomeScreen = {
     this.rows = [];
     this.watchedItems = [];
     this.watchedTitleIds = new Set();
-    this.continueWatchingDisplay = waitForFreshContinueWatching
-      ? []
-      : readContinueWatchingDisplaySnapshot(watchProgressRepository.getContinueWatchingSourceKey());
-    this.continueWatchingHydratedFromSnapshot = Boolean(
-      !waitForFreshContinueWatching && this.continueWatchingDisplay.length
+    // Always hydrate Continue Watching from the persisted snapshot, including on
+    // the cold `waitForFreshContinueWatching` path. That flag used to mean "show
+    // nothing until the cloud pull finishes", which cost a measured 2641.8 ms of
+    // loading screen (`startup-sync-await`) before a single row existed. It now
+    // means "refresh from the cloud", and the refresh lands in place — see the
+    // `startup-sync-background` gate in loadData().
+    this.continueWatchingDisplay = readContinueWatchingDisplaySnapshot(
+      watchProgressRepository.getContinueWatchingSourceKey()
     );
+    this.continueWatchingHydratedFromSnapshot = Boolean(this.continueWatchingDisplay.length);
     this.continueWatchingLoading = false;
     this.heroCandidates = [];
     this.heroItem = null;
@@ -8402,14 +8642,47 @@ export const HomeScreen = {
     preserveReturnState = false,
     waitForFreshContinueWatching = false
   } = {}) {
-    const loadStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
+    const loadStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
+    if (isHomePerfDebugEnabled()) {
+      installHomeStoragePerfProfiler();
+      if (!background) {
+        resetHomeLoadStages();
+      }
+    }
     const token = this.homeLoadToken;
+    // The startup sync is five serialized network round trips. Awaiting it here
+    // was the single largest measured cost on the load path (`startup-sync-await`,
+    // 2641.8 ms) and none of it is CPU — it is the user staring at a loading
+    // screen. Home now renders from local/cached state immediately and the sync
+    // lands afterwards: the Continue Watching reads below are the only thing
+    // gated on it, and they update the row in place when they resolve.
+    let homeSyncPromise = null;
     if (!background && waitForFreshContinueWatching && StartupSyncService.started) {
-      globalThis.NuvioBootGuard?.stage?.("Synchronizing Continue Watching");
-      await StartupSyncService.requestHomeSyncNow().catch((error) => {
-        console.warn("Initial Continue Watching sync failed", error);
+      const preSyncSignature = this.buildSyncSensitiveHomeSignature();
+      homeSyncPromise = measureHomeLoadStageAsync("startup-sync-background", () =>
+        StartupSyncService.requestHomeSyncNow().catch((error) => {
+          console.warn("Initial Continue Watching sync failed", error);
+          return false;
+        })
+      ).then((result) => {
+        // Home was rendered from local settings. If the pull actually changed a
+        // setting the rendered rows depend on (home layout, hero/unreleased
+        // prefs, or the Continue Watching provider), the paint on screen is
+        // stale in a way no partial updater can patch — reload it in the
+        // background rather than leave the wrong layout mounted.
+        if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
+          return result;
+        }
+        if (this.buildSyncSensitiveHomeSignature() !== preSyncSignature) {
+          this.loadData({ background: true, preserveReturnState: true }).catch((error) => {
+            console.warn("Post-sync Home refresh failed", error);
+          });
+        }
+        return result;
       });
     }
+    const afterHomeSync = (run) =>
+      homeSyncPromise ? homeSyncPromise.then(run, run) : Promise.resolve().then(run);
     const preserveHomeReturnState = Boolean(background && preserveReturnState);
     const preservedHeroItem = preserveHomeReturnState ? this.heroItem : null;
     const preservedHeroIdentity = preserveHomeReturnState ? buildHeroIdentity(this.heroItem) : "";
@@ -8426,7 +8699,14 @@ export const HomeScreen = {
       }
       this.watchedItems = Array.isArray(watchedItems) ? watchedItems : [];
       this.watchedTitleIds = buildWatchedTitleIdSet(this.watchedItems);
-      this.requestBackgroundRender();
+      if (this.applyWatchedBadgesInPlace()) {
+        // The DOM no longer matches the string `render()` last produced, so the
+        // equality shortcut in render() must not be allowed to skip the next
+        // full write.
+        this.renderedMarkup = null;
+      } else {
+        this.requestBackgroundRender("watched-items");
+      }
     });
 
     const preserveContinueWatching = Boolean(background && this.continueWatchingDisplay?.length);
@@ -8455,46 +8735,60 @@ export const HomeScreen = {
       initialContinueWatchingReleased = true;
       this.isInitialHomeLoading = false;
       this.hasLoadedOnce = true;
+      // Paint a few rows, then grow. See getRenderableRows().
+      this.homeProgressiveRowBudget = this.getProgressiveFirstPaintRows();
       this.render();
+      this.growHomeProgressiveRows();
       return true;
     };
 
     let progressAllError = null;
     let recentProgressError = null;
     const sidebarProfilePromise = getSidebarProfileState().catch(() => null);
-    const progressAllPromise = watchProgressRepository
-      .getAllForContinueWatching()
-      .catch((error) => {
-        progressAllError = error;
-        return [];
-      });
-    const recentProgressPromise = watchProgressRepository
-      .getRecent(CW_MAX_VISIBLE_ITEMS)
-      .catch((error) => {
-        recentProgressError = error;
-        return [];
-      });
+    // Gated on the startup sync so the freshly pulled progress is what gets
+    // read, but the gate is a `.then` and not an `await`: catalog rows, addons
+    // and the first paint below do not wait for it.
+    const progressAllPromise = afterHomeSync(() =>
+      measureHomeLoadStageAsync("watch-progress-all", () =>
+        watchProgressRepository.getAllForContinueWatching()
+      )
+    ).catch((error) => {
+      progressAllError = error;
+      return [];
+    });
+    const recentProgressPromise = afterHomeSync(() =>
+      measureHomeLoadStageAsync("watch-progress-recent", () =>
+        watchProgressRepository.getRecent(CW_MAX_VISIBLE_ITEMS)
+      )
+    ).catch((error) => {
+      recentProgressError = error;
+      return [];
+    });
     // Continue Watching is reconciled fire-and-forget in the block below, so a
     // slow addon or Trakt call never blocks catalog rows. The section paints
     // instantly from the snapshot hydrated in mount().
 
-    const addons = await addonRepository.getInstalledAddons();
-    this.collections = CollectionsStore.get();
+    const addons = await measureHomeLoadStageAsync("installed-addons", () =>
+      addonRepository.getInstalledAddons()
+    );
+    this.collections = measureHomeLoadStage("collections-store", () => CollectionsStore.get());
     const catalogDescriptors = [];
 
-    addons.forEach((addon) => {
-      addon.catalogs
-        .filter((catalog) => !catalogRequiresExtras(catalog))
-        .forEach((catalog) => {
-          catalogDescriptors.push({
-            addonBaseUrl: addon.baseUrl,
-            addonId: addon.id,
-            addonName: addon.displayName,
-            catalogId: catalog.id,
-            catalogName: catalog.name,
-            type: catalog.apiType
+    measureHomeLoadStage("catalogs-normalized", () => {
+      addons.forEach((addon) => {
+        addon.catalogs
+          .filter((catalog) => !catalogRequiresExtras(catalog))
+          .forEach((catalog) => {
+            catalogDescriptors.push({
+              addonBaseUrl: addon.baseUrl,
+              addonId: addon.id,
+              addonName: addon.displayName,
+              catalogId: catalog.id,
+              catalogName: catalog.name,
+              type: catalog.apiType
+            });
           });
-        });
+      });
     });
 
     // Installed-addon state can contain the same manifest catalog more than
@@ -8502,22 +8796,24 @@ export const HomeScreen = {
     // addons that reuse ids on different base URLs must retain the existing
     // last-row-wins behavior.
     const seenCatalogDescriptors = new Set();
-    const uniqueCatalogDescriptors = catalogDescriptors.filter((descriptor) => {
-      const descriptorKey = JSON.stringify([
-        descriptor?.addonBaseUrl || "",
-        descriptor?.addonId || "",
-        descriptor?.addonName || "",
-        descriptor?.catalogId || "",
-        descriptor?.catalogName || "",
-        descriptor?.type || ""
-      ]);
-      if (seenCatalogDescriptors.has(descriptorKey)) {
-        return false;
-      }
-      seenCatalogDescriptors.add(descriptorKey);
-      return true;
-    });
-    if (HOME_PERF_DEBUG) {
+    const uniqueCatalogDescriptors = measureHomeLoadStage("catalogs-deduped", () =>
+      catalogDescriptors.filter((descriptor) => {
+        const descriptorKey = JSON.stringify([
+          descriptor?.addonBaseUrl || "",
+          descriptor?.addonId || "",
+          descriptor?.addonName || "",
+          descriptor?.catalogId || "",
+          descriptor?.catalogName || "",
+          descriptor?.type || ""
+        ]);
+        if (seenCatalogDescriptors.has(descriptorKey)) {
+          return false;
+        }
+        seenCatalogDescriptors.add(descriptorKey);
+        return true;
+      })
+    );
+    if (isHomePerfDebugEnabled()) {
       logHomePerf("catalogDescriptors", {
         requested: catalogDescriptors.length,
         unique: uniqueCatalogDescriptors.length,
@@ -8527,9 +8823,11 @@ export const HomeScreen = {
 
     // Seed missing order keys from manifest order before progressive requests
     // can add rows in network-completion order.
-    HomeCatalogStore.ensureOrderKeys(
-      uniqueCatalogDescriptors.map((catalog) =>
-        buildCatalogOrderKey(catalog.addonId, catalog.type, catalog.catalogId)
+    measureHomeLoadStage("order-keys", () =>
+      HomeCatalogStore.ensureOrderKeys(
+        uniqueCatalogDescriptors.map((catalog) =>
+          buildCatalogOrderKey(catalog.addonId, catalog.type, catalog.catalogId)
+        )
       )
     );
 
@@ -8562,7 +8860,9 @@ export const HomeScreen = {
         if (!waitForInitialContinueWatching) {
           this.isInitialHomeLoading = false;
           this.hasLoadedOnce = true;
-          this.requestBackgroundRender();
+          this.homeProgressiveRowBudget = this.getProgressiveFirstPaintRows();
+          this.requestBackgroundRender("initial-catalog-first-paint");
+          this.growHomeProgressiveRows();
         }
       }
     });
@@ -8622,8 +8922,12 @@ export const HomeScreen = {
     if (!waitForInitialContinueWatching) {
       this.isInitialHomeLoading = false;
       this.hasLoadedOnce = true;
+      // Paint a few rows, then grow. See getRenderableRows().
+      this.homeProgressiveRowBudget = this.getProgressiveFirstPaintRows();
       this.render();
+      this.growHomeProgressiveRows();
     }
+    logHomeLoadStages("first-render");
     logHomePerf("loadData", {
       phase: "first-render",
       ms: Number((homePerfNow() - loadStart).toFixed(2)),
@@ -8640,7 +8944,11 @@ export const HomeScreen = {
       }
       if (profile && buildSidebarProfileSignature(profile) !== previousSidebarProfileSignature) {
         this.sidebarProfile = profile;
-        this.requestBackgroundRender();
+        if (this.updateSidebarInPlace()) {
+          this.renderedMarkup = null;
+        } else {
+          this.requestBackgroundRender("sidebar-profile");
+        }
       }
     });
 
@@ -8673,7 +8981,11 @@ export const HomeScreen = {
               if (!this.heroItem) {
                 this.heroItem = this.pickInitialHero();
               }
-              this.requestBackgroundRender();
+              if (this.reconcileHomeCatalogRows()) {
+                this.renderedMarkup = null;
+              } else {
+                this.requestBackgroundRender("deferred-catalog-batch");
+              }
             }
           : null
       })
@@ -8690,7 +9002,11 @@ export const HomeScreen = {
           if (!this.heroItem) {
             this.heroItem = this.pickInitialHero();
           }
-          this.requestBackgroundRender();
+          if (this.reconcileHomeCatalogRows()) {
+            this.renderedMarkup = null;
+          } else {
+            this.requestBackgroundRender("deferred-catalog-final");
+          }
           this.retryPendingCatalogRows();
         })
         .catch((error) => {
@@ -8762,7 +9078,11 @@ export const HomeScreen = {
             !waitForInitialContinueWatching &&
             (previousLoadingState !== this.continueWatchingLoading || previousDisplaySignature)
           ) {
-            this.requestBackgroundRender();
+            if (this.updateContinueWatchingRowInPlace()) {
+              this.renderedMarkup = null;
+            } else {
+              this.requestBackgroundRender("cw-loading");
+            }
           }
         }
 
@@ -8786,7 +9106,11 @@ export const HomeScreen = {
             !releaseInitialHomeAfterContinueWatching() &&
             (previousLoadingState || previousDisplaySignature)
           ) {
-            this.requestBackgroundRender();
+            if (this.updateContinueWatchingRowInPlace()) {
+              this.renderedMarkup = null;
+            } else {
+              this.requestBackgroundRender("cw-empty");
+            }
           }
           return;
         }
@@ -8843,7 +9167,7 @@ export const HomeScreen = {
               previousDisplaySignature !== nextDisplaySignature ||
               (!preserveHomeReturnState && previousHeroIdentity !== nextHeroIdentity))
           ) {
-            this.requestBackgroundRender();
+            this.requestBackgroundRender("cw-display-and-hero");
           }
         } catch (error) {
           console.warn("Continue watching async enrichment failed", error);
@@ -8853,7 +9177,11 @@ export const HomeScreen = {
             !suppressContinueWatchingLoading &&
             previousLoadingState
           ) {
-            this.requestBackgroundRender();
+            if (this.updateContinueWatchingRowInPlace()) {
+              this.renderedMarkup = null;
+            } else {
+              this.requestBackgroundRender("cw-enrichment-failed");
+            }
           }
         }
       })().catch((error) => {
@@ -8863,7 +9191,11 @@ export const HomeScreen = {
         }
         this.continueWatchingLoading = false;
         if (!releaseInitialHomeAfterContinueWatching() && !suppressContinueWatchingLoading) {
-          this.requestBackgroundRender();
+          if (this.updateContinueWatchingRowInPlace()) {
+            this.renderedMarkup = null;
+          } else {
+            this.requestBackgroundRender("cw-load-rejected");
+          }
         }
       });
     }
@@ -8982,10 +9314,51 @@ export const HomeScreen = {
     return fetchedRows;
   },
 
+  /**
+   * Identity of the settings a rendered Home depends on that the startup sync is
+   * able to change (home layout, hero/unreleased/ratings prefs, and the Continue
+   * Watching provider). Home is painted from the local copy of these before the
+   * sync lands, so this is how the post-sync check in loadData() knows whether
+   * what is on screen is still correct. Cheap: both reads are memoized.
+   */
+  buildSyncSensitiveHomeSignature() {
+    try {
+      return JSON.stringify([
+        LayoutPreferences.get() || {},
+        String(watchProgressRepository.getContinueWatchingSourceKey() || "")
+      ]);
+    } catch (_) {
+      return "";
+    }
+  },
+
   sortAndFilterRows(rows = [], collections = []) {
-    const collectionRows = (Array.isArray(collections) ? collections : [])
+    return measureHomeLoadStage("sort-filter-rows", () =>
+      this.sortAndFilterRowsInternal(rows, collections)
+    );
+  },
+
+  /**
+   * Collection rows are derived purely from `this.collections`, which is read
+   * once per load, but sortAndFilterRows runs once per progressively painted row
+   * (measured: 6 calls, 484.1 ms) and rebuilt every collection row every time.
+   * Memoize on the array identity so the derivation is paid once per load.
+   */
+  buildCollectionHomeRows(collections = []) {
+    const list = Array.isArray(collections) ? collections : [];
+    if (this.collectionHomeRowsCacheSource === list && this.collectionHomeRowsCache) {
+      return this.collectionHomeRowsCache;
+    }
+    const built = list
       .map((collection) => buildCollectionHomeRow(collection))
       .filter((row) => Array.isArray(row?.result?.data?.items) && row.result.data.items.length);
+    this.collectionHomeRowsCacheSource = list;
+    this.collectionHomeRowsCache = built;
+    return built;
+  },
+
+  sortAndFilterRowsInternal(rows = [], collections = []) {
+    const collectionRows = this.buildCollectionHomeRows(collections);
     const catalogRows = (Array.isArray(rows) ? rows : []).filter(
       (row) => row?.rowKind !== "collection"
     );
@@ -8993,8 +9366,9 @@ export const HomeScreen = {
       [...catalogRows, ...collectionRows].map((row) => [row.homeCatalogKey, row])
     );
     const allKeys = Array.from(rowMap.keys());
-    const orderedKeys = HomeCatalogStore.ensureOrderKeys(allKeys);
-    const homeCatalogPrefs = HomeCatalogStore.get();
+    // One envelope read, not two. See HomeCatalogStore.ensureOrderKeysWithPrefs.
+    const { orderedKeys, prefs: homeCatalogPrefs } =
+      HomeCatalogStore.ensureOrderKeysWithPrefs(allKeys);
     const disabledKeys = new Set(homeCatalogPrefs.disabled || []);
     const customTitles = homeCatalogPrefs.customTitles || {};
     const applyCustomTitle = (row) => {
@@ -9013,7 +9387,10 @@ export const HomeScreen = {
       .filter(Boolean)
       .filter((row) => !isRowDisabled(row))
       .map(applyCustomTitle);
-    return [...pinnedTopRows, ...orderedRows];
+    // Hard ceiling on mounted rows. Pinned collection rows come first and are
+    // never dropped ahead of ordered catalog rows, which is why the slice is
+    // applied to the combined list rather than to orderedRows alone.
+    return [...pinnedTopRows, ...orderedRows].slice(0, this.getHomeRowLimit());
   },
 
   retryPendingCatalogRows() {
@@ -9084,7 +9461,11 @@ export const HomeScreen = {
             this.heroItem = this.pickInitialHero();
           }
           if (progressiveRetryRendering) {
-            this.requestBackgroundRender();
+            if (this.reconcileHomeCatalogRows()) {
+              this.renderedMarkup = null;
+            } else {
+              this.requestBackgroundRender("catalog-retry-progressive");
+            }
           } else {
             hasBufferedUpdates = true;
           }
@@ -9094,7 +9475,11 @@ export const HomeScreen = {
         }
       }
       if (hasBufferedUpdates && token === this.homeLoadToken && Router.getCurrent() === "home") {
-        this.requestBackgroundRender();
+        if (this.reconcileHomeCatalogRows()) {
+          this.renderedMarkup = null;
+        } else {
+          this.requestBackgroundRender("catalog-retry-buffered");
+        }
       }
     })().finally(() => {
       if (token === this.homeLoadToken) {
@@ -9104,7 +9489,7 @@ export const HomeScreen = {
   },
 
   render() {
-    const renderStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
+    const renderStart = isHomePerfDebugEnabled() ? homePerfNow() : 0;
     this.cancelScheduledRender();
     this.cancelModernCameraFollow({ stopAnimations: true });
     this.teardownModernTrackScrollPagination();
@@ -9194,31 +9579,12 @@ export const HomeScreen = {
       (!this.homeHoldFocusLocked && retainedFocusState && retainedFocusState.focusKind === "item"
         ? retainedFocusState
         : null);
-    const continueWatchingRows = partitionContinueWatchingRows(
-      this.continueWatchingDisplay || [],
-      this.layoutPrefs?.continueWatchingSortMode
-    );
-    this.continueWatchingRenderedItems = [
-      ...continueWatchingRows.main,
-      ...continueWatchingRows.upcoming
-    ];
-    const splitUpcomingEnabled =
-      String(this.layoutPrefs?.continueWatchingSortMode || "") === "split_upcoming";
-    const continueWatchingFocusIndex =
-      String(focusState?.rowKey || "") === "continue_watching"
-        ? Math.max(0, Number(focusState?.itemIndex || 0))
-        : String(focusState?.rowKey || "") === "upcoming_section"
-          ? continueWatchingRows.main.length + Math.max(0, Number(focusState?.itemIndex || 0))
-          : -1;
-    const continueWatchingRenderLimit = splitUpcomingEnabled
-      ? continueWatchingRows.main.length
-      : Math.min(
-          Number(this.continueWatchingDisplay?.length || 0),
-          Math.max(
-            this.getContinueWatchingRenderBatchSize(),
-            continueWatchingFocusIndex >= 0 ? continueWatchingFocusIndex + 1 : 0
-          )
-        );
+    const {
+      continueWatchingRows,
+      splitUpcomingEnabled,
+      continueWatchingFocusIndex,
+      continueWatchingRenderLimit
+    } = this.computeContinueWatchingRenderState(focusState);
     const focusedPosterFlowConfig = this.getFocusedPosterFlowConfig(this.layoutPrefs || {});
     const expandFocusedPoster =
       this.layoutMode === "modern" &&
@@ -9248,7 +9614,7 @@ export const HomeScreen = {
       this.catalogSeeAllMap = new Map();
     } else if (this.layoutMode === "modern") {
       modernLayoutPayload = renderModernHomeLayout({
-        rows: this.rows,
+        rows: this.getRenderableRows(),
         heroItem,
         heroCandidates: this.heroCandidates,
         continueWatchingItems: continueWatchingRows.main,
@@ -9370,6 +9736,24 @@ export const HomeScreen = {
     if (!markupUnchanged) {
       this.container.innerHTML = nextMarkup;
       this.renderedMarkup = nextMarkup;
+      // Seed the per-row markup cache the reconciler compares against. Without
+      // this the first reconcile after a full render finds nothing cached and
+      // replaces every row, throwing away exactly the live nodes it exists to
+      // preserve.
+      if (modernLayoutPayload?.sections?.length) {
+        if (!this.homeRowMarkupCache) {
+          this.homeRowMarkupCache = new WeakMap();
+        }
+        const mountedRowNodes = this.container.querySelectorAll(
+          ".home-modern-catalogs > .home-modern-row"
+        );
+        modernLayoutPayload.sections.forEach((section, index) => {
+          const node = mountedRowNodes[index];
+          if (node) {
+            this.homeRowMarkupCache.set(node, section.markup);
+          }
+        });
+      }
     }
 
     if (modernLandscapePostersEnabled) {
@@ -9540,9 +9924,26 @@ export const HomeScreen = {
     const mountedCards = Number(
       (this.navModel?.rows || []).reduce((total, rowNodes) => total + rowNodes.length, 0)
     );
+    const renderReasons = this.pendingRenderReasons || [];
+    this.pendingRenderReasons = [];
+    if (!this.homeRenderStats) {
+      this.homeRenderStats = { full: 0, skippedByEquality: 0, partial: 0, byReason: {} };
+    }
+    if (markupUnchanged) {
+      this.homeRenderStats.skippedByEquality += 1;
+    } else {
+      this.homeRenderStats.full += 1;
+    }
+    renderReasons.forEach((reason) => {
+      this.homeRenderStats.byReason[reason] = Number(
+        (this.homeRenderStats.byReason[reason] || 0) + (markupUnchanged ? 0 : 1)
+      );
+    });
+
     logHomePerf("render", {
       ms: Number((homePerfNow() - renderStart).toFixed(2)),
       domWrite: !markupUnchanged,
+      reasons: renderReasons,
       layoutMode: this.layoutMode,
       rows: Number(this.rows?.length || 0),
       mountedRows,
@@ -9558,6 +9959,7 @@ export const HomeScreen = {
     if (
       anchorRow instanceof HTMLElement &&
       anchorRow === this.lastHomeLazyImageHydrationAnchorRow &&
+      this.focusedRowFullyHydrated &&
       !refreshIndex &&
       !this.homeLazyImageHydrationNeedsFullScan &&
       !this.homeLazyImageHydrationNeedsIndexRefresh &&
@@ -9611,6 +10013,42 @@ export const HomeScreen = {
     return index;
   },
 
+  /**
+   * Re-index a single row instead of the whole container. The full rebuild above
+   * runs `querySelectorAll` over every lazy image on the screen (measured at 926
+   * on this TV after scrolling ten rows), and the append paths only ever change
+   * one row's images. Rows left alone keep their existing entries, which stay
+   * correct — and hydrateHomeLazyImages already skips entries whose row is no
+   * longer connected, plus it gates on a per-row rect before touching any image.
+   *
+   * No-ops when there is no index yet: the next full build covers it.
+   */
+  patchHomeLazyImageIndexForRow(rowElement) {
+    const index = this.homeLazyImageHydrationIndex;
+    if (!Array.isArray(index) || !(rowElement instanceof HTMLElement)) {
+      return false;
+    }
+
+    const images = Array.from(rowElement.querySelectorAll(HOME_LAZY_IMAGE_SELECTOR));
+    let patched = false;
+    for (let i = index.length - 1; i >= 0; i -= 1) {
+      const entry = index[i];
+      // Drop rows that were replaced or removed while we were not looking.
+      if (!entry?.row?.isConnected) {
+        index.splice(i, 1);
+        continue;
+      }
+      if (entry.row === rowElement) {
+        entry.images = images;
+        patched = true;
+      }
+    }
+    if (!patched && images.length) {
+      index.push({ row: rowElement, images });
+    }
+    return true;
+  },
+
   hydrateHomeLazyImages(anchorNode = null, { forceFullScan = false, refreshIndex = false } = {}) {
     if (!this.container) {
       return;
@@ -9619,7 +10057,8 @@ export const HomeScreen = {
     if (
       !forceFullScan &&
       anchorRow instanceof HTMLElement &&
-      anchorRow === this.lastHomeLazyImageHydrationAnchorRow
+      anchorRow === this.lastHomeLazyImageHydrationAnchorRow &&
+      this.focusedRowFullyHydrated
     ) {
       // The first pass for a focused row hydrates every image in that row. On
       // subsequent horizontal moves, the viewport geometry for every other row
@@ -9628,6 +10067,10 @@ export const HomeScreen = {
       return;
     }
     this.lastHomeLazyImageHydrationAnchorRow = anchorRow;
+    // Cleared below once the focused row's off-screen tail is known. Until the
+    // row is fully hydrated the early-returns above must not short-circuit, or a
+    // horizontal move would land on an image whose src was never set.
+    let anchorRowLeftUnhydrated = false;
     const imageRows =
       refreshIndex || !Array.isArray(this.homeLazyImageHydrationIndex)
         ? this.buildHomeLazyImageHydrationIndex()
@@ -9665,16 +10108,23 @@ export const HomeScreen = {
           image.removeAttribute("data-src");
           return;
         }
-        if (!shouldHydrateFocusedRow) {
-          const rect = image.getBoundingClientRect();
-          const isNearViewport =
-            rect.bottom >= viewportRect.top - verticalMargin &&
-            rect.top <= viewportRect.bottom + verticalMargin &&
-            rect.right >= viewportRect.left - horizontalMargin &&
-            rect.left <= viewportRect.right + horizontalMargin;
-          if (!isNearViewport) {
-            return;
+        // The focused row is checked too, only with a wider horizontal margin.
+        // Skipping the check entirely here is what made a row decode all 16 of
+        // its posters to show 7.
+        const activeHorizontalMargin = shouldHydrateFocusedRow
+          ? HOME_FOCUSED_ROW_HORIZONTAL_MARGIN
+          : horizontalMargin;
+        const rect = image.getBoundingClientRect();
+        const isNearViewport =
+          rect.bottom >= viewportRect.top - verticalMargin &&
+          rect.top <= viewportRect.bottom + verticalMargin &&
+          rect.right >= viewportRect.left - activeHorizontalMargin &&
+          rect.left <= viewportRect.right + activeHorizontalMargin;
+        if (!isNearViewport) {
+          if (shouldHydrateFocusedRow) {
+            anchorRowLeftUnhydrated = true;
           }
+          return;
         }
         // The app already decides when an image is close enough to load. Leaving
         // loading="lazy" here delegates that decision back to old TV browsers,
@@ -9684,6 +10134,7 @@ export const HomeScreen = {
         image.src = src;
       });
     });
+    this.focusedRowFullyHydrated = !anchorRowLeftUnhydrated;
   },
 
   teardownGridStickyHeader() {
@@ -10775,6 +11226,513 @@ export const HomeScreen = {
     return true;
   },
 
+  /**
+   * The rows the DOM is allowed to hold right now.
+   *
+   * The transition out of the loading skeleton paints every row at once, which
+   * was measured at ~930ms of a single blocking frame on this TV — the largest
+   * remaining cost after the render-scope work, and bigger than any individual
+   * render. Narrowing scope cannot help: it legitimately paints 16 rows for the
+   * first time. So paint a few, then let growHomeProgressiveRows() raise the
+   * budget and hand the rest to reconcileHomeCatalogRows(), which adds them
+   * without touching the rows already mounted.
+   *
+   * `this.rows` is left intact — only what is rendered is limited.
+   */
+  getRenderableRows() {
+    const rows = this.rows || [];
+    const budget = Number(this.homeProgressiveRowBudget || 0);
+    return budget > 0 && budget < rows.length ? rows.slice(0, budget) : rows;
+  },
+
+  getProgressiveFirstPaintRows() {
+    if (this.isLegacyTvRuntime()) {
+      return 4;
+    }
+    return this.isPerformanceConstrained() ? 6 : 0;
+  },
+
+  /**
+   * Raises the render budget one batch at a time, reconciling after each step,
+   * until every row is mounted. Runs on idle so it never competes with a
+   * keypress; falls back to a full render if the reconciler declines.
+   */
+  growHomeProgressiveRows() {
+    if (this.homeProgressiveGrowTimer) {
+      return;
+    }
+    const total = (this.rows || []).length;
+    if (!this.homeProgressiveRowBudget || this.homeProgressiveRowBudget >= total) {
+      this.homeProgressiveRowBudget = 0;
+      return;
+    }
+    // Each grow step re-runs buildNavigationModel and re-arms track pagination,
+    // so the per-step overhead is fixed and paid again every step. Measured with
+    // a batch-sized step it produced 8 steps of ~200-300ms each — smoother than
+    // one 931ms freeze, but ~2.3s in aggregate, which is worse. Take half of
+    // what is left instead: the budget converges in two or three steps, so the
+    // fixed cost is paid two or three times, not eight.
+    const remaining = total - this.homeProgressiveRowBudget;
+    const step = Math.max(
+      Number(this.getDeferredCatalogBatchSize() || 2),
+      Math.ceil(remaining / 2)
+    );
+    const schedule =
+      typeof requestIdleCallback === "function"
+        ? (fn) => requestIdleCallback(fn, { timeout: 600 })
+        : (fn) => setTimeout(fn, 120);
+    this.homeProgressiveGrowTimer = schedule(() => {
+      this.homeProgressiveGrowTimer = null;
+      if (!this.container || Router.getCurrent() !== "home") {
+        this.homeProgressiveRowBudget = 0;
+        return;
+      }
+      this.homeProgressiveRowBudget = Math.min(total, this.homeProgressiveRowBudget + step);
+      if (this.reconcileHomeCatalogRows()) {
+        this.renderedMarkup = null;
+      } else {
+        this.requestBackgroundRender("progressive-first-paint");
+      }
+      if (this.homeProgressiveRowBudget < total) {
+        this.growHomeProgressiveRows();
+      } else {
+        this.homeProgressiveRowBudget = 0;
+      }
+    });
+  },
+
+  /**
+   * Keyed reconciliation of the catalog rows.
+   *
+   * Catalog arrivals are the last big full-render trigger: `deferred-catalog-final`
+   * alone was measured at 645ms of DOM write, landing while the user is already
+   * browsing. It cannot be a plain append — sortAndFilterRows orders rows through
+   * HomeCatalogStore.ensureOrderKeys plus pinned collection rows, so a late row can
+   * land in the middle, and a custom title or a disable toggle can change or remove
+   * an existing one.
+   *
+   * Rows whose generated markup is unchanged keep their live DOM node, which is the
+   * whole point: their horizontal scroll position, their already-hydrated images and
+   * any expanded poster survive untouched.
+   *
+   * Returns false — caller falls back to a full render — for the initial paint, a
+   * back-navigation restore in flight, a non-modern layout, or a missing host.
+   */
+  reconcileHomeCatalogRows() {
+    if (
+      !this.container ||
+      this.layoutMode !== "modern" ||
+      this.isInitialHomeLoading ||
+      this.isRestoringFocusFromBack
+    ) {
+      return false;
+    }
+    const host = this.container.querySelector(".home-modern-catalogs");
+    if (!host) {
+      return false;
+    }
+
+    const focusedNode = this.getCurrentFocusedNode();
+    const focusedRowKey = focusedNode ? String(focusedNode.dataset?.navRowKey || "") : "";
+    const focusedItemIndex = focusedNode ? Number(focusedNode.dataset?.navCol || 0) : -1;
+    const focusedRowSection = focusedNode ? focusedNode.closest(".home-modern-row") : null;
+
+    const sectionOptions = {
+      rowItemLimit: this.getRowItemLimit(),
+      focusedRowKey,
+      focusedItemIndex,
+      expandFocusedPoster: false,
+      showPosterLabels: this.layoutPrefs?.showPosterLabels !== false,
+      showCatalogTypeSuffix: this.layoutPrefs?.showCatalogTypeSuffix !== false,
+      preferLandscapePosters: Boolean(this.layoutPrefs?.preferLandscapePosters),
+      shouldDeferRowImages: shouldDeferHomeRowImages,
+      watchedTitleIds: this.watchedTitleIds,
+      createPosterCardMarkup,
+      formatCatalogRowTitle,
+      escapeHtml
+    };
+
+    // Desired sequence, skipping rows the layout itself would skip.
+    const desired = [];
+    const seeAllMap = new Map();
+    this.getRenderableRows().forEach((rowData, rowIndex) => {
+      const section = renderModernRowSection(rowData, rowIndex, sectionOptions);
+      if (!section) {
+        return;
+      }
+      if (section.seeAllEntry) {
+        seeAllMap.set(section.seeAllId, section.seeAllEntry);
+      }
+      desired.push(section);
+    });
+    if (!desired.length) {
+      return false;
+    }
+
+    if (!this.homeRowMarkupCache) {
+      this.homeRowMarkupCache = new WeakMap();
+    }
+    const live = new Map();
+    Array.from(host.children).forEach((node) => {
+      if (node.classList?.contains("home-modern-row")) {
+        live.set(String(node.dataset.rowKey || ""), node);
+      }
+    });
+
+    let structuralChange = false;
+    let cursor = null; // last node placed, so inserts land in the right order
+    desired.forEach((section) => {
+      const existing = live.get(section.rowKey);
+      if (existing) {
+        live.delete(section.rowKey);
+        const cached = this.homeRowMarkupCache.get(existing);
+        if (cached === section.markup) {
+          // Untouched: keep the live node, and with it its scrollLeft, hydrated
+          // images and expanded poster.
+          if (cursor && cursor.nextElementSibling !== existing) {
+            cursor.insertAdjacentElement("afterend", existing);
+            structuralChange = true;
+          }
+          cursor = existing;
+          return;
+        }
+        existing.insertAdjacentHTML("afterend", section.markup);
+        const replacement = existing.nextElementSibling;
+        existing.remove();
+        this.homeRowMarkupCache.set(replacement, section.markup);
+        cursor = replacement;
+        return;
+      }
+      if (cursor) {
+        cursor.insertAdjacentHTML("afterend", section.markup);
+        cursor = cursor.nextElementSibling;
+      } else {
+        host.insertAdjacentHTML("afterbegin", section.markup);
+        cursor = host.firstElementChild;
+      }
+      this.homeRowMarkupCache.set(cursor, section.markup);
+      structuralChange = true;
+    });
+    // Anything still in `live` is no longer wanted.
+    live.forEach((node) => {
+      node.remove();
+      structuralChange = true;
+    });
+
+    this.catalogSeeAllMap = seeAllMap;
+
+    // navRow is a positional index, so any insert, move or removal invalidates
+    // the whole model. Rebuilding is also what re-stamps navCol inside a replaced
+    // row, so do it whenever anything at all changed.
+    this.invalidateNavigationModel();
+    this.buildNavigationModel();
+
+    this.teardownModernTrackScrollPagination();
+    this.setupModernTrackScrollPagination();
+
+    Array.from(host.children).forEach((node) => {
+      this.patchHomeLazyImageIndexForRow(node);
+    });
+    this.scheduleHomeLazyImageHydration(null, { refreshIndex: false });
+
+    // Focus only needs restoring if its row was replaced or removed. If the row
+    // was kept, the focused node is the same object and is still focused.
+    if (focusedRowKey && focusedRowSection && !focusedRowSection.isConnected) {
+      const nodes = this.getNavigationRowNodes(focusedRowKey) || [];
+      const target = nodes[Math.max(0, focusedItemIndex)] || nodes[0];
+      if (target) {
+        this.setFocusedNode(target);
+      }
+    }
+
+    if (this.homeRenderStats) {
+      this.homeRenderStats.partial += 1;
+    }
+    return true;
+  },
+
+  /**
+   * Lifted verbatim out of render() so the full render and the in-place Continue
+   * Watching update compute this from one place and cannot drift apart. Keeps
+   * the `continueWatchingRenderedItems` assignment as a side effect, exactly as
+   * render() did — the hold-menu and focus paths read it by index.
+   */
+  computeContinueWatchingRenderState(focusState = null) {
+    const continueWatchingRows = partitionContinueWatchingRows(
+      this.continueWatchingDisplay || [],
+      this.layoutPrefs?.continueWatchingSortMode
+    );
+    this.continueWatchingRenderedItems = [
+      ...continueWatchingRows.main,
+      ...continueWatchingRows.upcoming
+    ];
+    const splitUpcomingEnabled =
+      String(this.layoutPrefs?.continueWatchingSortMode || "") === "split_upcoming";
+    const continueWatchingFocusIndex =
+      String(focusState?.rowKey || "") === "continue_watching"
+        ? Math.max(0, Number(focusState?.itemIndex || 0))
+        : String(focusState?.rowKey || "") === "upcoming_section"
+          ? continueWatchingRows.main.length + Math.max(0, Number(focusState?.itemIndex || 0))
+          : -1;
+    const continueWatchingRenderLimit = splitUpcomingEnabled
+      ? continueWatchingRows.main.length
+      : Math.min(
+          Number(this.continueWatchingDisplay?.length || 0),
+          Math.max(
+            this.getContinueWatchingRenderBatchSize(),
+            continueWatchingFocusIndex >= 0 ? continueWatchingFocusIndex + 1 : 0
+          )
+        );
+    return {
+      continueWatchingRows,
+      splitUpcomingEnabled,
+      continueWatchingFocusIndex,
+      continueWatchingRenderLimit
+    };
+  },
+
+  /**
+   * Replaces just the Continue Watching (and Upcoming) sections.
+   *
+   * Five of the twelve full-render triggers are Continue Watching state changes
+   * — entering loading, resolving empty, enrichment landing, enrichment
+   * throwing, the load rejecting — and each of them used to rebuild the sidebar,
+   * the hero and every catalog row, destroying every live node and forcing focus
+   * and per-row scroll to be re-derived. Enrichment in particular lands while
+   * the user is already browsing, which is how it produced the long frames
+   * measured mid-traversal.
+   *
+   * Bails out (returns false) on any structural surprise so the caller falls
+   * back to a full render: a missing section, a section appearing or
+   * disappearing (which changes the vertical geometry of every row below it), the
+   * initial loading state, or an in-progress back-navigation focus restore.
+   */
+  updateContinueWatchingRowInPlace() {
+    if (!this.container || this.isInitialHomeLoading || this.isRestoringFocusFromBack) {
+      return false;
+    }
+    const scroll = this.container.querySelector(".home-modern-rows-scroll");
+    const mainSection = this.container.querySelector('[data-row-key="continue_watching"]');
+    if (!scroll || !mainSection) {
+      return false;
+    }
+    const upcomingSection = this.container.querySelector('[data-row-key="upcoming_section"]');
+
+    // Capture focus and this row's scroll BEFORE mutating: once the focused node
+    // is replaced it is disconnected, and captureCurrentFocusState() then
+    // returns null.
+    const focusedNode = this.getCurrentFocusedNode();
+    const focusedInside =
+      focusedNode &&
+      (mainSection.contains(focusedNode) || Boolean(upcomingSection?.contains(focusedNode)));
+    const focusedRowKey = focusedInside
+      ? String(focusedNode.dataset?.navRowKey || "continue_watching")
+      : "";
+    const focusedItemIndex = focusedInside ? Number(focusedNode.dataset?.navCol || 0) : -1;
+    const focusedTrack = focusedInside ? focusedNode.closest(".home-track") : null;
+    const focusedTrackScrollLeft = focusedTrack ? focusedTrack.scrollLeft : 0;
+
+    const state = this.computeContinueWatchingRenderState(
+      focusedInside ? { rowKey: focusedRowKey, itemIndex: focusedItemIndex } : null
+    );
+    const loadingRowItemCount = this.getLoadingRowItemCount();
+    const loadingCount = Math.min(
+      Math.max(
+        Number(this.continueWatching?.length || 0),
+        Number(this.nextUpProgressCandidates?.length || 0)
+      ),
+      loadingRowItemCount
+    );
+    const effectiveLoadingCount =
+      this.continueWatchingLoading && loadingCount === 0 ? loadingRowItemCount : loadingCount;
+
+    const sharedOptions = {
+      useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
+      blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
+      cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card"
+    };
+    const mainMarkup = renderContinueWatchingSection(state.continueWatchingRows.main, {
+      rowKey: "continue_watching",
+      loading: Boolean(this.continueWatchingLoading),
+      loadingCount: effectiveLoadingCount,
+      itemLimit: state.continueWatchingRenderLimit,
+      ...sharedOptions
+    });
+    const upcomingMarkup = renderContinueWatchingSection(state.continueWatchingRows.upcoming, {
+      rowKey: "upcoming_section",
+      titleKey: "upcoming_section_title",
+      title: "Upcoming",
+      startIndex: state.continueWatchingRows.main.length,
+      itemLimit: state.continueWatchingRows.upcoming.length,
+      ...sharedOptions
+    });
+
+    // A section going from present to absent (or back) moves every row below it.
+    // That is a geometry change the full render already handles correctly.
+    if (!mainMarkup.trim() || Boolean(upcomingMarkup.trim()) !== Boolean(upcomingSection)) {
+      return false;
+    }
+
+    mainSection.outerHTML = mainMarkup;
+    if (upcomingSection) {
+      upcomingSection.outerHTML = upcomingMarkup;
+    }
+
+    // CW is rows[0] in the navigation model and navRow is positional, so this
+    // has to be a rebuild rather than the append-path patch.
+    this.invalidateNavigationModel();
+    this.buildNavigationModel();
+
+    this.teardownContinueWatchingProgressiveRendering();
+    this.setupContinueWatchingProgressiveRendering();
+
+    const newMain = this.container.querySelector('[data-row-key="continue_watching"]');
+    if (newMain) {
+      this.patchHomeLazyImageIndexForRow(newMain.closest(HOME_LAZY_IMAGE_ROW_SELECTOR) || newMain);
+    }
+    this.scheduleHomeLazyImageHydration(null, { refreshIndex: false });
+
+    if (focusedInside) {
+      const nodes = this.getNavigationRowNodes(focusedRowKey) || [];
+      const target = nodes[Math.max(0, focusedItemIndex)] || nodes[0];
+      if (target) {
+        // Restore only this row's scroll. restoreModernFocusState would reapply
+        // every track's scrollLeft plus the viewport scrollTop, clobbering rows
+        // this update never touched.
+        const track = target.closest(".home-track");
+        if (track) {
+          track.scrollLeft = focusedTrackScrollLeft;
+        }
+        this.setFocusedNode(target);
+      }
+    }
+
+    if (this.homeRenderStats) {
+      this.homeRenderStats.partial += 1;
+    }
+    return true;
+  },
+
+  /**
+   * A changed sidebar profile changes only the sidebar. Replacing its subtree
+   * costs one small parse; the full render it used to trigger rebuilt every
+   * catalog row, destroyed every live node and forced focus and per-row scroll
+   * positions to be re-derived.
+   *
+   * The root element differs by layout — `.root-sidebar-legacy` for the legacy
+   * sidebar, `.modern-sidebar-shell` for the modern one — and both are direct
+   * children of `.home-shell`. Returns false if neither is found so the caller
+   * can fall back to a full render.
+   */
+  updateSidebarInPlace() {
+    if (!this.container) {
+      return false;
+    }
+    const host = this.container.querySelector(
+      ".home-shell > .root-sidebar-legacy, .home-shell > .modern-sidebar-shell"
+    );
+    if (!host) {
+      return false;
+    }
+
+    // Capture focus before mutating: the focused node is about to be replaced by
+    // a different object, and captureCurrentFocusState() returns null once it is
+    // disconnected.
+    const focusedNode = this.getCurrentFocusedNode();
+    const focusedSidebarIndex =
+      focusedNode && host.contains(focusedNode) ? Number(focusedNode.dataset?.navIndex ?? -1) : -1;
+
+    host.outerHTML = renderRootSidebar({
+      selectedRoute: "home",
+      profile: this.sidebarProfile,
+      layout: this.layoutPrefs,
+      expanded: Boolean(this.sidebarExpanded),
+      pillIconOnly: Boolean(this.pillIconOnly)
+    });
+
+    bindRootSidebarEvents(this.container, {
+      currentRoute: "home",
+      onSelectedAction: () => this.closeSidebarToContent(),
+      onExpandSidebar: () => this.openSidebar()
+    });
+    this.scheduleModernSidebarPillAutoCollapse();
+
+    // The sidebar is part of the navigation model, and buildNavigationModel is
+    // DOM-derived, so it re-stamps the untouched rows to the same values. Not
+    // patching navModel by hand here: `rows` is positional and the sidebar slice
+    // is cheap to rebuild compared to the innerHTML write this replaces.
+    this.invalidateNavigationModel();
+    this.buildNavigationModel();
+
+    if (focusedSidebarIndex >= 0) {
+      const restored = this.navModel?.sidebar?.[focusedSidebarIndex];
+      if (restored) {
+        this.setFocusedNode(restored);
+      }
+    }
+
+    if (this.homeRenderStats) {
+      this.homeRenderStats.partial += 1;
+    }
+    return true;
+  },
+
+  /**
+   * The watched flag only ever adds or removes one badge span per card, so a
+   * full render (teardown, whole-screen innerHTML, navModel rebuild, lazy-image
+   * reindex) is enormously out of proportion. Patch the mounted cards directly.
+   *
+   * Cards mounted later do not need handling here: appendContinueWatchingBatch
+   * and appendItemsToTrack already pass `watchedTitleIds` into the markup
+   * builders, so they are born with the correct badge.
+   *
+   * Returns false when the DOM is not in a shape it recognises, so the caller
+   * can fall back to a full render rather than silently skipping the update.
+   */
+  applyWatchedBadgesInPlace() {
+    if (!this.container) {
+      return false;
+    }
+    const cards = this.container.querySelectorAll(".home-content-card[data-item-id]");
+    if (!cards.length) {
+      return false;
+    }
+
+    const watchedIds = this.watchedTitleIds;
+    for (let index = 0; index < cards.length; index += 1) {
+      const card = cards[index];
+      const itemId = String(card.getAttribute("data-item-id") || "").trim();
+      // Mirror isTitleItemWatched: no id means never badged.
+      const shouldBadge = Boolean(
+        itemId && watchedIds && typeof watchedIds.has === "function" && watchedIds.has(itemId)
+      );
+      const existing = card.querySelector(".title-watched-badge");
+      if (shouldBadge === Boolean(existing)) {
+        continue;
+      }
+      if (!shouldBadge) {
+        existing.remove();
+        continue;
+      }
+      // Same position the card template uses: inside the poster frame, right
+      // after the expanded gradient.
+      const frame = card.querySelector(".home-poster-frame");
+      const gradient = frame?.querySelector(".home-poster-expanded-gradient");
+      if (gradient) {
+        gradient.insertAdjacentHTML("afterend", renderTitleWatchedBadge());
+      } else if (frame) {
+        frame.insertAdjacentHTML("beforeend", renderTitleWatchedBadge());
+      } else {
+        return false;
+      }
+    }
+
+    if (this.homeRenderStats) {
+      this.homeRenderStats.partial += 1;
+    }
+    return true;
+  },
+
   // ---------------------------------------------------------------------------
   // Scroll-triggered pagination for modern layout catalog tracks
   // Matches ATV ModernHomeRows.kt: fires when lastVisible >= total - 4 AND hasMore
@@ -10833,7 +11791,12 @@ export const HomeScreen = {
       this.invalidateNavigationModel();
       this.buildNavigationModel();
     }
-    this.scheduleHomeLazyImageHydration(null, { refreshIndex: true });
+    // Only this row gained images; a container-wide reindex would walk every
+    // lazy image on the screen to learn that.
+    const patchedCwRow = this.patchHomeLazyImageIndexForRow(
+      track.closest(HOME_LAZY_IMAGE_ROW_SELECTOR)
+    );
+    this.scheduleHomeLazyImageHydration(null, { refreshIndex: !patchedCwRow });
     return true;
   },
 
@@ -10990,7 +11953,9 @@ export const HomeScreen = {
           }
         }
         // Find row data with hasMore
-        const rowData = (this.rows || []).find((row) => buildModernRowKey(row) === rowKey);
+        // getHomeRowKey, not buildModernRowKey: a row keyed from homeCatalogKey
+        // never matched here, so pagination was silently dead on those rows.
+        const rowData = (this.rows || []).find((row) => getHomeRowKey(row) === rowKey);
         const rowResult = rowData?.result;
         if (!rowResult || rowResult.status !== "success") {
           return;
@@ -11048,7 +12013,11 @@ export const HomeScreen = {
             this.invalidateNavigationModel();
             this.buildNavigationModel();
           }
-          this.scheduleHomeLazyImageHydration(null, { refreshIndex: true });
+          // Same reasoning as the Continue Watching append: one row changed.
+          const patchedTrackRow = this.patchHomeLazyImageIndexForRow(
+            track.closest(HOME_LAZY_IMAGE_ROW_SELECTOR)
+          );
+          this.scheduleHomeLazyImageHydration(null, { refreshIndex: !patchedTrackRow });
           return true;
         };
         if (totalVisible < currentItems.length) {
@@ -11089,8 +12058,7 @@ export const HomeScreen = {
               return;
             }
             const liveRowData =
-              (this.rows || []).find((candidate) => buildModernRowKey(candidate) === rowKey) ||
-              rowData;
+              (this.rows || []).find((candidate) => getHomeRowKey(candidate) === rowKey) || rowData;
             const liveRowPayload = liveRowData?.result?.data || rowPayload;
             const latestItems = Array.isArray(liveRowPayload?.items)
               ? liveRowPayload.items
@@ -11289,6 +12257,7 @@ export const HomeScreen = {
     this.homeLazyImageHydrationNeedsIndexRefresh = false;
     this.homeLazyImageHydrationIndex = null;
     this.lastHomeLazyImageHydrationAnchorRow = null;
+    this.focusedRowFullyHydrated = false;
     this.lastDirectionalKeyAtByDirection = {};
     this.homeTruncationScope = null;
     if (this.boundHomeEventContainer) {

@@ -75,6 +75,10 @@ function firstNonEmpty(...values) {
   return "";
 }
 
+function folderPosterLoadingMode() {
+  return Environment.isTizen() || Environment.isWebOS() ? "eager" : "lazy";
+}
+
 function toImageUrl(path, kind = "poster") {
   if (!path) {
     return "";
@@ -1323,7 +1327,7 @@ export const FolderDetailScreen = {
             <div class="seeall-card-poster-wrap">
               ${
                 item.poster
-                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="${folderPosterLoadingMode()}" decoding="async" />`
                   : `<div class="seeall-card-poster placeholder"></div>`
               }
               ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -1369,7 +1373,7 @@ export const FolderDetailScreen = {
           <div class="seeall-card-poster-wrap">
             ${
               item.poster
-                ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="${folderPosterLoadingMode()}" decoding="async" />`
                 : `<div class="seeall-card-poster placeholder"></div>`
             }
             ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}

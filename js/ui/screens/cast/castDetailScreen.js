@@ -9,6 +9,8 @@ import {
   PosterOptionsDialogController
 } from "../../components/posterOptionsMenu.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
+import { focusWithoutScroll } from "../../../platform/legacyDom.js";
+import { renderInlineIcon } from "../../components/inlineIcons.js";
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780";
@@ -253,7 +255,7 @@ export const CastDetailScreen = {
     this.container.innerHTML = `
       <div class="cast-detail-shell">
         <button class="cast-detail-back focusable" data-action="back" aria-label="${escapeAttribute(t("common.back", {}, "Back"))}">
-          <span class="material-icons" aria-hidden="true">arrow_back</span>
+          ${renderInlineIcon("arrow_back")}
         </button>
         <section class="cast-detail-hero">
           <div class="cast-detail-hero-content">
@@ -418,7 +420,7 @@ export const CastDetailScreen = {
             if (current !== target) current.classList.remove("focused");
           });
           target.classList.add("focused");
-          target.focus?.({ preventScroll: true });
+          focusWithoutScroll(target);
           this.syncFocusedCardScroll({ instant: true });
         }
       });

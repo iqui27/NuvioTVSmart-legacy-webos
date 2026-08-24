@@ -21,6 +21,17 @@ class AddonRepository {
     this.installedAddonsPromise = null;
     this.installedAddonsPromiseKey = "";
     this.changeListeners = new Set();
+    // Raw-string keyed memo for the profile-scoped envelopes. See
+    // readProfileScopedEnvelope().
+    this.profileScopedEnvelopeCache = new Map();
+  }
+
+  readRawStoredValue(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch (_) {
+      return null;
+    }
   }
 
   canonicalizeUrl(url) {
@@ -111,7 +122,37 @@ class AddonRepository {
     };
   }
 
+  // Read, normalize, compare, sometimes write back — on every single read.
+  //
+  // The accessors built on this are not cheap lookups and they are called a lot
+  // per Home load: `isAddonEnabled(url)` reads the whole enabled-states envelope
+  // once per URL, `withDisplayNameOverride(addon)` reads the display-name
+  // envelope once per addon, and `getInstalledAddons()` reads all three again to
+  // build its cache key. Each of those reads used to parse the envelope,
+  // re-normalize every profile in it, and stringify the result twice to decide
+  // whether the normalized value needed writing back — and on webOS that
+  // write-back is a synchronous flush to disk.
+  //
+  // The raw stored string is the exact identity of what is stored, so memoizing
+  // against it is safe: any write (from here or anywhere else) changes the string
+  // and invalidates the entry. Same pattern already proven in watchProgressStore.
   readProfileScopedEnvelope(key, normalizeValue) {
+    const rawString = this.readRawStoredValue(key);
+    const cached = this.profileScopedEnvelopeCache.get(key);
+    if (cached && cached.raw === rawString) {
+      return cached.envelope;
+    }
+    const envelopeResult = this.readProfileScopedEnvelopeUncached(key, normalizeValue);
+    this.profileScopedEnvelopeCache.set(key, {
+      // Re-read: the uncached path can write a migrated or renormalized
+      // envelope, which changes the string this entry has to be keyed on.
+      raw: this.readRawStoredValue(key),
+      envelope: envelopeResult
+    });
+    return envelopeResult;
+  }
+
+  readProfileScopedEnvelopeUncached(key, normalizeValue) {
     const raw = LocalStore.get(key, null);
     if (this.isProfileScopedEnvelope(raw)) {
       const next = {

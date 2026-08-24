@@ -18,6 +18,7 @@ import { renderAppShell } from "./bootstrap/renderAppShell.js";
 import { renderAddonRemotePage } from "./bootstrap/renderAddonRemotePage.js";
 import { preloadStreamBadgeImages } from "./ui/screens/stream/streamScreen.js";
 import { warmStreamingLibs } from "./runtime/loadStreamingLibs.js";
+import { warmScreenChunks } from "./runtime/loadScreenChunks.js";
 import { Platform } from "./platform/index.js";
 import { LocalStore } from "./core/storage/localStore.js";
 import { I18n } from "./i18n/index.js";
@@ -222,11 +223,25 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
     StartupSyncService.enableProfileScopedSync();
     detailWatchedEnrichmentService.invalidateAllCache();
     await I18n.init();
-    const memberAccess = await MemberAccessRepository.getAccess().catch(() =>
-      MemberAccessRepository.getCurrentAccess()
-    );
-    ThemeManager.apply({ enforceAccess: true, access: memberAccess });
+    // Entitlements only gate which theme is allowed. Awaiting the fetch put one
+    // more serialized network round trip in front of the first Home paint, so
+    // apply the cached access now and re-apply once the fresh access lands.
+    // getAccess() returns the cached value synchronously whenever a cache
+    // exists, so this only defers work on the first launch after sign-in.
+    ThemeManager.apply({
+      enforceAccess: true,
+      access: MemberAccessRepository.getCurrentAccess()
+    });
     I18n.apply();
+    void MemberAccessRepository.getAccess()
+      .catch(() => MemberAccessRepository.getCurrentAccess())
+      .then((memberAccess) => {
+        ThemeManager.apply({ enforceAccess: true, access: memberAccess });
+        I18n.apply();
+      })
+      .catch((error) => {
+        console.warn("Member access refresh failed", error);
+      });
     void preloadStreamBadgeImages().catch((error) => {
       console.warn("Stream badge image prerender failed", error);
     });
@@ -469,6 +484,7 @@ async function bootstrapApp() {
   ThemeManager.apply();
   I18n.apply();
   warmStreamingLibs({ delayMs: 1400 });
+  warmScreenChunks({ delayMs: 2600 });
   void checkForAppUpdateOnStartup();
 
   markBootStage("Restoring session");

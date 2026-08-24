@@ -13,6 +13,7 @@ import { NuvioDialog } from "../../ui/components/nuvioDialog.js";
 import { detailWatchedEnrichmentService } from "../../data/repository/detailWatchedEnrichmentService.js";
 import { resolveExperienceRoute } from "./experienceModeRouting.js";
 import { Platform } from "../../platform/index.js";
+import { focusWithoutScroll, scrollIntoNearestView } from "../../platform/legacyDom.js";
 
 const PINNED_AVATAR_CATEGORIES = ["anime", "animation", "tv", "movie", "gaming"];
 const DEFAULT_PROFILE_COLOR = "#f5f5f5";
@@ -1122,7 +1123,7 @@ export const ProfileSelectionScreen = {
     }
 
     if (category) {
-      node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      scrollIntoNearestView(node, { behavior: "smooth" });
     }
   },
 
@@ -1483,7 +1484,7 @@ export const ProfileSelectionScreen = {
 
     event?.preventDefault?.();
     try {
-      cards[nextIndex].focus({ preventScroll: true });
+      focusWithoutScroll(cards[nextIndex]);
     } catch (_) {
       cards[nextIndex].focus();
     }

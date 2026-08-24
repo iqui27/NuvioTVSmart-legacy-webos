@@ -1,5 +1,4 @@
 import { HomeScreen } from "../screens/home/homeScreen.js";
-import { PlayerScreen } from "../screens/player/playerScreen.js";
 import { AccountScreen } from "../screens/account/accountScreen.js";
 import { AuthQrSignInScreen } from "../screens/account/authQrSignInScreen.js";
 import { AuthSignInScreen } from "../screens/account/authSignInScreen.js";
@@ -26,6 +25,13 @@ import { FolderDetailScreen } from "../screens/collection/folderDetailScreen.js"
 import { Platform } from "../../platform/index.js";
 import { RouteStateStore } from "./routeStateStore.js";
 import { LocalStore } from "../../core/storage/localStore.js";
+import { LazyRouteRegistry } from "../../runtime/lazyRoutes.js";
+import { loadScreenChunk, isScreenChunkLoaded } from "../../runtime/loadScreenChunks.js";
+import {
+  beginChunkLoadingIndicator,
+  endChunkLoadingIndicator,
+  reportChunkLoadFailure
+} from "../../runtime/chunkLoadingOverlay.js";
 
 const ROUTER_PERF_DEBUG = Boolean(
   globalThis.__NUVIO_DEBUG_ROUTER_PERF__ || globalThis.__NUVIO_DEBUG_HOME_PERF__
@@ -68,6 +74,26 @@ const WEBOS_NON_RESTORABLE_ROUTES = new Set([
   "stream"
 ]);
 
+// Lazy routes. Registered synchronously at module-evaluation time so the route
+// map is fully populated before anything can read it. Stage 1b replaces the
+// behaviour-neutral resolver with the real one: the screen now lives in a
+// separate script that is fetched on demand, and `playerScreen.js` is no longer
+// part of this bundle's module graph.
+const LAZY_ROUTE_DEFINITIONS = [
+  {
+    route: "player",
+    chunk: "player",
+    resolve: async () => {
+      const chunk = await loadScreenChunk("player");
+      return chunk?.PlayerScreen || null;
+    }
+  }
+];
+
+LAZY_ROUTE_DEFINITIONS.forEach((definition) => {
+  LazyRouteRegistry.register(definition.route, definition);
+});
+
 export const Router = {
   current: null,
   currentParams: {},
@@ -84,7 +110,7 @@ export const Router = {
 
   routes: {
     home: HomeScreen,
-    player: PlayerScreen,
+    player: LazyRouteRegistry.getStub("player"),
     account: AccountScreen,
     authQrSignIn: AuthQrSignInScreen,
     authSignIn: AuthSignInScreen,
@@ -270,6 +296,17 @@ export const Router = {
     this.routeReturnBackGuardUntil = Date.now() + TIZEN_ROUTE_RETURN_BACK_GUARD_MS;
   },
 
+  cancelRouteReturnBackGuard(navigationId) {
+    // The guard is armed before the target screen is loaded, so a failed load
+    // would otherwise leave it armed forever (its `until` is +Infinity until
+    // the navigation completes) and swallow every subsequent Back - a dead end.
+    if (navigationId !== this.routeReturnBackGuardNavigationId) {
+      return;
+    }
+    this.routeReturnBackGuardActive = false;
+    this.routeReturnBackGuardUntil = 0;
+  },
+
   consumeRouteReturnBackGuard() {
     if (
       !this.routeReturnBackGuardActive ||
@@ -335,6 +372,39 @@ export const Router = {
     };
   },
 
+  // Synchronous fast path for every non-lazy route: returns the boolean `true`
+  // rather than a promise, so the hot path never pays for a microtask tick.
+  // Only a genuinely unloaded lazy route returns a promise.
+  ensureRouteLoaded(routeName) {
+    if (!LazyRouteRegistry.isLazy(routeName)) {
+      return true;
+    }
+    if (LazyRouteRegistry.isLoaded(routeName)) {
+      this.routes[routeName] = LazyRouteRegistry.getLoaded(routeName);
+      return true;
+    }
+    // Only a genuinely cold load can be slow enough to need feedback; the
+    // indicator itself is delayed so the warm case never flashes.
+    if (!isScreenChunkLoaded(LazyRouteRegistry.getStub(routeName)?.__chunk || routeName)) {
+      beginChunkLoadingIndicator();
+    }
+    return LazyRouteRegistry.load(routeName).then((screen) => {
+      if (!screen) {
+        // Never a dead end: the caller leaves `current`, `currentParams` and
+        // `stack` untouched, so the previous screen stays mounted and
+        // focusable and pressing the same key again retries the load.
+        reportChunkLoadFailure();
+        return false;
+      }
+      endChunkLoadingIndicator();
+      // Swap the stub for the real screen so every synchronous contract
+      // (route state key, capture, cleanup, getCurrentScreen) sees the real
+      // implementation from now on.
+      this.routes[routeName] = screen;
+      return true;
+    });
+  },
+
   async navigate(routeName, params = {}, options = {}) {
     const navigationStart = ROUTER_PERF_DEBUG ? routerPerfNow() : 0;
 
@@ -346,12 +416,23 @@ export const Router = {
       options?.isBackNavigation
     );
 
-    const Screen = this.routes[routeName];
+    let Screen = this.routes[routeName];
 
     if (!Screen) {
       console.error("Route not found:", routeName);
       return;
     }
+
+    // Load before anything is mutated: capture, context resolution and cleanup
+    // below are all synchronous contracts that must see the real screen. On
+    // failure nothing has changed yet - `current`, `currentParams` and `stack`
+    // are untouched - but the back guard armed above must be released.
+    const routeLoad = this.ensureRouteLoaded(routeName);
+    if (routeLoad !== true && !(await routeLoad)) {
+      this.cancelRouteReturnBackGuard(routeReturnBackGuardNavigationId);
+      return;
+    }
+    Screen = this.routes[routeName];
 
     const bootGuard = globalThis.NuvioBootGuard;
     if (bootGuard && typeof bootGuard.stage === "function") {
@@ -363,7 +444,7 @@ export const Router = {
     const shouldSkipPush = skipStackPush || NON_BACKSTACK_ROUTES.has(previousRoute);
     if (this.current && this.current !== routeName) {
       this.captureCurrentRouteState();
-      this.routes[this.current].cleanup?.();
+      this.routes[this.current]?.cleanup?.();
       if (!shouldSkipPush) {
         this.stack.push({
           route: this.current,
@@ -372,7 +453,7 @@ export const Router = {
       }
     } else if (this.current === routeName) {
       this.captureCurrentRouteState();
-      this.routes[this.current].cleanup?.();
+      this.routes[this.current]?.cleanup?.();
     }
 
     this.current = routeName;
@@ -484,7 +565,7 @@ export const Router = {
     if (this.stack.length === 0) {
       if (this.current && this.current !== "home" && this.routes.home) {
         const previousRoute = this.current;
-        this.routes[this.current].cleanup?.();
+        this.routes[this.current]?.cleanup?.();
         this.current = "home";
         this.currentParams = {};
         await this.routes.home.mount(
@@ -510,9 +591,17 @@ export const Router = {
       return;
     }
 
+    const previousRouteLoad = this.ensureRouteLoaded(previousRoute);
+    if (previousRouteLoad !== true && !(await previousRouteLoad)) {
+      // Leave `current`, `currentParams` and the (already popped) target alone
+      // rather than half-completing the return.
+      this.stack.push(previous);
+      return;
+    }
+
     const fromRoute = this.current;
     this.captureCurrentRouteState();
-    this.routes[this.current].cleanup?.();
+    this.routes[this.current]?.cleanup?.();
     this.current = previousRoute;
     this.currentParams = previousParams;
     const navigationContext = this.resolveNavigationContext(previousRoute, previousParams, {
@@ -532,6 +621,14 @@ export const Router = {
     if (!this.current) {
       return null;
     }
-    return this.routes[this.current] || null;
+    const screen = this.routes[this.current] || null;
+    // Belt and braces: a stub must never reach the focus engine. It has no key
+    // handlers, so returning it would silently swallow every remote keypress
+    // and pointer event - a completely dead remote. focusEngine and
+    // sidebarNavigation both null-check already.
+    if (screen?.__lazyRoute) {
+      return null;
+    }
+    return screen;
   }
 };

@@ -261,12 +261,17 @@ export const CollectionsStore = {
     return store.getForProfile(profileId);
   },
 
+  // `store.get()` / `store.getForProfile()` already return a deep clone of the
+  // profile value, so the collections array handed back here is private to the
+  // caller. Cloning it a second time meant every read of `collectionsState`
+  // deep-copied ~380 KB twice; the `collections-store` Home stage was measured
+  // at 216 ms for a single read.
   get() {
-    return cloneCollections(this.getState().collections);
+    return this.getState().collections;
   },
 
   getForProfile(profileId) {
-    return cloneCollections(this.getStateForProfile(profileId).collections);
+    return this.getStateForProfile(profileId).collections;
   },
 
   replaceForProfile(profileId, collections = [], { silentSync = false } = {}) {

@@ -3,10 +3,49 @@
 
   var root = document.documentElement;
 
+  // This build targets a single device: LG webOS 4.x (Chromium 53). None of the
+  // gated features exist there, so the legacy path is pinned on instead of
+  // probed. Probing would leave layout at the mercy of a partial implementation
+  // reporting support it cannot deliver, and it makes what renders locally
+  // differ from what renders on the TV. Append ?modernFeatures=1 to run the
+  // probes again when checking this build on a current engine.
+  var LEGACY_CLASSES = [
+    "no-flex-gap",
+    "no-css-grid",
+    "no-css-math",
+    "no-aspect-ratio",
+    "no-backdrop-filter"
+  ];
+
   function removeClass(name) {
     root.className = (" " + root.className + " ")
       .replace(new RegExp(" " + name + " ", "g"), " ")
       .replace(/^\s+|\s+$/g, "");
+  }
+
+  function hasClass(name) {
+    return (" " + root.className + " ").indexOf(" " + name + " ") !== -1;
+  }
+
+  function addClass(name) {
+    if (!hasClass(name)) {
+      root.className = (root.className + " " + name).replace(/^\s+|\s+$/g, "");
+    }
+  }
+
+  function probesRequested() {
+    try {
+      return String(window.location && window.location.search).indexOf("modernFeatures=1") !== -1;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  if (!probesRequested()) {
+    for (var i = 0; i < LEGACY_CLASSES.length; i += 1) {
+      addClass(LEGACY_CLASSES[i]);
+    }
+    return;
   }
 
   function supports(prop, value) {
@@ -35,6 +74,12 @@
     removeClass("no-flex-gap");
   }
 
+  if (
+    supports("display", "grid") &&
+    supports("grid-template-columns", "repeat(2, minmax(0, 1fr))")
+  ) {
+    removeClass("no-css-grid");
+  }
   if (supports("font-size", "clamp(1px, 2px, 3px)")) removeClass("no-css-math");
   if (supports("aspect-ratio", "1 / 1")) removeClass("no-aspect-ratio");
   if (

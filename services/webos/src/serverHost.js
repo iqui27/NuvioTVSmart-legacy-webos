@@ -75,12 +75,122 @@ function installImageProxyHttpHook() {
   };
 }
 
+// The image proxy and the Supabase proxy do not run a server of their own: they
+// hook http.createServer and ride on whatever server the EngineFS runtime puts
+// up. The runtime is transpiled to ES5 at package time so that Node v0.12.2 on
+// webOS TV 4.x can load it, but if it ever fails to boot anyway, losing it
+// should cost torrent playback and nothing else — with no server at all it also
+// takes down poster proxying and the account/cloud-library proxy that legacy
+// webOS depends on. So when the runtime fails we still put up a bare server on
+// the same ports, through the same hook, and let the proxies answer.
+// probeLocalServer accepts any status below 500 on /settings, which is why the
+// placeholder handler answers 404 rather than 5xx.
+function startProxyOnlyServer(candidateIndex, onReady) {
+  var index = typeof candidateIndex === "number" ? candidateIndex : 0;
+  if (index >= PORT_CANDIDATES.length) {
+    onReady(new Error("No free port available for the proxy-only server"));
+    return;
+  }
+
+  var restoreHttpHook = installImageProxyHttpHook();
+  var server;
+  try {
+    server = http.createServer(function (req, res) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error: "enginefs-runtime-unavailable",
+          message:
+            "The local media runtime is not available on this platform; " +
+            "only the image and account proxies are served."
+        })
+      );
+    });
+  } finally {
+    restoreHttpHook();
+  }
+
+  server.on("error", function () {
+    try {
+      server.close();
+    } catch (ignored) {}
+    startProxyOnlyServer(index + 1, onReady);
+  });
+
+  server.listen(PORT_CANDIDATES[index], "127.0.0.1", function () {
+    onReady(null, PORT_CANDIDATES[index]);
+  });
+}
+
+// EngineFS keeps its torrent cache under os.tmpdir(), and on every
+// engine-created event it walks that directory and unlinks whatever does not
+// belong to a live engine. On a TV /tmp is the system scratch directory, so the
+// stock configuration makes the first torrent delete the platform's own files
+// (thumbnails, EPG databases, upload spools) — most attempts fail on
+// permissions, the ones that succeed do real damage. Node resolves os.tmpdir()
+// from TMPDIR/TMP/TEMP, so pointing those at an app-owned directory before the
+// runtime loads keeps the sweep inside our own sandbox.
+function redirectRuntimeTempDir(runtimePath) {
+  var serviceRoot = path.dirname(path.dirname(runtimePath));
+  var appPath = path.join(serviceRoot, ".nuvio-media-server");
+  var tempPath = path.join(appPath, "tmp");
+
+  try {
+    [appPath, tempPath].forEach(function (directory) {
+      if (!fs.existsSync(directory)) {
+        fs.mkdirSync(directory, 493);
+      }
+    });
+  } catch (error) {
+    console.error(
+      "[" + SERVICE_ID + "] could not create the runtime temp directory " + tempPath + ":",
+      error
+    );
+    return null;
+  }
+
+  process.env.TMPDIR = tempPath;
+  process.env.TMP = tempPath;
+  process.env.TEMP = tempPath;
+  process.env.APP_PATH = appPath;
+  return tempPath;
+}
+
 function bootLocalRuntime(runtimePath) {
+  redirectRuntimeTempDir(runtimePath);
+
+  // The hook stays installed for the life of the process on the EngineFS path.
+  // Restoring it once the module body finished evaluating looked tidy but was
+  // wrong: EngineFS probes for ffmpeg binaries before it listens, so it calls
+  // http.createServer from a callback, long after require() returned. The
+  // unhooked server then answered the account and image proxy paths with
+  // express's own "Cannot POST /supabase-proxy" 404, which reads to the app as
+  // every addon and debrid login failing.
   var restoreHttpHook = installImageProxyHttpHook();
   try {
     loadCommonJsScript(runtimePath);
-  } finally {
+    return { mode: "enginefs", runtimeError: null };
+  } catch (error) {
     restoreHttpHook();
+    console.error(
+      "[" + SERVICE_ID + "] local media runtime failed to load; falling back to proxy-only:",
+      error
+    );
+    startProxyOnlyServer(0, function (listenError, port) {
+      if (listenError) {
+        console.error("[" + SERVICE_ID + "] proxy-only server failed to listen:", listenError);
+        return;
+      }
+      console.log("[" + SERVICE_ID + "] proxy-only server listening on 127.0.0.1:" + port);
+    });
+    return {
+      mode: "proxy-only",
+      runtimeError: {
+        message: String(error && error.message ? error.message : error),
+        stack: String(error && error.stack ? error.stack : "")
+      }
+    };
   }
 }
 

@@ -1,3 +1,21 @@
+/* Inline SVG icons rendered by js/ui/components/inlineIcons.js. These replaced the
+   Material Icons webfont, which only ever worked when the TV could reach
+   fonts.googleapis.com. Sizing at 1em and filling with currentColor makes an icon
+   behave exactly like the glyph it replaced, so every existing `font-size` / `color`
+   rule that used to size a ligature still sizes the SVG with no change. Declared
+   first in the file so later single-class rules win on equal specificity. */
+.inline-icon {
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  fill: currentColor;
+}
+
+.inline-icon path {
+  fill: currentColor;
+}
+
 .card {
   background: var(--card-bg);
   border-radius: 8px;
@@ -2722,7 +2740,6 @@ button:focus-visible {
 }
 
 .root-sidebar-icon-material {
-  font-family: "Material Icons";
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7469,7 +7486,6 @@ button:focus-visible {
 .settings-nav-icon-material {
   width: 36px;
   height: 36px;
-  font-family: "Material Icons";
   font-size: 36px;
   line-height: 1;
   color: currentColor;
@@ -8782,7 +8798,6 @@ button:focus-visible {
   width: 48px; /* ATV 24dp -> 48px */
   height: 48px; /* ATV 24dp -> 48px */
   color: #fff;
-  font-family: "Material Icons";
   font-size: 48px; /* ATV 24dp -> 48px */
   line-height: 1;
   display: inline-flex;
@@ -10488,7 +10503,7 @@ button:focus-visible {
   gap: 12px;
 }
 
-.debug-console-back .material-icons {
+.debug-console-back .inline-icon {
   font-size: 34px;
   line-height: 1;
 }
@@ -11186,7 +11201,7 @@ html.legacy-webos .debug-console-log-frame {
     box-shadow 120ms ease;
 }
 
-.addons-action-btn .material-icons {
+.addons-action-btn .inline-icon {
   font-size: 44px;
 }
 
@@ -11324,7 +11339,7 @@ html.legacy-webos .debug-console-log-frame {
   box-shadow: inset 0 0 0 2px var(--addons-focus-ring);
 }
 
-.addons-qr-close .material-icons {
+.addons-qr-close .inline-icon {
   font-size: min(1.67vw, 32px);
 }
 
@@ -11426,7 +11441,7 @@ html.legacy-webos .debug-console-log-frame {
   font-weight: 400;
 }
 
-.catalog-order-action .material-icons {
+.catalog-order-action .inline-icon {
   font-size: 44px;
 }
 
@@ -13327,7 +13342,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
 }
 
-.player-next-episode-card-inner.is-playable {
+.player-next-episode-card-inner.focusable {
   pointer-events: auto;
   cursor: pointer;
 }
@@ -15689,6 +15704,30 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   border-radius: 50%;
   background: #2a2f37 center center / cover no-repeat;
   margin-bottom: 10px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.movie-cast-avatar-image {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.movie-cast-avatar-fallback {
+  position: relative;
+  z-index: 0;
+  color: var(--detail-text-primary, #fff);
+  font-size: 56px;
+  font-weight: 700;
 }
 
 .movie-cast-name {
@@ -17731,6 +17770,11 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   margin-bottom: 18px;
 }
 
+.stream-route-card-row[data-stream-loading-row][hidden],
+.stream-route-empty[data-stream-empty][hidden] {
+  display: none !important;
+}
+
 .stream-route-card-row:last-child {
   margin-bottom: 0;
 }
@@ -18020,6 +18064,18 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   width: 640px;
   max-width: 640px;
   gap: 16px;
+  /* The box is capped at 60vh so it clears the rows viewport, but the logo, a
+     meta line that wraps to two rows and a multi-line synopsis add up to more
+     than that. With justify-content:flex-end the excess is pushed off the TOP
+     of the screen and the title gets guillotined. Bottom-align with an auto
+     margin instead: it behaves exactly like flex-end while the content fits,
+     and collapses to zero when it does not, so the overflow falls off the
+     bottom where overflow:hidden already trims it. */
+  justify-content: flex-start;
+}
+
+.legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-copy > :first-child {
+  margin-top: auto;
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-logo {
@@ -18773,6 +18829,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 
 .no-aspect-ratio .home-content-card .content-poster {
   height: 450px;
+}
+
+/* The card is var(--poster-card-width) wide at a 2/3 ratio, so the media box is
+   1.5x that. Without this the element has no intrinsic height on engines with
+   no aspect-ratio and the continue-watching poster collapses. */
+.no-aspect-ratio .home-row-continue-poster .home-continue-media {
+  height: calc(var(--poster-card-width, 126px) * 1.5);
 }
 
 .no-aspect-ratio .home-screen-shell .home-poster-frame,
@@ -19914,11 +19977,6 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   --modern-hero-copy-right: 72px;
 }
 
-.legacy-tizen .home-screen-shell.home-layout-modern .home-modern-rows-viewport {
-  bottom: 28px;
-  height: calc(var(--modern-rows-viewport-height) - 28px);
-}
-
 .legacy-tizen .home-screen-shell.home-layout-modern .home-track {
   margin-left: calc(var(--modern-track-peek-extension) * -1);
   padding-left: calc(var(--home-content-start) + var(--modern-track-peek-extension));
@@ -20162,13 +20220,22 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .legacy-webos .stream-route-card-badges {
-  gap: 4px;
-  margin: 6px 0 5px;
+  /* This block overrides the base rule on the TV, so the spacing has to be set
+     here — raising `gap` on `.stream-route-card-badges` alone changed nothing on
+     the device. 11px matches the base value; the top margin separates the chip
+     row from the description lines above it, which at 6px read as one block. */
+  gap: 11px;
+  margin: 18px 0 10px;
 }
 
 .legacy-webos .stream-route-card-badges-lazy {
-  height: 26px;
-  min-height: 26px;
+  /* Fixed height because webOS keeps the lazy row after hydration on purpose —
+     a wrapping row above the viewport would change list geometry and move the
+     focused card during virtualised scrolling. But the value has to clear the
+     chips: at 26px (20.8px once the UI scale applies) it was cropping the top of
+     40px chips, which is what the row looked like it was doing. */
+  height: 44px;
+  min-height: 44px;
 }
 
 .legacy-webos .stream-route-stream-badge {
@@ -20336,7 +20403,11 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  /* 11px, nao 6px: com sete chips de contorno fino na mesma linha, 6px deixava as
+     bordas de itens vizinhos quase colando e a fileira lia como uma grade de
+     tracos. O PostCSS deriva daqui a margem do fallback para engines sem
+     flex gap, que e o caso desta TV — nao ha um segundo lugar para ajustar. */
+  gap: 11px;
   margin: 10px 0 8px;
   max-width: 100%;
 }
@@ -20678,7 +20749,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   margin-bottom: 10px;
 }
 
-.cast-detail-back .material-icons {
+.cast-detail-back .inline-icon {
   font-size: 28px;
   line-height: 1;
 }
@@ -21150,12 +21221,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   --detail-episode-safe-x: 112px;
   --detail-action-gap: 24px;
   --detail-button-height: 96px;
-  --detail-control-size: 96px;
-  --detail-title-size: 88px;
-  --detail-section-title-size: 44px;
-  --detail-label-size: 32px;
-  --detail-body-size: 32px;
-  --detail-caption-size: 28px;
+  --detail-control-size: 84px;
+  --detail-title-size: 68px;
+  --detail-section-title-size: 32px;
+  --detail-label-size: 25px;
+  --detail-body-size: 26px;
+  --detail-caption-size: 23px;
 }
 
 .detail-hero-section {
@@ -22202,4 +22273,214 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   display: block;
   width: 100%;
   margin: 0.65rem 0;
+}
+
+/* ===========================================================================
+ * Legacy-TV performance overrides (measured on an LG OLED65C9, Chromium 53).
+ *
+ * Note on what is deliberately NOT here: disabling the
+ * flex-basis/min-width/max-width transition on .home-poster-card looks like the
+ * obvious win and is not one. The rule above already re-declares that transition
+ * for constrained runtimes with !important, and its comment explains why — the
+ * expansion is deferred until focus settles, so the reflow never lands in the
+ * D-pad scrolling path. Measured here: 20 keypresses across rows produced a
+ * single long frame. Removing it costs motion and buys nothing.
+ * =========================================================================== */
+
+/* A 12px gaussian blur over a landscape thumbnail, on up to 12 mounted
+ * Continue Watching cards at once. This SoC cannot afford it. */
+.performance-constrained .home-screen-shell .home-continue-card-blur-next-up .home-continue-bg {
+  filter: none;
+  transform: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Fallback de layout para engines sem CSS Grid (webOS 4 / Chromium 53).
+   O boot guard já marca <html class="no-css-grid no-css-math no-flex-gap">,
+   mas até aqui NADA no CSS usava essas classes. Consequencia medida na C9:
+   .player-dialog-item declara display:grid + grid-template-columns:1fr auto,
+   o engine descarta o display, todos os filhos empilham como bloco e cada
+   grid-column/grid-row abaixo nao faz nada — foi assim que o menu de legenda
+   passou a desenhar nome do idioma, badge de contagem e check um sobre o outro.
+   Flexbox funciona no 53; gap de flex e min() nao, entao aqui e margem e px.
+   Especificidade de 2 classes, logo vence as regras de 1 classe acima
+   independentemente da posicao no arquivo.
+   --------------------------------------------------------------------------- */
+html.no-css-grid .player-dialog-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+html.no-css-grid .player-dialog-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html.no-css-grid .player-dialog-item-sub {
+  flex: 1 1 100%;
+}
+
+html.no-css-grid .player-dialog-item-check,
+html.no-css-grid .player-dialog-item-center {
+  flex: 0 0 auto;
+  margin-left: 12px;
+}
+
+html.no-css-grid .player-dialog-style-item .player-dialog-step {
+  flex: 0 0 auto;
+}
+
+html.no-css-grid .player-subtitle-option-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html.no-css-grid .player-subtitle-option-copy > * + * {
+  margin-top: 6px;
+}
+
+/* Separa o badge de contagem do nome do idioma. Independe de Grid: o span e
+   conteudo inline dentro de .player-dialog-item-main, e sem margem virava
+   "Portuguese (Brazil)2" grudado. Fica em px puro de proposito: o PostCSS
+   deduplica declaracoes da mesma propriedade e mantem a ultima, entao um par
+   "8px; min(...)" perdia o fallback e computava 0 no Chromium 53. */
+.player-subtitle-language-count {
+  margin-left: 8px;
+}
+
+/* ---------------------------------------------------------------------------
+   Episodio assistido: o card recua e a marca vai para o centro.
+
+   Antes disto a classe `.series-episode-card.watched` era aplicada pelo JS e
+   NAO tinha nenhuma regra no CSS — o unico sinal era `.series-episode-status`,
+   um ponto de 44px no canto superior esquerdo. A tres metros aquilo le como
+   decoracao, e nao da para varrer uma temporada e ver o que ja foi visto. O que
+   carrega o significado e escurecer a arte; a marca central confirma.
+
+   Reaproveita o proprio elemento de status em vez de acrescentar um no. E usa
+   margem negativa em vez de translate porque `.series-episode-image.is-blurred`
+   ja usa transform e o estado de foco tambem — empilhar mais um transform aqui
+   seria uma disputa desnecessaria.
+
+   Especificidade de 3 classes, entao vence as regras responsivas por tier
+   (linhas ~21462 a ~21708) independentemente da posicao no arquivo.
+   --------------------------------------------------------------------------- */
+.series-episode-card.watched .series-episode-image {
+  opacity: 0.28;
+}
+
+.series-episode-card.watched .series-episode-copy {
+  opacity: 0.6;
+}
+
+.series-episode-card.watched .series-episode-status.complete {
+  top: 50%;
+  left: 50%;
+  margin: -44px 0 0 -44px;
+  width: 88px;
+  height: 88px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #101216;
+}
+
+.series-episode-card.watched .series-episode-status.complete .series-watched-badge-svg {
+  width: 52px;
+  height: 52px;
+}
+
+/* O foco continua sendo sagrado: um card escurecido que esta focado precisa
+   parecer focado. Sem isto o item assistido sob o cursor fica menos legivel que
+   os vizinhos e a navegacao perde o rastro. */
+.series-episode-card.watched.focused .series-episode-image {
+  opacity: 0.5;
+}
+
+.series-episode-card.watched.focused .series-episode-copy {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Chips de fonte, variante A — contorno unico.
+
+   Substitui a fileira de logos de fabricante (Dolby Vision, HDR10+, Atmos,
+   Blu-ray), cada um com altura e cor de marca propria, por uma familia so:
+   contorno fino, caixa alta pequena, um peso. A hierarquia passa a vir da COR,
+   nao do tamanho — que era o que fazia o REMUX gritar igual ao 7.1.
+
+   Tres niveis, de proposito:
+     .accent  o container (MP4). Unico com cor de destaque, porque nesta TV o
+              Dolby Vision so sobrevive em MP4 — e a informacao que decide.
+     base     o que qualifica a escolha: resolucao, DV, HDR10+, Atmos, canais.
+     .muted   o que so desempata: codec e midia de origem.
+
+   Especificidade de 2 classes, entao vence `.stream-route-stream-badge` acima
+   independentemente da posicao no arquivo. Sem `gap` e sem `min()` aqui: o
+   Chromium 53 nao tem nenhum dos dois.
+   --------------------------------------------------------------------------- */
+.stream-route-stream-badge.text {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: #c8ced6;
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+}
+
+.stream-route-stream-badge.text.muted {
+  border-color: rgba(255, 255, 255, 0.09);
+  color: #7d848c;
+}
+
+.stream-route-stream-badge.text.accent {
+  border-color: rgba(124, 92, 255, 0.85);
+  background: rgba(124, 92, 255, 0.16);
+  color: #cbbcff;
+}
+
+/* No card focado o contorno das badges precisa recuar: o anel de foco e o
+   contorno do chip sao a mesma espessura, e juntos o card vira uma grade de
+   linhas concorrentes. O texto sobe de contraste para compensar. */
+.stream-route-card.focused .stream-route-stream-badge.text,
+.stream-route-card-focused .stream-route-stream-badge.text {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #eef1f5;
+}
+
+.stream-route-card.focused .stream-route-stream-badge.text.muted,
+.stream-route-card-focused .stream-route-stream-badge.text.muted {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #99a0a8;
+}
+
+/* O chip de tamanho era um bloco preto cheio no meio de uma fileira de contornos
+   finos — quebrava a familia e roubava a atencao de um dado que a linha de
+   metadados ja mostra logo acima. Entra na mesma familia, no nivel apagado. */
+.stream-route-stream-badge.size {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: transparent;
+  color: #7d848c;
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+}
+
+/* O fallback de flex gap (gerado pelo PostCSS para engines sem `gap`, que e o
+   caso desta TV) aplica margin-bottom em TODO filho da fileira de badges. Na
+   fileira lazy isso e nocivo: ela e `nowrap` de altura fixa, entao a margem
+   inferior nao separa nada — apenas desloca o chip para cima dentro da caixa,
+   e medido na C9 o chip terminava 3px ACIMA do topo da fileira, encostando na
+   ultima linha da descricao. Aqui a separacao vertical e do `margin` da propria
+   fileira, nao dos filhos.
+
+   Especificidade: uma classe a mais que a regra gerada, entao vence sem depender
+   de ordem no arquivo. */
+html.no-flex-gap .stream-route-card-badges-lazy > * {
+  margin-bottom: 0;
 }

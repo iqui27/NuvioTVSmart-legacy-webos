@@ -7,6 +7,7 @@ import { Platform } from "../../../platform/index.js";
 import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
 import { I18n } from "../../../i18n/index.js";
+import { renderInlineIcon } from "../../components/inlineIcons.js";
 
 function t(key, fallback) {
   return I18n.t(key, {}, { fallback });
@@ -157,7 +158,7 @@ export const PluginScreen = {
     if (!canvas) {
       return;
     }
-    QrCodeGenerator.generate(canvas, this.model.phoneManagerUrl, 440);
+    void QrCodeGenerator.generate(canvas, this.model.phoneManagerUrl, 440);
   },
 
   async openQrOverlay() {
@@ -247,7 +248,7 @@ export const PluginScreen = {
                      data-col="0"
                      data-action-id="manage_from_phone"
                      tabindex="-1">
-                  <span class="addons-large-row-icon material-icons" aria-hidden="true">qr_code_2</span>
+                  ${renderInlineIcon("qr_code_2", "addons-large-row-icon")}
                   <span class="addons-large-row-copy">
                     <strong>${escapeHtml(t("addon_manage_from_phone_title", "Manage from phone"))}</strong>
                     <small>${escapeHtml(
@@ -263,7 +264,7 @@ export const PluginScreen = {
                     )}</small>
                   </span>
                   <span class="addons-large-row-tail-group">
-                    <span class="addons-large-row-tail material-icons" aria-hidden="true">phone_android</span>
+                    ${renderInlineIcon("phone_android", "addons-large-row-tail")}
                   </span>
                 </div>
                 ${
@@ -276,13 +277,13 @@ export const PluginScreen = {
                      data-col="0"
                      data-action-id="reorder_home_catalogs"
                      tabindex="-1">
-                  <span class="addons-large-row-icon material-icons" aria-hidden="true">tune</span>
+                  ${renderInlineIcon("tune", "addons-large-row-icon")}
                   <span class="addons-large-row-copy">
                     <strong>${escapeHtml(t("addon_reorder_title", "Reorder home catalogs"))}</strong>
                     <small>${escapeHtml(t("addon_reorder_subtitle", "Controls catalog and collection row order on Home"))}</small>
                   </span>
                   <span class="addons-large-row-tail-group">
-                    <span class="addons-large-row-tail material-icons" aria-hidden="true">chevron_right</span>
+                    ${renderInlineIcon("chevron_right", "addons-large-row-tail")}
                   </span>
                 </div>`
                 }
@@ -294,13 +295,13 @@ export const PluginScreen = {
                      data-action-id="refresh_addons"
                      tabindex="-1"
                      aria-disabled="${this.syncing ? "true" : "false"}">
-                  <span class="addons-large-row-icon material-icons" aria-hidden="true">${this.syncing ? "hourglass_top" : "sync"}</span>
+                  ${renderInlineIcon(this.syncing ? "hourglass_top" : "sync", "addons-large-row-icon")}
                   <span class="addons-large-row-copy">
                     <strong>${escapeHtml(this.syncing ? t("addon_refresh_action", "Refreshing…") : t("addon_refresh_action", "Refresh Addons"))}</strong>
                     <small>${escapeHtml(t("addon_refresh_default_subtitle", "Pull latest addon changes for current profile"))}</small>
                   </span>
                   <span class="addons-large-row-tail-group">
-                    <span class="addons-large-row-tail material-icons" aria-hidden="true">refresh</span>
+                    ${renderInlineIcon("refresh", "addons-large-row-tail")}
                   </span>
                 </div>
               </section>
@@ -326,7 +327,7 @@ export const PluginScreen = {
               <canvas class="addons-qr-canvas" width="440" height="440" aria-label="QR code"></canvas>
               <p class="addons-qr-url">${escapeHtml(this.model.phoneManagerUrl)}</p>
               <div role="button" class="addons-qr-close addons-focusable focused" data-action-id="close_qr_overlay" tabindex="-1">
-                <span class="material-icons" aria-hidden="true">close</span>
+                ${renderInlineIcon("close")}
                 <span>${escapeHtml(t("addon_qr_close", "Close"))}</span>
               </div>
             </div>

@@ -365,7 +365,13 @@ const PROBE_TIMEOUT_MS = 2000; // per-probe timeout (ms)
 const READINESS_MIN_BUFFER_BYTES = 4 * 1024 * 1024;
 const READINESS_MIN_ACTIVE_BYTES = 1 * 1024 * 1024;
 const READINESS_MIN_STREAM_PROGRESS = 0.001;
-const READINESS_MIN_ACTIVE_WAIT_MS = 12000;
+// Floor for the "swarm is active and something is downloaded" path. The
+// READINESS_MIN_BUFFER_BYTES branch above already returns the instant 4 MiB is
+// buffered, so this floor only governs the weaker case of >=1 MiB downloaded
+// without a confirmed buffer. 12 s here meant every torrent paid twelve seconds
+// of black screen even when the range probe answered immediately; 3 s is enough
+// to tell a real transfer from a swarm that connected and stalled.
+const READINESS_MIN_ACTIVE_WAIT_MS = 3000;
 const READINESS_RANGE_ONLY_FALLBACK_MS = 5000;
 
 function finiteNumber(value, fallback = 0) {

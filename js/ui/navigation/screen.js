@@ -1,3 +1,4 @@
+import { focusWithoutScroll } from "../../platform/legacyDom.js";
 export const ScreenUtils = {
   show(container) {
     if (!container) {
@@ -29,26 +30,14 @@ export const ScreenUtils = {
     if (modalOpen) {
       const existingFocused = container?.querySelector?.(".focusable.focused") || null;
       if (existingFocused instanceof HTMLElement && container?.contains(existingFocused)) {
-        try {
-          existingFocused.focus({ preventScroll: true });
-        } catch (_) {
-          try {
-            existingFocused.focus();
-          } catch (_) {}
-        }
+        focusWithoutScroll(existingFocused);
         return existingFocused;
       }
       return null;
     }
     const existingFocused = container?.querySelector?.(".focusable.focused") || null;
     if (existingFocused instanceof HTMLElement && container?.contains(existingFocused)) {
-      try {
-        existingFocused.focus({ preventScroll: true });
-      } catch (_) {
-        try {
-          existingFocused.focus();
-        } catch (_) {}
-      }
+      focusWithoutScroll(existingFocused);
       return existingFocused;
     }
     const first = container?.querySelector(selector);
@@ -78,7 +67,7 @@ export const ScreenUtils = {
     current.classList.remove("focused");
     list[nextIndex].classList.add("focused");
     try {
-      list[nextIndex].focus({ preventScroll: true });
+      focusWithoutScroll(list[nextIndex]);
     } catch (_) {
       list[nextIndex].focus();
     }
@@ -101,7 +90,7 @@ export const ScreenUtils = {
       list.forEach((node) => node.classList.remove("focused"));
       current.classList.add("focused");
       try {
-        current.focus({ preventScroll: true });
+        focusWithoutScroll(current);
       } catch (_) {
         current.focus();
       }
@@ -201,7 +190,7 @@ export const ScreenUtils = {
     current.classList.remove("focused");
     target.classList.add("focused");
     try {
-      target.focus({ preventScroll: true });
+      focusWithoutScroll(target);
     } catch (_) {
       target.focus();
     }

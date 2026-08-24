@@ -3,12 +3,7 @@ import { accentColorForTheme, ThemeStore } from "../../data/local/themeStore.js"
 import { syncBrandWordmarks } from "../components/brandWordmark.js";
 import { resolveThemeName } from "./themeAccess.js";
 import { ThemeColors } from "./themeColors.js";
-
-const FONT_STACKS = {
-  INTER: '"Inter", "Segoe UI", Arial, sans-serif',
-  DM_SANS: '"DM Sans", "Segoe UI", Arial, sans-serif',
-  OPEN_SANS: '"Open Sans", "Segoe UI", Arial, sans-serif'
-};
+import { applyAppFontFamily } from "./appFontLoader.js";
 
 // Cached once at module load so the theme can retain its capability fallback.
 const SUPPORTS_CSS_VARS =
@@ -185,10 +180,9 @@ export const ThemeManager = {
       document.documentElement.style.setProperty(key, value);
     });
 
-    document.documentElement.style.setProperty(
-      "--app-font-family",
-      FONT_STACKS[String(theme.fontFamily || "INTER").toUpperCase()] || FONT_STACKS.INTER
-    );
+    // Writes --app-font-family with the local fallback stack immediately and
+    // upgrades it to the web font after first paint, if and when it downloads.
+    applyAppFontFamily(theme.fontFamily);
     document.documentElement.dataset.nuvioTheme = themeName;
     syncBrandWordmarks(themeName);
     document.documentElement.style.setProperty("color-scheme", "dark");
