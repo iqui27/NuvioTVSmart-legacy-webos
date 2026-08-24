@@ -1,4 +1,5 @@
 import { cp, mkdir, readFile, rm, writeFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -1509,6 +1510,18 @@ async function buildBundle() {
   // modules the app bundle actually has to publish, so the generated registry
   // can be written knowing exactly what is needed instead of everything that
   // might be.
+  // O registry real e escrito DEPOIS dos chunks, de proposito (o comentario
+  // acima explica), mas `js/runtime/loadScreenChunks.js` o importa — logo tanto a
+  // medicao do grafo compartilhado quanto o build do chunk exigem que o arquivo
+  // ja exista. Numa arvore que ja buildou ele sobra do build anterior e o
+  // problema fica invisivel; num clone limpo o esbuild falha com
+  // `Could not resolve "./generated/sharedModuleRegistry.js"`. Foi exatamente
+  // assim que o CI quebrou na primeira execucao. O stub vazio abaixo resolve o
+  // ovo-e-galinha e e sobrescrito pelo registry real mais adiante, mantendo o
+  // arquivo fora do git.
+  if (!existsSync(SHARED_REGISTRY_FILE)) {
+    await writeSharedRegistry([]);
+  }
   const sharedExportsByModule = await prepareSharedCore();
   const chunkResults = [];
   for (const chunk of SCREEN_CHUNKS) {
