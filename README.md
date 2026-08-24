@@ -14,6 +14,7 @@
 > - **Base version of this fork:** upstream `0.3.42`.
 > - **What was changed and when:** [CHANGES.md](./CHANGES.md) (required by GPLv3 §5a).
 > - **Platform notes measured on real hardware:** [LEGACY-WEBOS.md](./LEGACY-WEBOS.md).
+> - **Issues:** [iqui27/NuvioTVSmart-legacy-webos/issues](https://github.com/iqui27/NuvioTVSmart-legacy-webos/issues)
 > - **Report bugs here, not upstream.** If you can reproduce a problem on the
 >   official build, then it belongs upstream.
 >
