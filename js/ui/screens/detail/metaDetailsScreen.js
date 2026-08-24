@@ -1331,7 +1331,12 @@ function stripTraktSpoilerMarkup(value = "") {
 }
 
 function containsTraktInlineSpoiler(value = "") {
-  return /\[spoiler\].*?\[\/spoiler\]/is.test(String(value || ""));
+  // `[\s\S]` em vez da flag `s` (dotAll, ES2018): o Chromium 53 do webOS 4
+  // rejeita a flag em tempo de execucao, e como o esbuild converte um literal
+  // com flag nao suportada em `new RegExp(source, "is")`, o erro nao aparece no
+  // build — ele estoura como SyntaxError na primeira chamada e derruba o
+  // carregamento dos comentarios do Trakt inteiro. Semantica identica.
+  return /\[spoiler\][\s\S]*?\[\/spoiler\]/i.test(String(value || ""));
 }
 
 function formatEpisodeCardDate(value = "") {

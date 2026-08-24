@@ -29,7 +29,8 @@
     "check:legacy-css": "node ./scripts/checkLegacyCss.mjs",
     "sync": "node ./scripts/sync-wrapper.mjs",
     "sync:tizen": "node ./scripts/sync-wrapper.mjs --tizen",
-    "sync:webos": "node ./scripts/sync-wrapper.mjs --webos"
+    "sync:webos": "node ./scripts/sync-wrapper.mjs --webos",
+    "check:legacy-regex": "node scripts/checkLegacyRegex.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
