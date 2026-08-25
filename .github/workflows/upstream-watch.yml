@@ -60,17 +60,18 @@ jobs:
           git remote add upstream https://github.com/NuvioMedia/NuvioTVSmart.git 2>/dev/null || true
           git fetch --quiet upstream --tags
           RESUMO="$(git log --oneline --no-decorate "$BASE".."$TAG" 2>/dev/null | head -30 || echo '(nao foi possivel listar commits)')"
-          # A previsao de conflito compara o que o upstream mudou com o que a
-          # variante mudou, e para isso precisa do `main` (espelho do upstream).
-          # Duas tentativas anteriores sairam vazias: o checkout traz apenas a
-          # branch acionada, e um fetch com refspec `main:refs/heads/main` junto de
-          # `legacy-tv:...` e RECUSADO porque legacy-tv e a branch corrente, o que
-          # derrubava o comando inteiro no `|| true`. FETCH_HEAD nao escreve ref
-          # nenhuma, entao nao ha o que recusar.
-          git fetch --quiet origin main
-          echo "main em: $(git rev-parse FETCH_HEAD)"
+          # A previsao cruza "o que o upstream mudou de BASE para TAG" com "o que a
+          # variante mudou em cima da BASE". O segundo lado usa a TAG da base
+          # incorporada, nao a branch `main`: `main` e espelho do upstream e pode
+          # ja ter sido sincronizado para a versao nova (foi o que aconteceu —
+          # apareceu em 0.3.43), e nesse caso a comparacao passa a contar mudanca
+          # DELES como se fosse nossa e a lista incha.
+          #
+          # Historico das duas tentativas anteriores, para nao repetir: o checkout
+          # traz so a branch acionada, e refspec com `legacy-tv:refs/heads/legacy-tv`
+          # e recusada por ser a branch corrente, derrubando o fetch inteiro.
           CRUZAM="$(comm -12 \
             <(git diff --name-only "$BASE" "$TAG" | sort) \
-            <(git diff --name-only FETCH_HEAD HEAD | sort) | head -30 || true)"
+            <(git diff --name-only "$BASE" HEAD | sort) | head -30 || true)"
           echo "arquivos que se cruzam:"; echo "${CRUZAM:-nenhum}"
           gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITULO" --body "$(printf 'Upstream publicou **%s**. A variante `legacy-tv` esta na base **%s**.\n\n## Commits\n\n```\n%s\n```\n\n## Arquivos que o upstream mudou E nos tambem (previsao de conflito)\n\n```\n%s\n```\n\n## Antes de fechar\n\n- [ ] `scripts/compatibilityPolicy.mjs` continua com piso 4.0.0 / Chromium 53 / Node 0.12 (sem isto o app nao abre no aparelho)\n- [ ] `js/platform/index.js`, `services/webos/src/serverHost.js` (TMPDIR) e o guard de pull vazio em `librarySyncService.js` sobreviveram\n- [ ] `npm run check:no-undef` e `npm run check:legacy-regex` passam\n- [ ] instalado e verificado no aparelho antes de publicar a release\n' "$TAG" "$BASE" "$RESUMO" "${CRUZAM:-nenhum}")"
