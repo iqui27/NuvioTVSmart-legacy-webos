@@ -1008,7 +1008,15 @@ async function buildCSS() {
     const result = await postcss([
       postcssGlobalData({ files: [path.join(cssDir, "base.css")] }),
       autoprefixer({
-        overrideBrowserslist: [`Chrome ${compatibilityPolicy.chromiumVersion}`],
+        // `chromiumVersion` e o alvo do ESBUILD, que nesta variante fica em 53
+        // porque ele nao aceita 38. O CSS nao passa pelo esbuild: quem consome
+        // e o motor do aparelho, entao o alvo correto aqui e
+        // `webOsChromiumVersion`. Com o valor errado o autoprefixer omitia
+        // `-webkit-filter`, que o Chromium 38 exige (o sem prefixo e justamente
+        // Chrome 53) — 24 declaracoes `filter:` sairiam sem efeito.
+        overrideBrowserslist: [
+          `Chrome ${compatibilityPolicy.webOsChromiumVersion || compatibilityPolicy.chromiumVersion}`
+        ],
         grid: "autoplace"
       }),
       legacyDeclarationFallbackPlugin(),
@@ -1069,6 +1077,24 @@ async function copyOptionalRootFile(fileName, { fallback = null, defaultContents
 // Adding a new ES2017+ builtin to `js/` means adding its module here. Grep hints:
 // each group below names the call sites that justify it.
 const CORE_JS_MODULES = [
+  // Builtins que existem no Chromium 53 e NAO no 38 (webOS 3). Precisam estar
+  // listados explicitamente: `coreJsCompat` filtra esta lista pelo alvo, e o
+  // filtro so REMOVE — apontar o alvo para 38 nunca acrescentaria nada. Na
+  // variante 53 estes sao descartados de graca pelo proprio filtro.
+  //
+  // O caso que prova o custo de errar isto: `Object.assign` (Chrome 45) e usado
+  // no topo de js/ui/screens/trakt/traktScreen.js, modulo importado
+  // estaticamente pelo router — ou seja executa durante a avaliacao do bundle e
+  // mata o app no boot, antes de qualquer tela.
+  "es.object.assign",
+  "es.array.from",
+  "es.array.find",
+  "es.array.find-index",
+  "es.string.includes",
+  "es.string.starts-with",
+  "es.string.ends-with",
+  "es.string.repeat",
+
   // Object.entries (51 uses) / Object.values (13) / Object.fromEntries (24, plus assjs).
   "es.object.entries",
   "es.object.values",
@@ -1137,11 +1163,21 @@ async function buildCoreJsBundle() {
   if (requiredModules.length === 0) {
     throw new Error("Core-js compatibility query returned no required modules.");
   }
+  // `fetch` chegou no Chrome 42 e o core-js NAO o fornece — ele cobre ECMAScript,
+  // nao APIs de rede do browser. Sao 35 chamadas diretas no app (httpClient,
+  // detalhes, elenco, pastas), entao no Chromium 38 tudo que depende de rede
+  // morre em ReferenceError. `whatwg-fetch` e ES5 e implementa sobre XHR; entra
+  // no mesmo bundle dos polyfills, que carrega antes do app.
+  const polyfillsExtras = compatibilityPolicy.webOsLegacyBabelTarget
+    ? ['import "whatwg-fetch";']
+    : [];
+
   await build({
     stdin: {
-      contents: requiredModules
-        .map((moduleName) => `import "core-js/modules/${moduleName}.js";`)
-        .join("\n"),
+      contents: [
+        ...requiredModules.map((moduleName) => `import "core-js/modules/${moduleName}.js";`),
+        ...polyfillsExtras
+      ].join("\n"),
       resolveDir: rootDir,
       sourcefile: "core-js-entry.js"
     },
@@ -1635,7 +1671,16 @@ async function lowerBundlesForLegacyChromium() {
     return;
   }
   const babel = (await import("@babel/core")).default;
-  const arquivos = ["app.bundle.js", "core-js.bundle.js", ...SCREEN_CHUNKS.map((c) => c.outputFile)];
+  const arquivos = [
+    "app.bundle.js",
+    "core-js.bundle.js",
+    ...SCREEN_CHUNKS.map((c) => c.outputFile),
+    // `assets/libs/ass.min.js` e re-empacotado pelo esbuild com alvo chrome53 e
+    // carregado sob demanda ao abrir legenda ASS. Sem passar por aqui ele chega
+    // ao aparelho com 51 arrow functions e `const`, e estoura SyntaxError na
+    // primeira legenda — falha tardia, longe do boot, dificil de atribuir.
+    path.join("assets", "libs", "ass.min.js")
+  ];
   for (const nome of arquivos) {
     const caminho = path.join(distDir, nome);
     if (!existsSync(caminho)) {

@@ -138,4 +138,33 @@
     }
     return originalRemove.call(this, type, listener, options);
   };
+
+  // `Element.prototype.closest` chegou no Chrome 41; o Chromium 38 do webOS 3
+  // nao tem. Nao e detalhe: o motor de foco chama `target.closest(".screen")`
+  // (js/ui/navigation/focusEngine.js) a cada movimento do D-pad, entao sem isto
+  // a navegacao por controle remoto morre mesmo que o app inteiro carregue.
+  //
+  // `matches` sem prefixo e Chrome 34, logo esta disponivel; ainda assim os
+  // prefixos ficam na cadeia porque custam nada e cobrem builds intermediarios.
+  if (window.Element && !window.Element.prototype.closest) {
+    var proto = window.Element.prototype;
+    var matches =
+      proto.matches ||
+      proto.matchesSelector ||
+      proto.webkitMatchesSelector ||
+      proto.msMatchesSelector;
+
+    if (matches) {
+      proto.closest = function closest(selector) {
+        var node = this;
+        while (node && node.nodeType === 1) {
+          if (matches.call(node, selector)) {
+            return node;
+          }
+          node = node.parentElement || node.parentNode;
+        }
+        return null;
+      };
+    }
+  }
 })(window);
