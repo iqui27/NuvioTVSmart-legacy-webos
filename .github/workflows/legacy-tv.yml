@@ -90,6 +90,16 @@ jobs:
       - name: Gate — custom properties no dist (variante Chromium 38)
         run: npm run check:legacy-css-vars
 
+      # Os dois abaixo conferem contra a base do caniuse, e sao a unica forma de
+      # verificar compatibilidade com o Chromium 38 sem aparelho: o emulador da
+      # LG e imagem x86 (nao roda em Apple Silicon) e o binario do Chromium 38
+      # para Mac e de 2014.
+      - name: Gate — APIs de browser ausentes no alvo
+        run: npm run check:js-apis
+
+      - name: Gate — features CSS ausentes no alvo
+        run: npm run check:css-support
+
       - name: Relatorio — cobertura de fallback CSS
         run: npm run check:legacy-css
 

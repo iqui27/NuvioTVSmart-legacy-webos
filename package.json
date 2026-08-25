@@ -34,7 +34,9 @@
     "check:no-undef": "node scripts/checkNoUndef.mjs",
     "test:css-vars": "node scripts/testCssVarsInline.mjs",
     "check:legacy-css-vars": "node scripts/checkLegacyCssVars.mjs",
-    "check:source": "node scripts/checkSourceIntegrity.mjs"
+    "check:source": "node scripts/checkSourceIntegrity.mjs",
+    "check:css-support": "node scripts/checkLegacyCssSupport.mjs",
+    "check:js-apis": "node scripts/checkLegacyJsApis.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
@@ -51,6 +53,7 @@
     "esbuild": "^0.27.3",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-compat": "^7.0.2",
     "globals": "^16.5.0",
     "husky": "^9.1.7",
     "postcss": "^8.5.9",
