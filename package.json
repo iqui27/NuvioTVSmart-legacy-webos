@@ -31,7 +31,8 @@
     "sync:tizen": "node ./scripts/sync-wrapper.mjs --tizen",
     "sync:webos": "node ./scripts/sync-wrapper.mjs --webos",
     "check:legacy-regex": "node scripts/checkLegacyRegex.mjs",
-    "check:no-undef": "node scripts/checkNoUndef.mjs"
+    "check:no-undef": "node scripts/checkNoUndef.mjs",
+    "test:css-vars": "node scripts/testCssVarsInline.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",

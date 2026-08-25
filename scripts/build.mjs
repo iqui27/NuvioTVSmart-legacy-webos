@@ -12,6 +12,7 @@ import { readAppMetadata, syncVersionFiles } from "./appMetadata.mjs";
 import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { writeRuntimeEnvScriptFile } from "./envProperties.mjs";
 import { buildI18nBundles } from "./i18nBundle.mjs";
+import { cssVarsInlinePlugin } from "./cssVarsInlinePlugin.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -1005,8 +1006,20 @@ async function buildCSS() {
     const outPath = path.join(distDir, "css", file);
 
     const css = await readFile(cssPath, "utf8");
+    // Lido aqui e nao dentro do plugin para nao reler o arquivo por folha.
+    const baseCssSource = await readFile(path.join(cssDir, "base.css"), "utf8");
     const result = await postcss([
       postcssGlobalData({ files: [path.join(cssDir, "base.css")] }),
+      // Antes do autoprefixer e dos plugins de fallback, de proposito: os valores
+      // recem-inlinados (cores, clamp(), px) precisam passar por eles depois. Um
+      // fallback clonado de uma declaracao que ainda contivesse var() sairia
+      // quebrado, e o uiScalePlugin precisa ver os px ja concretos.
+      cssVarsInlinePlugin({
+        enabled: Boolean(compatibilityPolicy.webOsLegacyBabelTarget),
+        runtimeTokenDefaults: RUNTIME_TOKEN_DEFAULTS,
+        dropDeclarationsUsing: UNDEFINED_UPSTREAM_TOKENS,
+        globalCss: baseCssSource
+      }),
       autoprefixer({
         // `chromiumVersion` e o alvo do ESBUILD, que nesta variante fica em 53
         // porque ele nao aceita 38. O CSS nao passa pelo esbuild: quem consome
@@ -1076,6 +1089,54 @@ async function copyOptionalRootFile(fileName, { fallback = null, defaultContents
 //
 // Adding a new ES2017+ builtin to `js/` means adding its module here. Grep hints:
 // each group below names the call sites that justify it.
+// Tokens que NAO existem no CSS porque sao escritos em runtime por JS. No
+// Chromium 38 `setProperty("--x")` e no-op, entao cada um precisa de um valor
+// concreto no build. Preenchida a partir do que o proprio plugin acusa — ele
+// falha o build listando o que faltou, em vez de deixar vazar var() para o
+// aparelho.
+const RUNTIME_TOKEN_DEFAULTS = {
+  // Escritos por JS em runtime. No Chromium 38 `setProperty("--x")` e no-op,
+  // entao cada um precisa de um valor concreto no build. Os valores vem das
+  // proprias defaults do call site que os escreve.
+  "--app-font-family":
+    '"Inter", "Helvetica Neue", Helvetica, Arial, "Noto Sans", sans-serif',
+  "--player-subtitle-font-size": "34px",
+  "--player-subtitle-color": "#ffffff",
+  "--player-subtitle-font-weight": "600",
+  "--player-subtitle-shadow": "0 2px 6px rgba(0, 0, 0, 0.85)",
+  "--player-subtitle-offset": "72px",
+  "--player-subtitle-background": "transparent",
+  "--player-html-subtitle-font-size": "34px",
+  "--player-action-controls-open-bottom": "220px",
+  "--profile-editor-neutral-bg": "rgba(255, 255, 255, 0.08)",
+
+  // Escritos pela lib externa assets/libs/ass.min.js durante o render de
+  // legenda ASS. Congelados no neutro: no webOS 3 o renderer ASS e desligado
+  // (ver PENDENCIAS-webos3.md), entao estes valores nunca chegam a importar —
+  // existem para a declaracao nao ser descartada e levar regras vizinhas junto.
+  "--ass-scale": "1",
+  "--ass-align-h": "0px",
+  "--ass-align-v": "0px",
+  "--ass-fill-color": "#ffffff",
+  "--ass-real-fs": "34px",
+  "--ass-tag-fs": "34px",
+  "--ass-tag-fsp": "0"
+};
+
+// Tokens USADOS e NUNCA DEFINIDOS — nem no CSS, nem por JS, nem aqui no fork,
+// nem no upstream 0.3.43 (conferido token a token). A declaracao que os usa e
+// invalida em QUALQUER navegador, inclusive Chrome moderno: ja hoje ela nao
+// pinta nada. Removidas na variante 38 para nao inventar um valor que mudaria
+// a aparencia so nesta plataforma — o comportamento fica igual ao das demais.
+// Reportar ao upstream junto com --ass-align-h/v.
+const UNDEFINED_UPSTREAM_TOKENS = [
+  "--primary-color",
+  "--focus-rgb",
+  "--player-focus-foreground",
+  "--discover-poster-height",
+  "--discover-poster-radius"
+];
+
 const CORE_JS_MODULES = [
   // Builtins que existem no Chromium 53 e NAO no 38 (webOS 3). Precisam estar
   // listados explicitamente: `coreJsCompat` filtra esta lista pelo alvo, e o
