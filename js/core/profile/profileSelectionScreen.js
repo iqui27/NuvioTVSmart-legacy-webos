@@ -46,6 +46,7 @@ const PROFILE_PIN_TEXT = {
   removed: (name) => `PIN lock removed for ${name}.`,
   saveFailed: "Could not save PIN. Try again.",
   verifyFailed: "Could not verify PIN. Try again.",
+  activateFailed: "Profile unlocked, but the app failed to start. Details in Settings > About > Debug console.",
   invalidPin: "Invalid PIN. Try again.",
   incorrectCurrent: "Current PIN is incorrect.",
   lockedRetry: (seconds) => `Profile is locked. Try again in ${seconds}s.`
@@ -2517,6 +2518,26 @@ export const ProfileSelectionScreen = {
       this.isActivatingProfile = false;
       this.activatingProfileId = "";
       profileCard?.classList?.remove("is-activating");
+      // Sem isto a falha e INVISIVEL: o warn acima vai so para o buffer de
+      // debug, e quem esta na frente da TV fica numa tela congelada sem nenhuma
+      // mensagem. Foi exatamente o relato do primeiro testador de webOS 3
+      // (issue #1): "digitei o PIN certo e nao diz nada, ficou travado" — o PIN
+      // tinha sido ACEITO; era o mount da home que lancava, e o erro morria
+      // aqui. Mostrar a mensagem real transforma "travou" num reporte util.
+      const detalhe = String((error && error.message) || error || "").slice(0, 140);
+      if (this.pinOverlayState) {
+        this.pinOverlayError = detalhe
+          ? `${PROFILE_PIN_TEXT.activateFailed} (${detalhe})`
+          : PROFILE_PIN_TEXT.activateFailed;
+        this.pinValue = "";
+      } else {
+        this.setPinActionMessage(
+          detalhe
+            ? `${PROFILE_PIN_TEXT.activateFailed} (${detalhe})`
+            : PROFILE_PIN_TEXT.activateFailed
+        );
+      }
+      this.render();
     }
   },
 
