@@ -103,6 +103,68 @@ function getStackEntryParams(entry) {
   return typeof entry === "string" ? {} : entry?.params || {};
 }
 
+function showMountFailurePanel(routeName, error) {
+  try {
+    const existing = document.getElementById("nuvio-mount-failure");
+    if (existing) {
+      existing.parentNode.removeChild(existing);
+    }
+    const panel = document.createElement("div");
+    panel.id = "nuvio-mount-failure";
+    panel.setAttribute(
+      "style",
+      "position:fixed;top:0;right:0;bottom:0;left:0;z-index:99999;" +
+        "background:#101216;color:#f3f5f8;font-family:sans-serif;" +
+        "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+        "padding:48px;text-align:center;"
+    );
+    const titulo = document.createElement("div");
+    titulo.setAttribute("style", "font-size:34px;font-weight:700;margin-bottom:18px;");
+    titulo.textContent = "Something broke while opening this screen";
+    const rota = document.createElement("div");
+    rota.setAttribute("style", "font-size:22px;opacity:0.75;margin-bottom:14px;");
+    rota.textContent = "Screen: " + String(routeName || "?");
+    const detalhe = document.createElement("div");
+    detalhe.setAttribute(
+      "style",
+      "font-size:20px;max-width:1100px;word-break:break-word;opacity:0.9;margin-bottom:26px;"
+    );
+    detalhe.textContent = String((error && error.message) || error || "unknown error").slice(
+      0,
+      400
+    );
+    const dica = document.createElement("div");
+    dica.setAttribute("style", "font-size:19px;opacity:0.6;");
+    dica.textContent =
+      "Please screenshot this and report it. Full log: Settings > About > Debug console. Press BACK to dismiss.";
+    panel.appendChild(titulo);
+    panel.appendChild(rota);
+    panel.appendChild(detalhe);
+    panel.appendChild(dica);
+    document.body.appendChild(panel);
+    const fechar = function (event) {
+      const code = Number((event && event.keyCode) || 0);
+      // 461 = Back do controle LG; 8/27 cobrem teclado.
+      if (code === 461 || code === 8 || code === 27) {
+        if (panel.parentNode) {
+          panel.parentNode.removeChild(panel);
+        }
+        window.removeEventListener("keydown", fechar, true);
+        if (event && typeof event.stopPropagation === "function") {
+          event.stopPropagation();
+        }
+      }
+    };
+    // Em `window` e nao em `document`: verificado no aparelho que o handler de
+    // teclado do app, registrado antes em `document`, consumia o Back (461) e o
+    // painel nunca fechava. A captura em window dispara antes de qualquer
+    // listener de document.
+    window.addEventListener("keydown", fechar, true);
+  } catch (_) {
+    // O painel e melhor-esforco: se o DOM estiver inutilizavel, nada a fazer.
+  }
+}
+
 export const Router = {
   current: null,
   currentParams: {},
@@ -614,7 +676,22 @@ export const Router = {
       previousRoute
     });
 
-    await Screen.mount(this.currentParams, navigationContext);
+    try {
+      await Screen.mount(this.currentParams, navigationContext);
+    } catch (error) {
+      // Um mount que lanca sempre terminava invisivel: a tela anterior ja saiu,
+      // a nova nao entrou, e o erro ou morria num console.warn de algum chamador
+      // ou virava rejeicao nao tratada. Tres relatos reais nasceram disso — a
+      // home em branco deste fork, o "PIN travado" do primeiro testador de
+      // webOS 3 e a tela preta apos login por QR (webOS 4.10, mesma versao onde
+      // o app funciona; so o caminho de login fresco quebrava, que sessao
+      // persistente nunca exercita).
+      //
+      // O painel e DOM puro com estilo inline de proposito: precisa aparecer
+      // mesmo quando o CSS do app esta quebrado ou a tela nem montou.
+      showMountFailurePanel(routeName, error);
+      throw error;
+    }
     this.completeRouteReturnBackGuard(routeReturnBackGuardNavigationId);
     logRouterPerf("navigate", {
       ms: Number((routerPerfNow() - navigationStart).toFixed(2)),
