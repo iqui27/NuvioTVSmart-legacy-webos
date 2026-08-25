@@ -1129,7 +1129,10 @@ async function buildCoreJsBundle() {
   console.log("building core-js bundle...");
   const { list: requiredModules } = coreJsCompat({
     modules: CORE_JS_MODULES,
-    targets: { chrome: String(compatibilityPolicy.chromiumVersion) }
+    targets: // Nesta variante os polyfills precisam cobrir o Chromium 38 do webOS 3, nao o
+    // 53 em que o esbuild empacota.
+    compatibilityPolicy.webOsLegacyBabelTarget ||
+      { chrome: String(compatibilityPolicy.chromiumVersion) }
   });
   if (requiredModules.length === 0) {
     throw new Error("Core-js compatibility query returned no required modules.");
@@ -1609,6 +1612,67 @@ async function buildBundle() {
     `bundle build complete: app.bundle.js ` +
       `(${mainOutputKey ? result.metafile.outputs[mainOutputKey].bytes : 0} bytes minified)`
   );
+
+  await lowerBundlesForLegacyChromium();
+}
+
+/**
+ * Rebaixa os bundles ja empacotados para o Chromium do webOS 3.
+ *
+ * Necessario porque o esbuild se RECUSA a ter chrome38 como alvo — ele para com
+ * "Transforming const to the configured target environment (chrome38) is not
+ * supported yet", e o mesmo para `let` e argumentos padrao. Ele nao faz lowering
+ * completo de escopo de bloco. Entao o esbuild empacota no menor alvo que aceita
+ * (53) e o Babel termina o servico, exatamente como o build do servico webOS ja
+ * faz para chegar ao Node 0.12.
+ *
+ * Sem passe algum o app carrega e morre na primeira linha com SyntaxError, que e
+ * o motivo de webOS 3 nunca ter sido suportado nesta base.
+ */
+async function lowerBundlesForLegacyChromium() {
+  const alvo = compatibilityPolicy.webOsLegacyBabelTarget;
+  if (!alvo) {
+    return;
+  }
+  const babel = (await import("@babel/core")).default;
+  const arquivos = ["app.bundle.js", "core-js.bundle.js", ...SCREEN_CHUNKS.map((c) => c.outputFile)];
+  for (const nome of arquivos) {
+    const caminho = path.join(distDir, nome);
+    if (!existsSync(caminho)) {
+      continue;
+    }
+    const origem = await readFile(caminho, "utf8");
+    const resultado = await babel.transformAsync(origem, {
+      filename: nome,
+      sourceType: "script",
+      babelrc: false,
+      configFile: false,
+      compact: true,
+      comments: false,
+      generatorOpts: { compact: true },
+      presets: [
+        [
+          "@babel/preset-env",
+          {
+            targets: alvo,
+            bugfixes: true,
+            // O bundle traz as proprias guardas de `typeof Symbol`; a reescrita
+            // do Babel so incha.
+            exclude: ["transform-typeof-symbol"],
+            modules: false
+          }
+        ]
+      ]
+    });
+    if (!resultado?.code) {
+      throw new Error(`Babel nao produziu codigo para ${nome}`);
+    }
+    await writeFile(caminho, resultado.code, "utf8");
+    console.log(
+      `rebaixado para chrome${alvo.chrome}: ${nome} ` +
+        `(${origem.length} -> ${resultado.code.length} bytes)`
+    );
+  }
 }
 async function runBuild() {
   try {
