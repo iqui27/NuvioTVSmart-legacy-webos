@@ -47,6 +47,7 @@
     "acorn": "^8.17.0",
     "autoprefixer": "^10.4.27",
     "core-js": "3.49.0",
+    "core-js-bundle": "^3.50.0",
     "core-js-compat": "3.49.0",
     "cssnano": "^7.1.4",
     "doiuse": "^6.0.6",

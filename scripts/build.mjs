@@ -1447,6 +1447,48 @@ async function buildCoreJsBundle() {
     ? ['import "whatwg-fetch";']
     : [];
 
+  // Na variante Chromium 38 o conjunto de polyfills vem do bundle PRE-CONSTRUIDO
+  // que o proprio core-js publica, e nao da nossa lista curada empacotada com o
+  // esbuild.
+  //
+  // Motivo, medido no C9: com a lista resolvida para o alvo 38, o bundle montado
+  // por nos lanca "TypeError: Nv is not a function" durante o carregamento e
+  // ABORTA o resto do arquivo — `padStart` (antes do ponto de falha) entrava e
+  // `trimStart`, `trimEnd` e `replaceAll` (depois) nao, e a home morria em
+  // "replaceAll is not a function". O trecho que estoura e um helper interno de
+  // async iterator que faz `getBuiltIn("Array","values")`, algo que so existe no
+  // build `pure` do core-js; no build global resolve para undefined.
+  //
+  // Nao e o passe Babel: reproduzido identico com o core-js fora dele. E a
+  // combinacao "nossa selecao de modulos + alvo antigo" que monta um grafo
+  // invalido. O bundle oficial e mantido e testado pelos autores do core-js para
+  // exatamente estes motores.
+  //
+  // Custo: 273KB contra 86KB do curado. Correcao vale mais que o tamanho aqui —
+  // sem ela o app nao abre.
+  if (compatibilityPolicy.webOsLegacyBabelTarget) {
+    const entradaOficial = [
+      'import "core-js-bundle/minified.js";',
+      ...polyfillsExtras
+    ].join("\n");
+    await build({
+      stdin: {
+        contents: entradaOficial,
+        resolveDir: rootDir,
+        sourcefile: "core-js-entry.js"
+      },
+      bundle: true,
+      minify: true,
+      format: "iife",
+      target: [`chrome${compatibilityPolicy.chromiumVersion}`],
+      outfile: path.join(distDir, "core-js.bundle.js"),
+      legalComments: "none",
+      logLevel: "warning"
+    });
+    console.log("core-js: bundle oficial pre-construido (variante legada)");
+    return;
+  }
+
   await build({
     stdin: {
       contents: [
