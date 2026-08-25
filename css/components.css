@@ -22781,7 +22781,8 @@ html.no-css-grid .player-subtitle-option-copy > * + * {
    de ordem no arquivo. */
 html.no-flex-gap .stream-route-card-badges-lazy > * {
   margin-bottom: 0;
-  =======
+}
+
 /* TMDB entity browse: the Android entity screen ported to the TV rails. */
 .tmdb-entity-shell {
     width: 100vw;
@@ -23189,4 +23190,3 @@ html.no-flex-gap .stream-route-card-badges-lazy > * {
       right: var(--tv-safe-gutter-wide, 96px);
     }
   }
-}
