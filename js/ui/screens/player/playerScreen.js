@@ -112,6 +112,7 @@ import {
 } from "../../../core/player/bitmapSubtitleDecoder.js";
 import { isAssSubtitle, convertAssBodyToVtt } from "../../../core/player/assSubtitle.js";
 import { createAssRenderer } from "../../../core/player/assRenderer.js";
+import { SUPPORTS_CSS_VARS } from "../../../core/capabilities/cssVarsSupport.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
 import {
   SUBTITLE_VIRTUALIZATION_DEFAULT_ROW_EXTENT,
@@ -8478,6 +8479,26 @@ export const PlayerScreen = {
       "--player-subtitle-offset",
       `${(verticalOffset.residualOffset * -2).toFixed(2)}vh`
     );
+    if (!SUPPORTS_CSS_VARS) {
+      // Chromium 38 (webOS 3): todos os setProperty("--...") acima sao no-op.
+      // Estes sao controles VIVOS do usuario (cor, tamanho, peso, sombra,
+      // deslocamento), entao vao como estilo inline no container HTML de
+      // legendas — o caminho de render de legenda externa. O transform no
+      // container substitui o translateY(var(--player-subtitle-offset)) que o
+      // CSS aplicava por cue: mover o container move todos os cues juntos.
+      // Limite: ::cue e ::-webkit-media-text-track-* (render nativo do
+      // <video>) nao aceitam estilo inline e ficam com os defaults congelados
+      // no build — ver "aproximacao webOS 3" em PENDENCIAS-webos3.md.
+      const htmlSubtitles =
+        this.uiRefs?.htmlSubtitles || document.getElementById("playerHtmlSubtitles");
+      if (htmlSubtitles) {
+        htmlSubtitles.style.color = subtitleColor;
+        htmlSubtitles.style.fontSize = htmlSubtitleFontSize;
+        htmlSubtitles.style.fontWeight = subtitleFontWeight;
+        htmlSubtitles.style.textShadow = subtitleShadow;
+        htmlSubtitles.style.transform = `translateY(${(verticalOffset.value * -2).toFixed(2)}vh)`;
+      }
+    }
     this.refreshSubtitleCueStyles();
     this.renderBitmapSubtitleAtCurrentTime({ force: true });
     if (refreshTrackRendering) {
@@ -10046,6 +10067,9 @@ export const PlayerScreen = {
     }
 
     this.lastActionOverlayBottomPx = measuredBottom;
+    // webOS 3 (Chromium 38): setProperty e no-op e o valor fica congelado na
+    // default de build (220px, RUNTIME_TOKEN_DEFAULTS) em vez do medido.
+    // Aproximacao aceita — documentada em PENDENCIAS-webos3.md.
     root.style.setProperty("--player-action-controls-open-bottom", `${measuredBottom}px`);
   },
 
@@ -19694,6 +19718,11 @@ export const PlayerScreen = {
     const rootStyle = getComputedStyle(document.documentElement);
     const parentalAccent = rootStyle.getPropertyValue("--secondary-color").trim() || "#f5f5f5";
     overlay.style.animationDelay = this.parentalGuideExiting ? `${containerExitDelay}ms` : "0ms";
+    // webOS 3 (Chromium 38): os setProperty("--parental-*") abaixo sao no-op;
+    // valem os fallbacks var(..., x) congelados no build. A excecao boa:
+    // --parental-accent cai para var(--secondary-color) no CSS, que as folhas
+    // de tema geradas resolvem POR PALETA — o acento acompanha o tema mesmo
+    // sem runtime. Documentado em PENDENCIAS-webos3.md.
     overlay.style.setProperty("--parental-row-height", `${rowHeight}px`);
     overlay.style.setProperty("--parental-row-gap", `${rowGap}px`);
     overlay.style.setProperty("--parental-item-count", String(total));

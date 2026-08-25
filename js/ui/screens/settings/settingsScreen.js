@@ -1853,6 +1853,9 @@ function updateSettingsMarqueeTargets(root) {
     const distance = textWidth + spacing;
     const travelMs = (distance / SETTINGS_MARQUEE_VELOCITY_PX_PER_SECOND) * 1000;
 
+    // webOS 3 (Chromium 38): setProperty e no-op; vale o fallback de build
+    // var(--settings-marquee-gap, 32px). O marquee anda com gap fixo de 32px
+    // em vez do proporcional — aproximacao documentada em PENDENCIAS-webos3.md.
     label.style.setProperty("--settings-marquee-gap", `${spacing}px`);
     label.classList.add("is-marquee-active");
     if (typeof label.animate === "function") {

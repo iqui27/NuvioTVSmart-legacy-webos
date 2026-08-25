@@ -175,6 +175,11 @@ function applyCardDepthPresentation(settings) {
     settings.cardDepthEpisodeCardsEnabled !== false ? "true" : "false";
   root.dataset.cardDepthCast = settings.cardDepthCastEnabled !== false ? "true" : "false";
   root.dataset.cardDepthTrailers = settings.cardDepthTrailersEnabled !== false ? "true" : "false";
+  // webOS 3 (Chromium 38): os setProperty("--card-depth-*") sao no-op; valem
+  // os fallbacks var(..., x) congelados no build (intensidade padrao do efeito
+  // de profundidade). Os data-atributos acima continuam funcionando, entao
+  // ligar/desligar o efeito funciona; so a INTENSIDADE fica fixa. Documentado
+  // em PENDENCIAS-webos3.md.
   root.style.setProperty("--card-depth-edge", String(settings.cardDepthEdgeStrength / 100));
   root.style.setProperty("--card-depth-sheen", String(settings.cardDepthSheenStrength / 100));
   root.style.setProperty("--card-depth-coverage", String(settings.cardDepthEdgeCoverage / 100));

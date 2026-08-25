@@ -1,4 +1,5 @@
 import { loadAssSubtitleLib } from "./assSubtitleLoader.js";
+import { SUPPORTS_CSS_VARS } from "../capabilities/cssVarsSupport.js";
 
 /**
  * ass.js lifecycle adapter. The only module that touches the ass.js API:
@@ -70,6 +71,20 @@ export function createAssRenderer({
     async init() {
       if (destroyed) {
         return { ok: false, error: "ass-renderer-destroyed" };
+      }
+      // webOS 3 (Chromium 38): ass.js posiciona e escala os cues escrevendo
+      // custom properties --ass-* em runtime (e o CSS as consome, ex.
+      // letter-spacing: calc(var(--ass-scale) * var(--ass-tag-fsp) * 1px) em
+      // components.css). Sem suporte, os cues sairiam sem escala nem posicao.
+      // Falha aqui, ANTES de baixar a lib, e o caller (applyAssSubtitleBody no
+      // playerScreen) cai para o VTT convertido — mesmo contrato do gate de
+      // ResizeObserver logo abaixo.
+      if (!SUPPORTS_CSS_VARS) {
+        return {
+          ok: false,
+          error: "ass-renderer-unsupported",
+          detail: "ass.js requires CSS custom properties"
+        };
       }
       let AssConstructor;
       try {

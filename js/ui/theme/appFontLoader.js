@@ -38,6 +38,8 @@
  * either yields a face it cannot use or a much larger download than needed.
  */
 
+import { SUPPORTS_CSS_VARS } from "../../core/capabilities/cssVarsSupport.js";
+
 const FONT_FALLBACK_STACK = '"Segoe UI", Arial, sans-serif';
 
 const APP_FONTS = {
@@ -82,6 +84,17 @@ function writeAppFontFamily(fontId) {
     return;
   }
   root.style.setProperty("--app-font-family", resolveAppFontStack(fontId));
+  if (!SUPPORTS_CSS_VARS) {
+    // Chromium 38 (webOS 3): o setProperty acima e no-op. A pilha vai inline no
+    // <body>, de onde os elementos SEM font-family propria herdam. Limite: as
+    // regras que declaram font-family explicitamente foram congeladas no build
+    // com a default de RUNTIME_TOKEN_DEFAULTS e nao acompanham a troca — ver
+    // "aproximacao webOS 3" em PENDENCIAS-webos3.md.
+    const body = typeof document !== "undefined" ? document.body : null;
+    if (body) {
+      body.style.fontFamily = resolveAppFontStack(fontId);
+    }
+  }
 }
 
 function buildStylesheetUrl(fontId) {

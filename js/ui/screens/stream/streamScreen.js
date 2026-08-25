@@ -2355,6 +2355,12 @@ export const StreamScreen = {
     const normalized = Math.max(0, Number(scrollTop || 0));
     listNode.classList.add("manual-scroll");
     listNode.dataset.manualScrollTop = String(normalized);
+    // webOS 3 (Chromium 38): este setProperty e no-op, mas nao faz falta —
+    // updateManualListScrollTransform (chamado logo abaixo) ja aplica o mesmo
+    // translateY como transform INLINE em cada filho, e estilo inline vence a
+    // regra embutida translateY(0) que o build congelou a partir do fallback
+    // var(--stream-route-manual-scroll, 0). Verificado: unico consumidor do
+    // token e .legacy-webos .stream-route-list.manual-scroll > * .
     listNode.style.setProperty("--stream-route-manual-scroll", `${-normalized}px`);
     try {
       listNode.scrollTop = 0;

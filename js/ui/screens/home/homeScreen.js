@@ -3915,6 +3915,11 @@ export const HomeScreen = {
     if (!metrics) {
       return;
     }
+    // webOS 3 (Chromium 38): setProperty e no-op e getComputedStyle de custom
+    // property devolve "" — o CSS fica com as dimensoes de poster resolvidas
+    // no build (as defaults estaticas por layout) e o JS com os fallbacks de
+    // parseCssPx. Congelado de proposito: aproximacao documentada em
+    // PENDENCIAS-webos3.md.
     targetShell.style.setProperty("--home-landscape-poster-width", `${metrics.width}px`);
     targetShell.style.setProperty("--home-landscape-poster-height", `${metrics.height}px`);
   },
@@ -3963,6 +3968,8 @@ export const HomeScreen = {
     if (!metrics) {
       return;
     }
+    // webOS 3: mesmo congelamento documentado em
+    // applyCachedModernLandscapePosterMetrics acima.
     targetShell.style.setProperty("--home-modern-portrait-poster-width", `${metrics.width}px`);
     targetShell.style.setProperty("--home-modern-portrait-poster-height", `${metrics.height}px`);
     targetShell.style.setProperty(
