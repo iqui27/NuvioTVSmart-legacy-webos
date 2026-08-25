@@ -1,0 +1,66 @@
+# Vigia releases do upstream e abre issue quando aparece uma nova.
+#
+# Existe porque a 0.3.43 saiu e nada aqui percebeu: o fork so descobre versao nova
+# quando alguem olha. Abrir issue (e nao fazer merge sozinho) e deliberado — o
+# merge do 0.3.42 exigiu decisao humana em 17 conflitos, e a variante depende de
+# sobrescrever o piso de compatibilidade deles, que um merge automatico
+# silenciosamente perderia.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Comparar tags com o upstream
+        id: cmp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ULTIMA="$(gh release view --repo NuvioMedia/NuvioTVSmart --json tagName -q .tagName)"
+          echo "upstream mais recente: $ULTIMA"
+          # A base incorporada aparece no titulo das nossas tags: v<base>+legacy.N
+          BASE="$(git tag -l 'v*+legacy.*' | sed 's/^v//; s/+legacy.*//' | sort -V | tail -1)"
+          echo "base incorporada aqui: ${BASE:-nenhuma}"
+          if [ "$ULTIMA" = "$BASE" ]; then
+            echo "nova=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "nova=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$ULTIMA" >> "$GITHUB_OUTPUT"
+            echo "base=${BASE:-desconhecida}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abrir issue de acompanhamento
+        if: steps.cmp.outputs.nova == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.cmp.outputs.tag }}
+          BASE: ${{ steps.cmp.outputs.base }}
+        run: |
+          set -euo pipefail
+          TITULO="Incorporar upstream $TAG (base atual: $BASE)"
+          # Sem isto o cron reabre a mesma issue todo dia.
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITULO in:title" --json number -q 'length' | grep -qv '^0$'; then
+            echo "issue ja existe, nada a fazer"
+            exit 0
+          fi
+          git remote add upstream https://github.com/NuvioMedia/NuvioTVSmart.git 2>/dev/null || true
+          git fetch --quiet upstream --tags
+          RESUMO="$(git log --oneline --no-decorate "$BASE".."$TAG" 2>/dev/null | head -30 || echo '(nao foi possivel listar commits)')"
+          CRUZAM="$(comm -12 \
+            <(git diff --name-only "$BASE" "$TAG" 2>/dev/null | sort) \
+            <(git diff --name-only main legacy-tv 2>/dev/null | sort) | head -30 || true)"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITULO" --body "$(printf 'Upstream publicou **%s**. A variante `legacy-tv` esta na base **%s**.\n\n## Commits\n\n```\n%s\n```\n\n## Arquivos que o upstream mudou E nos tambem (previsao de conflito)\n\n```\n%s\n```\n\n## Antes de fechar\n\n- [ ] `scripts/compatibilityPolicy.mjs` continua com piso 4.0.0 / Chromium 53 / Node 0.12 (sem isto o app nao abre no aparelho)\n- [ ] `js/platform/index.js`, `services/webos/src/serverHost.js` (TMPDIR) e o guard de pull vazio em `librarySyncService.js` sobreviveram\n- [ ] `npm run check:no-undef` e `npm run check:legacy-regex` passam\n- [ ] instalado e verificado no aparelho antes de publicar a release\n' "$TAG" "$BASE" "$RESUMO" "${CRUZAM:-nenhum}")"
