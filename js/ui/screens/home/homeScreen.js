@@ -8882,6 +8882,16 @@ export const HomeScreen = {
     this.layoutPrefs = LayoutPreferences.get();
     this.layoutMode = String(this.layoutPrefs.homeLayout || "classic").toLowerCase();
     this.rows = [];
+    // Janela de fileiras montadas. Comeca no limite da plataforma e cresce em
+    // growHomeRowCeilingIfNeeded conforme o foco se aproxima do fim.
+    //
+    // Zerar isto pertence AO MOUNT e nao a invalidateNavigationModel, que roda a
+    // cada mudanca de DOM: colocado la, o contador de fileiras disponiveis era
+    // zerado constantemente e o crescimento nunca disparava — o foco continuava
+    // parando na fileira 16 sem nenhum log.
+    this.homeRowCeiling = 0;
+    this.availableRows = [];
+    this.availableRowCount = 0;
     this.watchedItems = [];
     this.watchedTitleIds = new Set();
     // Always hydrate Continue Watching from the persisted snapshot, including on
@@ -9676,10 +9686,67 @@ export const HomeScreen = {
       .filter(Boolean)
       .filter((row) => !isRowDisabled(row))
       .map(applyCustomTitle);
-    // Hard ceiling on mounted rows. Pinned collection rows come first and are
-    // never dropped ahead of ordered catalog rows, which is why the slice is
-    // applied to the combined list rather than to orderedRows alone.
-    return [...pinnedTopRows, ...orderedRows].slice(0, this.getHomeRowLimit());
+    // Teto de fileiras MONTADAS — nao de fileiras existentes.
+    //
+    // Antes isto era `.slice(0, getHomeRowLimit())` e truncava a lista de vez:
+    // num perfil com 43 catalogos, 27 deles ficavam inalcancaveis. Medido no C9,
+    // o foco descia ate a fileira 15 e simplesmente parava; no webOS 3 do
+    // testador da issue #1 o foco voltava para a primeira linha, que foi como o
+    // sintoma chegou ("scrolling to the bottom goes back to the 1st line").
+    //
+    // O teto continua existindo porque ele e o que segura o DOM no boot (o custo
+    // que ele resolve foi medido: 3363 nos e 926 <img> ao descer dez fileiras),
+    // mas agora e uma JANELA que cresce conforme o foco se aproxima do fim, e
+    // nao um corte definitivo. `availableRowCount` guarda o total antes do corte
+    // para o crescimento saber quando parar.
+    const combinedRows = [...pinnedTopRows, ...orderedRows];
+    // Guarda a lista INTEIRA: e dela que a janela cresce depois, sem precisar
+    // refazer o caminho de dados que a produziu.
+    this.availableRows = combinedRows;
+    this.availableRowCount = combinedRows.length;
+    return combinedRows.slice(0, this.getEffectiveHomeRowCeiling());
+  },
+
+  /** Teto atual da janela de fileiras, nunca menor que o limite da plataforma. */
+  getEffectiveHomeRowCeiling() {
+    const base = this.getHomeRowLimit();
+    const atual = Number(this.homeRowCeiling || 0);
+    return Math.max(base, atual);
+  },
+
+  /**
+   * Cresce a janela quando o foco chega perto do fim das fileiras montadas.
+   *
+   * Chamado depois de cada movimento vertical do D-pad. Sem isto o usuario bate
+   * numa parede invisivel — as fileiras existem nos dados e nao no DOM.
+   */
+  growHomeRowCeilingIfNeeded() {
+    const montadas = Array.isArray(this.rows) ? this.rows.length : 0;
+    const total = Number(this.availableRowCount || 0);
+    if (!montadas || total <= montadas) {
+      return false;
+    }
+    const foco = this.getCurrentFocusedNode();
+    const fileira = foco?.closest?.("[data-row-index]");
+    const indice = fileira ? Number(fileira.getAttribute("data-row-index")) : -1;
+    if (!Number.isFinite(indice) || indice < montadas - 2) {
+      return false;
+    }
+    const passo = this.getHomeRowLimit();
+    this.homeRowCeiling = Math.min(total, montadas + passo);
+    this.rows = (this.availableRows || []).slice(0, this.homeRowCeiling);
+    logHomePerf("rowCeilingGrow", { de: montadas, para: this.rows.length, total });
+    // Reconciliacao com chave, NAO render completo: o reconciliador mantem os
+    // nos vivos das fileiras que nao mudaram, e com eles o foco atual. Medido no
+    // C9 com `requestBackgroundRender` no lugar disto: o foco saltava da fileira
+    // 4 de volta para a 0 no meio da navegacao — exatamente o sintoma que o
+    // testador da issue #1 relatou como "volta para a primeira linha".
+    if (!this.reconcileHomeCatalogRows()) {
+      this.requestBackgroundRender("row-ceiling-grow");
+    } else {
+      this.renderedMarkup = null;
+    }
+    return true;
   },
 
   retryPendingCatalogRows() {
@@ -11403,6 +11470,11 @@ export const HomeScreen = {
       this.cancelFocusedPosterFlow();
     }
     if (this.handleHomeDpad(event)) {
+      // Depois do movimento, nao antes: o indice de fileira so muda quando o
+      // foco ja andou.
+      if (code === 40) {
+        this.growHomeRowCeilingIfNeeded();
+      }
       return;
     }
     const isHomeHoldTarget = this.isHomeHoldTarget(currentFocusedNode);
