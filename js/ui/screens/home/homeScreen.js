@@ -399,17 +399,19 @@ function getDirectionFromKeyCode(keyCode) {
   }
 }
 
-async function getLocalSidebarProfileState() {
+async function getLocalSidebarProfileState({ cacheOnly = false } = {}) {
   const activeProfileId = String(ProfileManager.getActiveProfileId() || "");
   const profiles = await ProfileManager.getProfiles();
-  const memberAccess = await MemberAccessRepository.getAccess().catch(() => null);
+  const memberAccess = cacheOnly
+    ? MemberAccessRepository.getCachedAccess()
+    : await MemberAccessRepository.getAccess().catch(() => null);
   const hasMemberAvatarAccess = MemberAccessRepository.hasEntitlement(
     memberAccess,
     "PROFILE_AVATARS"
   );
-  const avatarCatalog = await AvatarRepository.getAvatarCatalog(hasMemberAvatarAccess).catch(
-    () => []
-  );
+  const avatarCatalog = cacheOnly
+    ? AvatarRepository.getCachedAvatarCatalog(hasMemberAvatarAccess)
+    : await AvatarRepository.getAvatarCatalog(hasMemberAvatarAccess).catch(() => []);
   const activeProfile =
     profiles.find(
       (profile) => String(profile.id || profile.profileIndex || "1") === activeProfileId
@@ -8888,7 +8890,9 @@ export const HomeScreen = {
     this.continueWatchingLoading = false;
     this.heroCandidates = [];
     this.heroItem = null;
-    this.sidebarProfile = await getLocalSidebarProfileState().catch(() => null);
+    // Paint from local profile/member/avatar state first. Remote membership and
+    // avatar refresh is already started by loadData after this first render.
+    this.sidebarProfile = await getLocalSidebarProfileState({ cacheOnly: true }).catch(() => null);
     this.render();
     await this.loadData({ background: false });
     if (this.homeBackgroundRefreshPending) {

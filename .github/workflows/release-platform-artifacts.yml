@@ -144,7 +144,7 @@ jobs:
           PACKAGE_SIZE: ${{ steps.live_webos_asset.outputs.package_size }}
           PACKAGE_VERSION: ${{ needs.build-webos-release.outputs.package_version }}
         run: |
-          RELEASE_TAG="$RELEASE_TAG" PACKAGE_SHA256="$PACKAGE_SHA256" PACKAGE_SIZE="$PACKAGE_SIZE" PACKAGE_VERSION="$PACKAGE_VERSION" node -e "const fs=require('fs');const file='webosbrew/apps.json';const data=JSON.parse(fs.readFileSync(file,'utf8'));const pkg=data.packages[0];pkg.manifest.version=process.env.PACKAGE_VERSION;pkg.manifest.ipkUrl='https://github.com/NuvioMedia/NuvioWeb/releases/download/'+process.env.RELEASE_TAG+'/NuvioTV-webOS-'+process.env.RELEASE_TAG+'.ipk';pkg.manifest.ipkHash.sha256=process.env.PACKAGE_SHA256;pkg.manifest.ipkSize=Number(process.env.PACKAGE_SIZE);fs.writeFileSync(file, JSON.stringify(data, null, 2)+'\n');"
+          RELEASE_TAG="$RELEASE_TAG" PACKAGE_SHA256="$PACKAGE_SHA256" PACKAGE_SIZE="$PACKAGE_SIZE" PACKAGE_VERSION="$PACKAGE_VERSION" node -e "const fs=require('fs');const file='webosbrew/apps.json';const data=JSON.parse(fs.readFileSync(file,'utf8'));const pkg=data.packages[0];pkg.manifest.version=process.env.PACKAGE_VERSION;pkg.manifest.ipkUrl='https://github.com/NuvioMedia/NuvioTVSmart/releases/download/'+process.env.RELEASE_TAG+'/NuvioTV-webOS-'+process.env.RELEASE_TAG+'.ipk';pkg.manifest.ipkHash.sha256=process.env.PACKAGE_SHA256;pkg.manifest.ipkSize=Number(process.env.PACKAGE_SIZE);fs.writeFileSync(file, JSON.stringify(data, null, 2)+'\n');"
 
       - name: Commit webOS metadata update
         if: ${{ vars.WEBOS_REPO != '' }}

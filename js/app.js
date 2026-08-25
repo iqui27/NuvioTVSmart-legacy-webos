@@ -224,20 +224,25 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
     StartupSyncService.enableProfileScopedSync();
     detailWatchedEnrichmentService.invalidateAllCache();
     await I18n.init();
-    // Entitlements only gate which theme is allowed. Awaiting the fetch put one
-    // more serialized network round trip in front of the first Home paint, so
-    // apply the cached access now and re-apply once the fresh access lands.
-    // getAccess() returns the cached value synchronously whenever a cache
-    // exists, so this only defers work on the first launch after sign-in.
-    ThemeManager.apply({
-      enforceAccess: true,
-      access: MemberAccessRepository.getCurrentAccess()
-    });
+    // Entitlements so decidem qual tema e permitido. Esperar o fetch punha mais
+    // um round trip serializado na frente do primeiro paint da Home.
+    //
+    // O upstream 0.3.43 chegou a mesma otimizacao por conta propria e trouxe
+    // `getCachedAccess()`, que diz explicitamente o que devolve — melhor que o
+    // nosso `getCurrentAccess()` aqui. Ficamos com a API deles.
+    //
+    // O que NAO veio deles e o reaplicar abaixo: a versao 0.3.43 dispara
+    // `getAccess()` so para aquecer o cache e descarta o resultado, entao um
+    // acesso que muda (assinatura que entrou ou expirou) so aparece na proxima
+    // abertura do app. Aqui o tema e o i18n sao reaplicados quando o valor
+    // fresco chega.
+    const memberAccess = MemberAccessRepository.getCachedAccess();
+    ThemeManager.apply({ enforceAccess: true, access: memberAccess });
     I18n.apply();
     void MemberAccessRepository.getAccess()
       .catch(() => MemberAccessRepository.getCurrentAccess())
-      .then((memberAccess) => {
-        ThemeManager.apply({ enforceAccess: true, access: memberAccess });
+      .then((freshAccess) => {
+        ThemeManager.apply({ enforceAccess: true, access: freshAccess });
         I18n.apply();
       })
       .catch((error) => {

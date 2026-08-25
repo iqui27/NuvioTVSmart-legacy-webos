@@ -5,7 +5,7 @@ import { Router } from "../../navigation/router.js";
 const SECTIONS = [
   {
     titleKey: "licenses_attributions_section_app",
-    items: [["nuvio", "https://github.com/NuvioMedia/NuvioWeb"]]
+    items: [["nuvio", "https://github.com/NuvioMedia/NuvioTVSmart"]]
   },
   {
     titleKey: "licenses_attributions_section_data",

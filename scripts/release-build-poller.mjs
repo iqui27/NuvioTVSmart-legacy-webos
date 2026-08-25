@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const stateDir = path.join(rootDir, ".cache");
 const defaultStateFile = path.join(stateDir, "release-build-poller.json");
-const defaultRepo = process.env.RELEASE_POLL_REPO || "NuvioMedia/NuvioWeb";
+const defaultRepo = process.env.RELEASE_POLL_REPO || "NuvioMedia/NuvioTVSmart";
 const defaultIntervalMs = Number(process.env.RELEASE_POLL_INTERVAL_MS || 30 * 60 * 1000);
 const includePrereleases =
   String(process.env.RELEASE_POLL_INCLUDE_PRERELEASES || "true").toLowerCase() !== "false";

@@ -240,7 +240,7 @@ export const CastDetailScreen = {
       .map(
         (section) => `
           <section class="cast-credit-section" data-credit-section="${escapeAttribute(section.key)}">
-            <h3 class="cast-detail-section-title">${escapeHtml(section.title)}</h3>
+            <h3 class="cast-detail-section-title" dir="${I18n.isRtl() ? "rtl" : "ltr"}">${escapeHtml(section.title)}</h3>
             <div class="cast-credit-track">${section.items.map((item) => this.renderCreditCard(item)).join("")}</div>
           </section>
         `
@@ -251,6 +251,7 @@ export const CastDetailScreen = {
   render() {
     const person = this.person || {};
     const creditsHtml = this.renderCreditSections();
+    const direction = I18n.isRtl() ? "rtl" : "ltr";
 
     this.container.innerHTML = `
       <div class="cast-detail-shell">
@@ -258,7 +259,7 @@ export const CastDetailScreen = {
           ${renderInlineIcon("arrow_back")}
         </button>
         <section class="cast-detail-hero">
-          <div class="cast-detail-hero-content">
+          <div class="cast-detail-hero-content" dir="${direction}">
             <div class="cast-detail-avatar"${person.profile ? ` style="background-image:url('${escapeAttribute(person.profile)}')"` : ""}></div>
             <div class="cast-detail-meta">
               <h2 class="cast-detail-name">${escapeHtml(person.name || "Unknown")}</h2>

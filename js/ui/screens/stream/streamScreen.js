@@ -65,6 +65,7 @@ import { isStreamEmptyStateVisible } from "./streamEmptyState.js";
 import { focusWithoutScroll } from "../../../platform/legacyDom.js";
 
 const STREAM_BADGE_LIMIT = 9;
+const STREAM_DPAD_REPEAT_THROTTLE_MS = 112;
 // Number of rows on each side of the focused source to keep badge-hydrated.
 // Windowing by row index (instead of measuring every card) keeps a single
 // focus move O(1) in constrained TV/browser runtimes, where measuring every
@@ -868,6 +869,17 @@ export const StreamScreen = {
   renderStreamVirtualMarkup(streams = [], streamBadgesEnabled = true, badgeSettings = null) {
     this.streamVirtualItems = streams;
     const model = this.getStreamVirtualModel(streams);
+    if (this.streamVirtualPendingAnchor) {
+      const anchorIndex = model.keys.indexOf(this.streamVirtualPendingAnchor.key);
+      if (anchorIndex >= 0) {
+        this.listScrollTop = Math.max(
+          0,
+          Number(model.offsets[anchorIndex] || 0) +
+            Number(this.streamVirtualPendingAnchor.offsetWithinRow || 0)
+        );
+      }
+      this.streamVirtualPendingAnchor = null;
+    }
     const listNode = this.container?.querySelector?.(".stream-route-list");
     const preferredValue = Number(this.streamVirtualPreferredIndex);
     const preferredIndex =
@@ -1056,7 +1068,10 @@ export const StreamScreen = {
       const restoredRow = this.getMountedStreamVirtualRow(this.focusState?.row);
       const target = this.resolveCardActionForRow(restoredRow, restoreFocusedAction);
       if (target) {
-        this.focusElement(target);
+        // The logical scroll anchor is restored by the caller after a measured
+        // window rebind. Do not run the regular visibility correction here as
+        // well, or focus restoration can overwrite that anchor on TV browsers.
+        this.focusElement(target, { ensureVisible: false });
       }
     }
     return true;
@@ -1381,6 +1396,7 @@ export const StreamScreen = {
     this.stopStreamVirtualization();
     this.streamVirtualHeights = new Map();
     this.streamVirtualFocusReset = false;
+    this.streamLastNavigationRepeatAt = 0;
     this.loadToken = (this.loadToken || 0) + 1;
     const token = this.loadToken;
     this.focusState = { zone: "filter", index: 0 };
@@ -2238,7 +2254,7 @@ export const StreamScreen = {
     );
   },
 
-  focusElement(target) {
+  focusElement(target, { ensureVisible = true } = {}) {
     if (!target) {
       return false;
     }
@@ -2272,7 +2288,7 @@ export const StreamScreen = {
     }
 
     const listNode = target.closest(".stream-route-list");
-    if (listNode) {
+    if (listNode && ensureVisible) {
       this.ensureListItemVisible(listNode, target);
       this.listScrollTop = this.getListScrollTop(listNode);
       this.scheduleFocusedListItemVisibilityCheck(listNode, target);
@@ -3079,19 +3095,6 @@ export const StreamScreen = {
     let body = "";
     if (virtualizedStreamList) {
       body = this.renderStreamVirtualMarkup(filtered, streamBadgesEnabled, badgeSettings);
-      if (this.streamVirtualPendingAnchor) {
-        const anchorIndex = this.streamVirtualModel?.keys?.indexOf(
-          this.streamVirtualPendingAnchor.key
-        );
-        if (anchorIndex >= 0) {
-          this.listScrollTop = Math.max(
-            0,
-            Number(this.streamVirtualModel.offsets[anchorIndex] || 0) +
-              Number(this.streamVirtualPendingAnchor.offsetWithinRow || 0)
-          );
-        }
-      }
-      this.streamVirtualPendingAnchor = null;
       if (hasPendingForFilter) {
         body += this.renderLoadingCards(1);
       }
@@ -3504,6 +3507,15 @@ export const StreamScreen = {
     }
 
     const direction = getDpadDirection(event);
+    if (direction && event?.repeat) {
+      const now = Date.now();
+      const lastRepeatAt = Number(this.streamLastNavigationRepeatAt || 0);
+      if (now - lastRepeatAt < STREAM_DPAD_REPEAT_THROTTLE_MS) {
+        event?.preventDefault?.();
+        return;
+      }
+      this.streamLastNavigationRepeatAt = now;
+    }
     if (direction) {
       let { chips, rows, rowCount, virtualized } = this.getFocusLists();
       const zone = this.focusState?.zone || (rowCount ? "card" : "filter");
@@ -3684,6 +3696,7 @@ export const StreamScreen = {
     this.boundStreamListNode = null;
     this.streamFocusDomCache = null;
     this.focusedElement = null;
+    this.streamLastNavigationRepeatAt = 0;
     ScreenUtils.hide(this.container);
   }
 };

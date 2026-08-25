@@ -32,6 +32,74 @@ function escapeHtml(value = "") {
     .replace(/'/g, "&#39;");
 }
 
+function isDarkMonochromeImage(image) {
+  if (
+    !image ||
+    !Number(image.naturalWidth) ||
+    !Number(image.naturalHeight) ||
+    typeof document === "undefined"
+  ) {
+    return false;
+  }
+
+  try {
+    const maxSampleSize = 48;
+    const scale = Math.min(
+      1,
+      maxSampleSize / Math.max(Number(image.naturalWidth), Number(image.naturalHeight))
+    );
+    const width = Math.max(1, Math.round(Number(image.naturalWidth) * scale));
+    const height = Math.max(1, Math.round(Number(image.naturalHeight) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return false;
+    }
+    context.drawImage(image, 0, 0, width, height);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    let luminance = 0;
+    let saturation = 0;
+    let count = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index + 3] <= 50) {
+        continue;
+      }
+      const red = pixels[index] / 255;
+      const green = pixels[index + 1] / 255;
+      const blue = pixels[index + 2] / 255;
+      const max = Math.max(red, green, blue);
+      const min = Math.min(red, green, blue);
+      luminance += 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+      saturation += max === 0 ? 0 : (max - min) / max;
+      count += 1;
+    }
+    if (!count) {
+      return false;
+    }
+    return luminance / count < 0.3 && saturation / count < 0.2;
+  } catch (_) {
+    // Cross-origin images without CORS are still rendered normally; they just
+    // cannot be inspected for the optional contrast correction.
+    return false;
+  }
+}
+
+function bindLogoContrast(logo) {
+  if (typeof HTMLImageElement === "undefined" || !(logo instanceof HTMLImageElement)) {
+    return;
+  }
+  const apply = () => {
+    logo.classList.toggle("tmdb-entity-logo-dark", isDarkMonochromeImage(logo));
+  };
+  if (logo.complete) {
+    apply();
+  } else {
+    logo.addEventListener("load", apply);
+  }
+}
+
 function normalizeEntityKind(value) {
   return String(value || "")
     .trim()
@@ -302,6 +370,7 @@ export const TmdbEntityBrowseScreen = {
     const meta = [header.originCountry, header.secondaryLabel].filter(Boolean).join(" • ");
     const backdrop = this.getHeroBackdrop();
     const description = String(header.description || "").trim();
+    const direction = I18n.isRtl() ? "rtl" : "ltr";
     const heroClass = header.logo
       ? "tmdb-entity-hero tmdb-entity-hero-has-logo"
       : "tmdb-entity-hero";
@@ -313,7 +382,7 @@ export const TmdbEntityBrowseScreen = {
             : ""
         }
         <div class="tmdb-entity-hero-scrim" aria-hidden="true"></div>
-        <div class="tmdb-entity-hero-copy">
+        <div class="tmdb-entity-hero-copy" dir="${direction}">
           <div class="tmdb-entity-eyebrow">${escapeHtml(entityKindLabel(header.kind))}</div>
           ${
             header.logo
@@ -375,7 +444,7 @@ export const TmdbEntityBrowseScreen = {
 
     return `
       <section class="tmdb-entity-rail" data-rail-key="${escapeHtml(railKey)}">
-        <h2 class="tmdb-entity-rail-title">${escapeHtml(`${mediaLabel(rail?.mediaType)} • ${railLabel(rail?.railType)}`)}</h2>
+        <h2 class="tmdb-entity-rail-title" dir="${I18n.isRtl() ? "rtl" : "ltr"}">${escapeHtml(`${mediaLabel(rail?.mediaType)} • ${railLabel(rail?.railType)}`)}</h2>
         <div class="tmdb-entity-track" data-scroll-key="${escapeHtml(railKey)}">
           ${cards}
           ${rail?.isLoading ? `<div class="tmdb-entity-rail-loading">${renderLoadingIndicator()}</div>` : ""}
@@ -399,6 +468,7 @@ export const TmdbEntityBrowseScreen = {
         </div>
       `;
     this.container.innerHTML = `<div class="tmdb-entity-shell">${shellContent}</div>`;
+    bindLogoContrast(this.container.querySelector(".tmdb-entity-logo"));
     ScreenUtils.indexFocusables(this.container, ".tmdb-entity-card.focusable");
     this.bindShellEvents();
 

@@ -1,4 +1,4 @@
-const LATEST_RELEASE_URL = "https://api.github.com/repos/NuvioMedia/NuvioWeb/releases/latest";
+const LATEST_RELEASE_URL = "https://api.github.com/repos/NuvioMedia/NuvioTVSmart/releases/latest";
 const DEFAULT_TIMEOUT_MS = 8000;
 
 export function normalizeAppVersion(raw) {

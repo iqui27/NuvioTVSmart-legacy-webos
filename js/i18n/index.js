@@ -1,6 +1,7 @@
 import { ThemeStore } from "../data/local/themeStore.js";
 
 const DEFAULT_LOCALE = "en";
+const RTL_LOCALES = new Set(["ar", "he"]);
 const SUPPORTED_LOCALES = [
   "en",
   "ar",
@@ -668,6 +669,14 @@ export const I18n = {
 
   resolveLocale(preferred = null) {
     return resolvePreferredLocale(preferred);
+  },
+
+  isRtl(locale = this.getLocale()) {
+    const language = String(locale || "")
+      .trim()
+      .toLowerCase()
+      .split(/[-_]/, 1)[0];
+    return RTL_LOCALES.has(language);
   },
 
   getSupportedLocales() {

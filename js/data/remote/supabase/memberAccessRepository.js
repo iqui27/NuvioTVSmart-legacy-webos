@@ -93,6 +93,16 @@ function loadCache() {
   };
 }
 
+function hydrateCachedAccess() {
+  if (!AuthManager.isAuthenticated || currentFetchedAt) {
+    return;
+  }
+  const cached = loadCache();
+  if (cached) {
+    setCurrent(cached.access, cached.fetchedAt, false);
+  }
+}
+
 async function refreshRemote() {
   if (refreshPromise) {
     return refreshPromise;
@@ -137,11 +147,8 @@ export const MemberAccessRepository = {
       return setCurrent(NONE_ACCESS, 0, false);
     }
 
-    if (!force && !currentFetchedAt) {
-      const cached = loadCache();
-      if (cached) {
-        setCurrent(cached.access, cached.fetchedAt, false);
-      }
+    if (!force) {
+      hydrateCachedAccess();
     }
 
     const isFresh = currentFetchedAt > 0 && Date.now() - currentFetchedAt < STALE_AFTER_MS;
@@ -157,6 +164,14 @@ export const MemberAccessRepository = {
 
   refresh() {
     return refreshRemote();
+  },
+
+  getCachedAccess() {
+    if (!AuthManager.isAuthenticated) {
+      return setCurrent(NONE_ACCESS, 0, false);
+    }
+    hydrateCachedAccess();
+    return currentAccess;
   },
 
   hasEntitlement(access, entitlement) {

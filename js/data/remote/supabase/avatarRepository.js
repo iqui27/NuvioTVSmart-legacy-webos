@@ -269,6 +269,16 @@ function refreshMemberCatalogInBackground() {
 }
 
 export const AvatarRepository = {
+  getCachedAvatarCatalog(hasMemberAccess = false) {
+    hydrateStandardCatalog();
+    const standardCatalog = Array.isArray(cachedStandardCatalog) ? cachedStandardCatalog : [];
+    if (!hasMemberAccess) {
+      return standardCatalog;
+    }
+    const memberCatalog = Array.isArray(cachedMemberCatalog) ? cachedMemberCatalog : [];
+    return [...standardCatalog, ...memberCatalog];
+  },
+
   async getAvatarCatalog(hasMemberAccess = false) {
     hydrateStandardCatalog();
     const hadStandardCache = Array.isArray(cachedStandardCatalog);
