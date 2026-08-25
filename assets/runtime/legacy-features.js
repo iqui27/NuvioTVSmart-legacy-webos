@@ -14,7 +14,12 @@
     "no-css-grid",
     "no-css-math",
     "no-aspect-ratio",
-    "no-backdrop-filter"
+    "no-backdrop-filter",
+    // Custom properties (Chrome 49): ausentes no Chromium 38 do webOS 3. O CSS
+    // ja chega com var() resolvido pelo build; esta classe existe para o JS de
+    // runtime (troca de tema por folha, estilos inline) e para regras que
+    // precisem divergir por engine.
+    "no-css-vars"
   ];
 
   function removeClass(name) {
@@ -87,5 +92,10 @@
     supports("-webkit-backdrop-filter", "blur(1px)")
   ) {
     removeClass("no-backdrop-filter");
+  }
+  // Mesma sonda de js/core/capabilities/cssVarsSupport.js — mantidas iguais
+  // para a classe e o modulo nunca discordarem.
+  if (supports("--probe", "0")) {
+    removeClass("no-css-vars");
   }
 })(window, document);
