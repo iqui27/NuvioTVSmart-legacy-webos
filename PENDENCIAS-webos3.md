@@ -1,61 +1,60 @@
-# webOS 3.x (Chromium 38) — estado e a decisão que falta
+# webOS 3.x (Chromium 38) — estado
 
-## Onde está
+Variante experimental para TVs LG de 2015-2016, motivada pela issue #1: um usuário
+com LG 55UH617V se ofereceu para testar. **Nunca rodou em aparelho webOS 3** —
+não existe um no projeto, e tudo abaixo é verificação estática.
 
-A sintaxe está resolvida: o esbuild empacota em 53 (ele **recusa** 38, com
-`Transforming const to the configured target environment ("chrome38") is not
-supported yet`) e um passe Babel `preset-env` rebaixa os bundles para 38.
+## O que está resolvido
 
-Os polyfills também: verificado executando `dist/core-js.bundle.js` num sandbox com
-`Object.assign`, `Array.from`, `Array.prototype.find/findIndex` e
-`String.prototype.includes/startsWith/endsWith/repeat` deletados — antes todos
-`undefined`, depois todos `function`, e `fetch` idem via `whatwg-fetch`.
-`Element.closest` tem shim. O autoprefixer agora mira 38 de verdade.
+**Sintaxe.** O esbuild **recusa** ter o 38 como alvo (`Transforming const to the
+configured target environment ("chrome38") is not supported yet` — ele não faz
+lowering completo de escopo de bloco), então ele empacota no menor alvo que aceita
+(53) e um passe Babel `preset-env` rebaixa os bundles para 38. Mesma técnica que o
+build do serviço já usa para alcançar o Node 0.12. Inclui `assets/libs/ass.min.js`,
+que escapava e sairia com 51 arrow functions.
 
-## O que ainda impede
+**Polyfills.** Verificado executando `dist/core-js.bundle.js` num sandbox com os
+builtins deletados: antes `undefined`, depois `function`. Cobre `Object.assign`
+(que matava o boot, usado no topo de um módulo importado pelo router),
+`Array.from`, `find`, `findIndex`, `String.includes/startsWith/endsWith/repeat`, e
+`fetch` via `whatwg-fetch` — o core-js não fornece `fetch`, ele cobre ECMAScript e
+não API de rede. `Element.closest` tem shim, e sem ele o D-pad não navegaria.
 
-**Custom properties.** São ~1.600 usos de `var(--…)` no CSS e elas só existem a
-partir do Chrome 49. O Chromium 38 descarta cada declaração que as usa, então o
-app subiria praticamente sem estilo.
+**Custom properties.** Eram o bloqueador principal: ~1577 usos de `var()`, e o
+Chromium 38 descarta a declaração inteira que contém uma. Um plugin PostCSS próprio
+resolve tudo para valores concretos no build (`postcss-custom-properties` não serve:
+218 tokens são definidos escopados a seletores, e 43 nomes têm valores diferentes por
+escopo). O dist da variante sai com **zero** `var(`, garantido por gate.
 
-E não é só estático: `js/ui/theme/themeManager.js:191` **define custom properties em
-runtime**, com `document.documentElement.style.setProperty(key, value)` sobre o
-conjunto de cores inteiro (chaves dinâmicas), mais 24 nomes literais espalhados
-pelo app (`--player-subtitle-font-size`, `--home-modern-portrait-poster-width`,
-`--parental-*` etc.). No 38, `setProperty("--x", …)` é no-op.
+**Temas.** 14 folhas geradas no build — 12 paletas mais duas de override AMOLED,
+empilhadas. Trocar de tema alterna a folha em vez de chamar `setProperty`.
 
-## As três saídas, com o custo de cada uma
+## O que degrada, e por quê
 
-1. **Inlinar no build + regerar tema como folhas prontas.** `postcss-custom-properties`
-   resolve o estático; o runtime exigiria trocar `setProperty` por gerar um
-   `<style>` com regras concretas por tema. É reescrever a camada de tema para uma
-   plataforma só.
-2. **Polyfill de custom properties em runtime** (tipo `css-vars-ponyfill`): ele
-   re-parseia as folhas e reavalia `var()` a cada mudança. Funciona em motores
-   antigos, mas o custo recai justamente sobre o aparelho mais fraco — o CSS do app
-   tem 23 mil linhas, e re-parsear isso a cada troca de tema num SoC de 2016 é o
-   tipo de coisa que transforma "abre" em "abre e trava".
-3. **Declarar webOS 3 fora de escopo** e manter o piso em 4.0.0, documentando o
-   porquê para o próximo que perguntar.
+Está na seção "Aproximacoes webOS 3" abaixo, item a item. Em resumo: tamanho e cor
+de legenda nativa congelados, dimensões de poster calculadas em runtime congeladas
+nas defaults estáticas, intensidade do efeito de profundidade fixa, e o renderer de
+legenda ASS desligado (a lib externa depende de custom properties).
 
-Nenhuma das três é obviamente certa, e a 2 é a única testável rápido: dá para
-medir no aparelho do voluntário antes de decidir. Não há aparelho webOS 3 no
-projeto, então qualquer caminho depende de alguém do lado de fora.
+## O que ninguém consegue saber sem aparelho
 
-## O que NÃO é problema (verificado)
+- Se realmente boota no motor 38.
+- Se o `hls.js`/MSE funciona lá.
+- Qual versão do Node o serviço encontra no webOS 3 (o serviço é ES5 puro, então um
+  Node igual ou mais novo que o 0.12 funciona; um 0.10 seria risco).
+- O custo do bundle 31% maior (1,99 MB → 2,60 MB) num SoC de 2016 — o passe Babel
+  troca escopo de bloco por closures, e parsear isso pode ser o gargalo real.
 
-- Serviço webOS: o build dele nunca lê `chromiumVersion` (usa
-  `webOsServiceNodeVersion`, inalterado) e já é ES5 puro.
-- Guardas que já existem e seguram no 38: `IntersectionObserver`, `ResizeObserver`,
-  `AbortController`, `requestIdleCallback`, `TextEncoder/Decoder` — todos atrás de
-  `typeof`.
-- A branch `legacy-tv` (webOS 4.x) não foi afetada: `chromiumVersion` continua 53 lá.
+## Gates que protegem esta variante
 
-## Não determinado
+`check:source`, `check:no-undef`, `test:css-vars`, `check:js-apis`,
+`check:legacy-regex`, `check:legacy-css-vars`, `check:css-support`. Os dois últimos
+conferem contra a base do caniuse e são a única verificação de compatibilidade
+possível sem aparelho: o emulador da LG é imagem x86 (não roda em Apple Silicon) e o
+binário do Chromium 38 para Mac é de 2014.
 
-- Se webOS 3.4 roda o mesmo Node 0.12.2 do 4.x (o serviço é ES5, então um Node
-  igual ou mais novo funciona; um 0.10 seria risco).
-- Se o hls.js/MSE do app funciona no Chromium 38.
+Limite medido: o `doiuse` **não** detecta `aspect-ratio`. Os gates cobrem a maior
+parte, não tudo.
 
 ## Aproximacoes webOS 3 (runtime sem custom properties)
 
