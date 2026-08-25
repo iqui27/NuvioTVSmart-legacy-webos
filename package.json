@@ -31,7 +31,8 @@
     "sync:tizen": "node ./scripts/sync-wrapper.mjs --tizen",
     "sync:webos": "node ./scripts/sync-wrapper.mjs --webos",
     "check:legacy-regex": "node scripts/checkLegacyRegex.mjs",
-    "check:no-undef": "node scripts/checkNoUndef.mjs"
+    "check:no-undef": "node scripts/checkNoUndef.mjs",
+    "check:source": "node scripts/checkSourceIntegrity.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
@@ -44,6 +45,7 @@
     "core-js": "3.49.0",
     "core-js-compat": "3.49.0",
     "cssnano": "^7.1.4",
+    "doiuse": "^6.0.6",
     "esbuild": "^0.27.3",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",

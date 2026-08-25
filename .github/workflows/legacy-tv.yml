@@ -58,6 +58,11 @@ jobs:
             echo "usando local.example.properties (build de verificacao, NAO publicavel)"
           fi
 
+      # Primeiro de todos: se a fonte tem marcador de conflito, tudo depois disso
+      # esta medindo lixo.
+      - name: Gate — integridade da fonte
+        run: npm run check:source
+
       - name: Gate — identificador nunca declarado
         run: npm run check:no-undef
 
