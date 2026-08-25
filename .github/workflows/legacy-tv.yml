@@ -77,6 +77,14 @@ jobs:
       - name: Gate — regex incompativel com Chromium 53
         run: npm run check:legacy-regex
 
+      - name: Fixtures do inline de custom properties
+        run: npm run test:css-vars
+
+      # Na branch legacy-tv (webOS 4) este gate se declara inaplicavel e sai 0,
+      # porque la custom properties funcionam. So morde na variante 38.
+      - name: Gate — custom properties no dist (variante Chromium 38)
+        run: npm run check:legacy-css-vars
+
       - name: Relatorio — cobertura de fallback CSS
         run: npm run check:legacy-css
 
