@@ -13,6 +13,11 @@ import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { writeRuntimeEnvScriptFile } from "./envProperties.mjs";
 import { buildI18nBundles } from "./i18nBundle.mjs";
 import { cssVarsInlinePlugin } from "./cssVarsInlinePlugin.mjs";
+// Fonte unica das paletas e derivadas: o build IMPORTA a mesma camada de tema
+// que o runtime usa (js/ui/theme). Copiar os valores para ca faria cada cor
+// nova divergir em silencio na variante webOS 3, que e onde ninguem testa.
+import { ThemeColors } from "../js/ui/theme/themeColors.js";
+import { resolveThemeVariables } from "../js/ui/theme/themeDerivations.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -1020,30 +1025,238 @@ async function buildCSS() {
         dropDeclarationsUsing: UNDEFINED_UPSTREAM_TOKENS,
         globalCss: baseCssSource
       }),
-      autoprefixer({
-        // `chromiumVersion` e o alvo do ESBUILD, que nesta variante fica em 53
-        // porque ele nao aceita 38. O CSS nao passa pelo esbuild: quem consome
-        // e o motor do aparelho, entao o alvo correto aqui e
-        // `webOsChromiumVersion`. Com o valor errado o autoprefixer omitia
-        // `-webkit-filter`, que o Chromium 38 exige (o sem prefixo e justamente
-        // Chrome 53) — 24 declaracoes `filter:` sairiam sem efeito.
-        overrideBrowserslist: [
-          `Chrome ${compatibilityPolicy.webOsChromiumVersion || compatibilityPolicy.chromiumVersion}`
-        ],
-        grid: "autoplace"
-      }),
-      legacyDeclarationFallbackPlugin(),
-      unsupportedSelectorFallbackPlugin(),
-      flexGapFallbackPlugin(),
-      gridFallbackPlugin(),
-      // After the fallback plugins on purpose: the px fallbacks they generate for
-      // clamp()/min() must be scaled too, or the TV would keep the unscaled value.
-      uiScalePlugin(uiScale),
-      cssnano()
+      ...legacyPostInlinePlugins()
     ]).process(css, { from: cssPath, to: outPath });
 
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, result.css);
+  }
+}
+
+/**
+ * Sub-pipeline PostCSS que roda DEPOIS do cssVarsInlinePlugin, compartilhado
+ * entre buildCSS e buildThemeSheets. Compartilhado de proposito: uma folha de
+ * tema que nao passasse por aqui sairia sem os fallbacks de declaracao/seletor
+ * e sem a escala de UI — e a divergencia so apareceria no aparelho.
+ */
+function legacyPostInlinePlugins() {
+  return [
+    autoprefixer({
+      // `chromiumVersion` e o alvo do ESBUILD, que nesta variante fica em 53
+      // porque ele nao aceita 38. O CSS nao passa pelo esbuild: quem consome
+      // e o motor do aparelho, entao o alvo correto aqui e
+      // `webOsChromiumVersion`. Com o valor errado o autoprefixer omitia
+      // `-webkit-filter`, que o Chromium 38 exige (o sem prefixo e justamente
+      // Chrome 53) — 24 declaracoes `filter:` sairiam sem efeito.
+      overrideBrowserslist: [
+        `Chrome ${compatibilityPolicy.webOsChromiumVersion || compatibilityPolicy.chromiumVersion}`
+      ],
+      grid: "autoplace"
+    }),
+    legacyDeclarationFallbackPlugin(),
+    unsupportedSelectorFallbackPlugin(),
+    flexGapFallbackPlugin(),
+    gridFallbackPlugin(),
+    // After the fallback plugins on purpose: the px fallbacks they generate for
+    // clamp()/min() must be scaled too, or the TV would keep the unscaled value.
+    uiScalePlugin(uiScale),
+    cssnano()
+  ];
+}
+
+/** Todos os nomes `--x` citados num valor, inclusive dentro de fallbacks. */
+function tokenNamesInValue(value) {
+  return String(value).match(/--[\w-]+/g) || [];
+}
+
+/**
+ * Fecho transitivo: alem dos tokens semeados, todo token cuja DEFINICAO cita um
+ * token do conjunto (direta ou indiretamente) tambem depende do tema. Exemplo
+ * real: `#playerUiRoot { --player-secondary: var(--secondary-color); }` — quem
+ * usa `--player-secondary` muda de cor quando o tema muda.
+ */
+function collectThemeDependentTokens(cssRoots, seedTokens) {
+  const defs = new Map();
+  cssRoots.forEach((root) => {
+    root.walkDecls((decl) => {
+      if (!decl.prop.startsWith("--")) {
+        return;
+      }
+      const list = defs.get(decl.prop) || [];
+      list.push(decl.value);
+      defs.set(decl.prop, list);
+    });
+  });
+  const dependent = new Set(seedTokens);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    defs.forEach((values, name) => {
+      if (dependent.has(name)) {
+        return;
+      }
+      const cita = values.some((value) => tokenNamesInValue(value).some((t) => dependent.has(t)));
+      if (cita) {
+        dependent.add(name);
+        changed = true;
+      }
+    });
+  }
+  return dependent;
+}
+
+/**
+ * Mantem so as declaracoes que dependem de token de tema. As definicoes `--x`
+ * ficam (o cssVarsInlinePlugin precisa delas para resolver escopo, e ele mesmo
+ * as remove no final); todo o resto sai, porque ja esta na folha principal com
+ * os valores do tema padrao.
+ *
+ * `keepTokens`/`allThemeTokens` divergem so nas folhas AMOLED: uma declaracao
+ * que mistura token coberto pelo override com token de OUTRA cor do tema (ex.:
+ * gradiente de --bg-color para --secondary-color) nao pode entrar numa folha
+ * unica valida para as 12 paletas — resolver o secondary aqui congelaria a cor
+ * da paleta padrao por cima da paleta ativa. Essas ficam de fora e sao contadas
+ * em `skipped` (degradacao documentada em PENDENCIAS-webos3.md).
+ */
+function themeDeclarationFilterPlugin({ keepTokens, allThemeTokens, skipped }) {
+  return {
+    postcssPlugin: "nuvio-theme-decl-filter",
+    Once(root) {
+      root.walkDecls((decl) => {
+        if (decl.prop.startsWith("--")) {
+          return;
+        }
+        const refs = tokenNamesInValue(decl.value);
+        const usaTema = refs.some((t) => keepTokens.has(t));
+        if (!usaTema) {
+          decl.remove();
+          return;
+        }
+        const mistura = refs.some((t) => allThemeTokens.has(t) && !keepTokens.has(t));
+        if (mistura) {
+          skipped.push(`${decl.parent?.selector || "?"} { ${decl.prop} }`);
+          decl.remove();
+        }
+      });
+      // Regras e at-rules que ficaram so com definicoes `--x` (ou vazias) serao
+      // limpas pelo proprio cssVarsInlinePlugin/cssnano adiante.
+    }
+  };
+}
+themeDeclarationFilterPlugin.postcss = true;
+
+// Tokens que o AMOLED sobrescreve em runtime (themeDerivations.js:
+// applyAmoledOverrides + derivadas de canal). Os valores sao preto literal,
+// IGUAIS para as 12 paletas — por isso a decisao aqui e "folha pequena de
+// override empilhada" e nao 12x3 folhas completas: 2 folhas extras cobrem
+// todas as combinacoes, e o runtime so empilha a certa depois da folha da
+// paleta.
+const AMOLED_SEED_TOKENS = ["--bg-color", "--bg-color-rgb", "--bg-color-rgb-legacy"];
+const AMOLED_SURFACES_SEED_TOKENS = [
+  ...AMOLED_SEED_TOKENS,
+  "--bg-elevated",
+  "--bg-elevated-rgb",
+  "--card-bg",
+  "--card-bg-rgb",
+  "--player-background-elevated",
+  "--player-background-card"
+];
+
+/**
+ * Gera dist/css/theme-<nome>.css por paleta, mais theme-amoled.css e
+ * theme-amoled-surfaces.css. So na variante webOS 3: no Chromium 38 trocar de
+ * tema por setProperty e no-op, entao o themeManager troca a folha inteira.
+ * Cada folha contem apenas as declaracoes que dependem de token de tema,
+ * resolvidas com os valores concretos daquela paleta e passadas pelo MESMO
+ * sub-pipeline do resto do CSS.
+ */
+async function buildThemeSheets() {
+  if (!compatibilityPolicy.webOsLegacyBabelTarget) {
+    return;
+  }
+  console.log("generating per-theme stylesheets (webOS 3 variant)...");
+  const cssDir = path.join(rootDir, "css");
+  const files = (await readdir(cssDir)).filter((f) => f.endsWith(".css"));
+  const sources = [];
+  for (const file of files) {
+    sources.push({ file, css: await readFile(path.join(cssDir, file), "utf8") });
+  }
+  const baseCssSource = sources.find((s) => s.file === "base.css")?.css || "";
+  const parsedRoots = sources.map((s) => postcss.parse(s.css, { from: s.file }));
+
+  // Semente: exatamente o conjunto que o themeManager escreve em runtime
+  // (paleta + derivadas), vindo do MESMO modulo que o runtime usa.
+  const seedTokens = Object.keys(resolveThemeVariables(ThemeColors.getPalette("WHITE")));
+  const allThemeTokens = collectThemeDependentTokens(parsedRoots, seedTokens);
+
+  const variants = Object.keys(ThemeColors.palettes).map((name) => ({
+    outFile: `theme-${name.toLowerCase()}.css`,
+    vars: resolveThemeVariables(ThemeColors.getPalette(name)),
+    keepTokens: allThemeTokens
+  }));
+  variants.push({
+    outFile: "theme-amoled.css",
+    vars: resolveThemeVariables(ThemeColors.getPalette("WHITE"), { amoledMode: true }),
+    keepTokens: collectThemeDependentTokens(parsedRoots, AMOLED_SEED_TOKENS)
+  });
+  variants.push({
+    outFile: "theme-amoled-surfaces.css",
+    vars: resolveThemeVariables(ThemeColors.getPalette("WHITE"), {
+      amoledMode: true,
+      amoledSurfacesMode: true
+    }),
+    keepTokens: collectThemeDependentTokens(parsedRoots, AMOLED_SURFACES_SEED_TOKENS)
+  });
+
+  const skippedMixed = new Set();
+  for (const variant of variants) {
+    // O :root com os valores da paleta vai APOS o base.css: a coleta do plugin
+    // substitui definicoes de mesmo escopo, entao a paleta vence o tema padrao.
+    const rootOverride = `:root{${Object.entries(variant.vars)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(";")}}`;
+    const globalCss = `${baseCssSource}\n${rootOverride}`;
+    const pieces = [];
+    for (const source of sources) {
+      const skipped = [];
+      const result = await postcss([
+        themeDeclarationFilterPlugin({
+          keepTokens: variant.keepTokens,
+          allThemeTokens,
+          skipped
+        }),
+        cssVarsInlinePlugin({
+          enabled: true,
+          runtimeTokenDefaults: RUNTIME_TOKEN_DEFAULTS,
+          dropDeclarationsUsing: UNDEFINED_UPSTREAM_TOKENS,
+          globalCss
+        }),
+        ...legacyPostInlinePlugins()
+        // O override tambem vai APENSO AO FONTE, nao so ao globalCss: a coleta
+        // do plugin le o arquivo DEPOIS do globalCss, entao as definicoes :root
+        // do proprio base.css venceriam a paleta (verificado: body/html saia
+        // com #0d0d0d do tema padrao em todas as folhas). Como so contem
+        // definicoes `--x`, o bloco apenso nao deixa rastro no output.
+      ]).process(`${source.css}\n${rootOverride}`, {
+        from: path.join(cssDir, source.file),
+        to: variant.outFile
+      });
+      skipped.forEach((item) => skippedMixed.add(`${variant.outFile}: ${item}`));
+      if (result.css.trim()) {
+        pieces.push(result.css);
+      }
+    }
+    const outPath = path.join(distDir, "css", variant.outFile);
+    await mkdir(path.dirname(outPath), { recursive: true });
+    await writeFile(outPath, pieces.join("\n"));
+  }
+  console.log(`  ${variants.length} folhas de tema geradas em dist/css`);
+  if (skippedMixed.size > 0) {
+    console.log(
+      `  ${skippedMixed.size} declaracao(oes) mista(s) fora das folhas AMOLED ` +
+        `(mantem a cor da paleta; ver PENDENCIAS-webos3.md):`
+    );
+    [...skippedMixed].slice(0, 10).forEach((item) => console.log(`    ${item}`));
   }
 }
 
@@ -1098,8 +1311,7 @@ const RUNTIME_TOKEN_DEFAULTS = {
   // Escritos por JS em runtime. No Chromium 38 `setProperty("--x")` e no-op,
   // entao cada um precisa de um valor concreto no build. Os valores vem das
   // proprias defaults do call site que os escreve.
-  "--app-font-family":
-    '"Inter", "Helvetica Neue", Helvetica, Arial, "Noto Sans", sans-serif',
+  "--app-font-family": '"Inter", "Helvetica Neue", Helvetica, Arial, "Noto Sans", sans-serif',
   "--player-subtitle-font-size": "34px",
   "--player-subtitle-color": "#ffffff",
   "--player-subtitle-font-weight": "600",
@@ -1216,10 +1428,12 @@ async function buildCoreJsBundle() {
   console.log("building core-js bundle...");
   const { list: requiredModules } = coreJsCompat({
     modules: CORE_JS_MODULES,
-    targets: // Nesta variante os polyfills precisam cobrir o Chromium 38 do webOS 3, nao o
-    // 53 em que o esbuild empacota.
-    compatibilityPolicy.webOsLegacyBabelTarget ||
-      { chrome: String(compatibilityPolicy.chromiumVersion) }
+    // Nesta variante os polyfills precisam cobrir o Chromium 38 do webOS 3, nao o
+    targets:
+      // 53 em que o esbuild empacota.
+      compatibilityPolicy.webOsLegacyBabelTarget || {
+        chrome: String(compatibilityPolicy.chromiumVersion)
+      }
   });
   if (requiredModules.length === 0) {
     throw new Error("Core-js compatibility query returned no required modules.");
@@ -1789,6 +2003,7 @@ async function runBuild() {
     console.log("building version files...");
     await syncVersionFiles();
     await buildCSS();
+    await buildThemeSheets();
 
     console.log("copying static assets...");
     const copiedAppInfoSource = await copyOptionalRootFile("appinfo.json");
