@@ -357,7 +357,12 @@ export const ProfileSyncService = {
       if (!AuthManager.isAuthenticated) {
         return null;
       }
-      const response = await SupabaseApi.rpc(
+      // Sem teto de tempo, um RPC pendurado deixa a tela de PIN presa em
+      // "Verifying" com isPinOperationInProgress travado — o teclado ignora
+      // tudo e o usuario ve "digitei o PIN certo e nada acontece" (issue #1,
+      // webOS 3). O timeout converte o pendurado no mesmo caminho do erro:
+      // devolve null e a tela mostra "Could not verify PIN. Try again.".
+      const rpcPromise = SupabaseApi.rpc(
         VERIFY_PROFILE_PIN_RPC,
         {
           p_profile_id: Number(profileId),
@@ -365,6 +370,12 @@ export const ProfileSyncService = {
         },
         true
       );
+      const response = await Promise.race([
+        rpcPromise,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("verify pin timeout")), 12000);
+        })
+      ]);
       const payload = Array.isArray(response) ? response[0] || {} : response || {};
       return {
         unlocked: Boolean(payload?.unlocked),
