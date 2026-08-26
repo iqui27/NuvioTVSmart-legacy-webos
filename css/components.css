@@ -22558,6 +22558,21 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
    Especificidade de 2 classes, logo vence as regras de 1 classe acima
    independentemente da posicao no arquivo.
    --------------------------------------------------------------------------- */
+/* Ajustes: sob html.no-css-grid o gridFallbackPlugin ja converte
+   .settings-workspace em flex row, mas os frames ficam sem altura EXPLICITA
+   (so a do stretch). Em engines antigas (Chromium 38 do webOS 3; a correcao de
+   porcentagem contra item de flex esticado so chegou por volta do Chrome 51),
+   o height:100% de .settings-sidebar/.settings-content dentro do frame
+   resolve como auto — o scroller cresce ate o conteudo, clientHeight vira
+   scrollHeight, maxScroll = 0 e NENHUM scroll de foco acontece: o item focado
+   some abaixo da dobra (reporte do webOS 3.9: sidebar para em "Playback",
+   conteudo para em "Subtitle Language"). Altura explicita de 100% no frame
+   devolve uma base definida para a cadeia de porcentagens. */
+html.no-css-grid .settings-workspace > .settings-sidebar-frame,
+html.no-css-grid .settings-workspace > .settings-content-frame {
+  height: 100%;
+}
+
 html.no-css-grid .player-dialog-item {
   display: flex;
   flex-wrap: wrap;
