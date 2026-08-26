@@ -84,6 +84,26 @@ function canUsePersistedWarmSync(key, includeProfileSettings, now = Date.now()) 
   );
 }
 
+// A reconciliacao da credencial Trakt precisa rodar em TODO boot, e nao so
+// no pull completo: o caminho "warm" (FULL_STARTUP_PULL_TTL_MS = 6h) retorna
+// cedo e pulava o bloco que a chamava, entao numa TV que reinicia dentro da
+// janela de 6h o vinculo continuava sem copia na nuvem — exatamente o estado
+// que faz qualquer signOut ou 401 destruir o Trakt em definitivo.
+//
+// Roda DESACOPLADA (sem await): e um pull pequeno mais, no pior caso, um push,
+// e o boot destas TVs e caro o suficiente para nao pagar por isso na frente do
+// primeiro paint. reconcileWithRemote() ja trata os proprios erros.
+function reconcileTraktCredentialDetached(profileId) {
+  if (isSyncBackoffActive() || !AuthManager.isAuthenticated) {
+    return;
+  }
+  Promise.resolve()
+    .then(() => TraktCredentialSyncService.reconcileWithRemote(profileId))
+    .catch((error) => {
+      console.warn("Trakt credential reconcile failed on startup", error);
+    });
+}
+
 function runSurface(label, task) {
   if (isSyncBackoffActive()) {
     return Promise.resolve({ ok: false, deferred: true });
@@ -403,6 +423,9 @@ export const StartupSyncService = {
       return true;
     }
     if (!force && !allowWarmRepeat && canUsePersistedWarmSync(key, includeProfileSettings, now)) {
+      // Boot warm: o pull completo e dispensado, mas a credencial Trakt ainda
+      // precisa de copia na nuvem. Ver reconcileTraktCredentialDetached.
+      reconcileTraktCredentialDetached(profileId);
       this.lastPullCompleted = true;
       return true;
     }
