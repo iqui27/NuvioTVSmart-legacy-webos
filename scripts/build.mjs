@@ -1467,10 +1467,7 @@ async function buildCoreJsBundle() {
   // Custo: 273KB contra 86KB do curado. Correcao vale mais que o tamanho aqui —
   // sem ela o app nao abre.
   if (compatibilityPolicy.webOsLegacyBabelTarget) {
-    const entradaOficial = [
-      'import "core-js-bundle/minified.js";',
-      ...polyfillsExtras
-    ].join("\n");
+    const entradaOficial = ['import "core-js-bundle/minified.js";', ...polyfillsExtras].join("\n");
     await build({
       stdin: {
         contents: entradaOficial,

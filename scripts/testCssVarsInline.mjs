@@ -11,9 +11,9 @@ let falhas = 0;
 let total = 0;
 
 async function processa(css, options = {}) {
-  const result = await postcss([
-    cssVarsInlinePlugin({ enabled: true, ...options })
-  ]).process(css, { from: undefined });
+  const result = await postcss([cssVarsInlinePlugin({ enabled: true, ...options })]).process(css, {
+    from: undefined
+  });
   return result.css.replace(/\s+/g, " ").trim();
 }
 

@@ -46,7 +46,8 @@ const PROFILE_PIN_TEXT = {
   removed: (name) => `PIN lock removed for ${name}.`,
   saveFailed: "Could not save PIN. Try again.",
   verifyFailed: "Could not verify PIN. Try again.",
-  activateFailed: "Profile unlocked, but the app failed to start. Details in Settings > About > Debug console.",
+  activateFailed:
+    "Profile unlocked, but the app failed to start. Details in Settings > About > Debug console.",
   invalidPin: "Invalid PIN. Try again.",
   incorrectCurrent: "Current PIN is incorrect.",
   lockedRetry: (seconds) => `Profile is locked. Try again in ${seconds}s.`

@@ -106,7 +106,9 @@ export function cssVarsInlinePlugin({
           return null;
         }
         // 1) Escopo que "alcanca" este seletor textualmente vence.
-        const scoped = entry.filter((item) => item.scope && selectorIsWithin(scopeSelector, item.scope));
+        const scoped = entry.filter(
+          (item) => item.scope && selectorIsWithin(scopeSelector, item.scope)
+        );
         if (scoped.length > 0) {
           return scoped[scoped.length - 1].value;
         }
@@ -129,7 +131,10 @@ export function cssVarsInlinePlugin({
         // Definicoes divergentes e nenhuma alcancavel pelo texto: escolher uma
         // seria pintar a variante de layout errada em silencio. Registra para o
         // relatorio e deixa o build falhar.
-        ambiguos.set(name, entry.map((item) => `${item.scope || ":root"} => ${item.value}`));
+        ambiguos.set(
+          name,
+          entry.map((item) => `${item.scope || ":root"} => ${item.value}`)
+        );
         return null;
       }
 
@@ -140,7 +145,8 @@ export function cssVarsInlinePlugin({
         if (decl.prop.startsWith("--") || decl.value.indexOf("var(") === -1) {
           return;
         }
-        const scopeSelector = decl.parent && decl.parent.type === "rule" ? decl.parent.selector : "";
+        const scopeSelector =
+          decl.parent && decl.parent.type === "rule" ? decl.parent.selector : "";
         ambiguos.clear();
         const next = resolveValue(decl.value, scopeSelector);
         if (next !== decl.value) {
@@ -150,7 +156,12 @@ export function cssVarsInlinePlugin({
         // declaracao so nao consegue representar os N casos. Emite uma copia da
         // regra por escopo, com o seletor prefixado — e o mesmo padrao que o
         // gridFallbackPlugin ja usa para variantes de layout.
-        if (decl.value.indexOf("var(") !== -1 && ambiguos.size > 0 && decl.parent && decl.parent.type === "rule") {
+        if (
+          decl.value.indexOf("var(") !== -1 &&
+          ambiguos.size > 0 &&
+          decl.parent &&
+          decl.parent.type === "rule"
+        ) {
           const nomeAmbiguo = [...ambiguos.keys()][0];
           const escopos = (definitions.get(nomeAmbiguo) || []).filter((item) => item.scope);
           if (escopos.length > 1) {
@@ -334,4 +345,3 @@ function selectorIsWithin(selector, scope) {
     });
   });
 }
-

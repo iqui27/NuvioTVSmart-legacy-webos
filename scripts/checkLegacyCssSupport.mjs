@@ -29,11 +29,13 @@ const TOLERADAS = {
   "flexbox-gap": "flexGapFallbackPlugin gera margin nos filhos sob html.no-flex-gap",
   "css-grid": "gridFallbackPlugin gera layout em flex sob html.no-css-grid",
   "css-backdrop-filter": "classe no-backdrop-filter aplicada em runtime remove o efeito",
+  "css-overflow-anchor":
+    "overflow-anchor:none (upstream 0.3.44) desliga o scroll anchoring; Chromium 38 nem implementa o anchoring, entao ignorar a declaracao ja e o comportamento desejado",
   "css-focus-visible": "unsupportedSelectorFallbackPlugin duplica a regra com :focus",
   "css-focus-within": "idem — fallback de seletor gerado",
   "css-has": "idem — fallback de seletor gerado",
   "css-appearance": "autoprefixer emite -webkit-appearance, que o 38 entende",
-  "multicolumn": "autoprefixer emite -webkit-column-*",
+  multicolumn: "autoprefixer emite -webkit-column-*",
   "css-logical-props":
     "`inset: 0` sempre acompanhado das longhands top/right/bottom/left, que o 38 usa",
   "css-overflow":
@@ -85,7 +87,9 @@ for (const nome of fs.readdirSync(DIST_CSS).filter((f) => f.endsWith(".css"))) {
 
 const desconhecidas = [...contagem.keys()].filter((f) => !(f in TOLERADAS));
 
-console.log(`css-support: alvo Chrome ${alvo}; ${contagem.size} feature(s) nao suportadas, todas justificadas?`);
+console.log(
+  `css-support: alvo Chrome ${alvo}; ${contagem.size} feature(s) nao suportadas, todas justificadas?`
+);
 [...contagem.entries()]
   .sort((a, b) => b[1] - a[1])
   .forEach(([f, n]) => {
