@@ -1279,10 +1279,10 @@ function buildAssDialogueLine(track, frame, nextFrame) {
     fields[2] = formatAssTimestamp(endMs);
     return "Dialogue: " + fields.slice(0, 9).concat(fields.slice(9).join(",")).join(",");
   }
-  // Short (Start,End,Style,...) and positional (0,0,Style,...) forms both
-  // place Style at index 2. Preserve Style/Name/Margins/Effect so alignment
-  // and typesetting survive; only re-inject real timestamps. Recognize only
-  // those two signatures so arbitrary rows still fall back to Default.
+  // Preserve leading ASS fields only for the two shapes that carry them.
+  // Metadata alone is not enough: webOS can expose ordinary cue text as a
+  // comma-separated row, and treating its first fields as Style/Name/Margins
+  // duplicates that prefix in the generated Dialogue line.
   var hasShortTiming = fields.length >= 9 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
   var hasPositionalShape =
     isAssTextSubtitleTrack(track) &&

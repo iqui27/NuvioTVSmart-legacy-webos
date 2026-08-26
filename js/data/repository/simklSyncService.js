@@ -5,7 +5,12 @@ import { SimklAuthService } from "./simklAuthService.js";
 import { simklRequest } from "./simklAuthService.js";
 
 const STORE_KEY = "simklSyncState";
+const SNAPSHOT_SCHEMA_VERSION = 2;
 const AUTOMATIC_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+// Simkl requires `extended=full` before episode_watched_at/include_all_episodes
+// can populate seasons[].episodes[]. The anime-specific extension is kept for
+// incremental updates, matching Android's current sync contract.
+const BOOTSTRAP_QUERY = "extended=full&episode_watched_at=yes&include_all_episodes=yes&language=en";
 const EXTENDED_QUERY =
   "extended=full_anime_seasons&episode_watched_at=yes&episode_tvdb_id=yes&include_all_episodes=yes&language=en";
 const STATUS_DEFINITIONS = [
@@ -40,7 +45,7 @@ function activeProfileId() {
 
 function emptySnapshot() {
   return {
-    schemaVersion: 1,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     initialized: false,
     watermark: null,
     activities: null,
@@ -183,14 +188,14 @@ async function fetchAllItems(path, profileId) {
 async function initialSync(profileId) {
   const entries = [];
   for (const type of ["shows", "movies", "anime"]) {
-    const payload = await fetchAllItems(`/sync/all-items/${type}?${EXTENDED_QUERY}`, profileId);
+    const payload = await fetchAllItems(`/sync/all-items/${type}?${BOOTSTRAP_QUERY}`, profileId);
     entries.push(...flattenAllItems(payload).filter((entry) => entry.mediaType === type));
   }
   const { payload: playback } = await simklRequest("/sync/playback", { profileId });
   const { payload: activities } = await simklRequest("/sync/activities", { profileId });
   const now = Date.now();
   return {
-    schemaVersion: 1,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     initialized: true,
     watermark: activities?.all || null,
     activities: activities || null,
@@ -561,8 +566,10 @@ export const SimklSyncService = {
     if (!SimklAuthService.isAuthenticated()) return false;
     const profileId = activeProfileId();
     const current = getSnapshot(profileId);
+    const needsBootstrap = current.schemaVersion !== SNAPSHOT_SCHEMA_VERSION;
     if (
       !force &&
+      !needsBootstrap &&
       current.lastCheckedAt &&
       Date.now() - current.lastCheckedAt < AUTOMATIC_REFRESH_INTERVAL_MS
     ) {
@@ -570,11 +577,13 @@ export const SimklSyncService = {
     }
     if (refreshInFlight?.profileId === profileId) return refreshInFlight.promise;
     const promise = (
-      current.initialized ? incrementalSync(current, profileId) : initialSync(profileId)
+      needsBootstrap || !current.initialized
+        ? initialSync(profileId)
+        : incrementalSync(current, profileId)
     )
       .then((snapshot) => {
         if (activeProfileId() !== profileId) return false;
-        saveSnapshot(snapshot, profileId);
+        saveSnapshot({ ...snapshot, schemaVersion: SNAPSHOT_SCHEMA_VERSION }, profileId);
         return true;
       })
       .finally(() => {

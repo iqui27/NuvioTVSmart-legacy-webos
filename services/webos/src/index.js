@@ -179,6 +179,12 @@ function registerCommand(commandName, includeBody) {
 
 function registerSafeHttpProxyCommand(commandName) {
   service.register(commandName, function (message) {
+    ensureRuntimeStarted();
+    if (runtimeState.error) {
+      respond(message, buildErrorPayload(runtimeState.error));
+      return;
+    }
+
     var payload = getMessagePayload(message);
     var proxyRequest = {
       url: payload.url,
@@ -1487,7 +1493,10 @@ function registerEngineFsDiagnosticCommand() {
   });
 }
 
-ensureRuntimeStarted();
+// Register the Luna methods before loading the heavyweight media runtime. The
+// runtime performs EngineFS and hardware capability setup during require(); if
+// that work happens first, LS2 can report this service as not running while
+// the process is still booting on slower TVs.
 registerCommand("ping", false);
 registerCommand("status", true);
 registerSafeHttpProxyCommand("supabaseProxy");

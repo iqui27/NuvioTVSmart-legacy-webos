@@ -113,6 +113,7 @@ import {
 import { isAssSubtitle, convertAssBodyToVtt } from "../../../core/player/assSubtitle.js";
 import { createAssRenderer } from "../../../core/player/assRenderer.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
+import { decodeSubtitleResponseBody } from "../../../core/player/subtitleCharsetDetector.js";
 import {
   SUBTITLE_VIRTUALIZATION_DEFAULT_ROW_EXTENT,
   SUBTITLE_VIRTUALIZATION_MIN_WINDOW,
@@ -149,6 +150,10 @@ const WEBOS_NATIVE_FILE_REBUFFER_STALL_TIMEOUT_MS = 35000;
 // the stall to count as "still making progress" rather than dead.
 const PLAYBACK_STALL_BUFFER_PROGRESS_EPSILON_SECONDS = 0.25;
 const WEBOS_HLS_PLAYBACK_RECOVERY_MAX_ATTEMPTS = 1;
+const TIZEN_NATIVE_HLS_STARTUP_STALL_TIMEOUT_MS = 22000;
+const PLAYBACK_ENGINE_VALIDATION_WINDOW_MS = 30000;
+const PLAYBACK_ENGINE_VALIDATION_MAX_PROGRESS_GAP_SECONDS = 15;
+const POST_VALIDATION_SAME_ENGINE_RECOVERY_MAX_ATTEMPTS = 1;
 const SOURCE_NAVIGATION_REPEAT_THROTTLE_MS = 112;
 const EPISODE_PANEL_TRANSITION_MS = 220;
 const activeEngineFsPlaybackClaims = new Map();
@@ -330,6 +335,11 @@ const AUDIO_TRACK_LANGUAGE_KEY_BY_CODE = {
   tr: "common.turkish",
   vi: "common.vietnamese",
   zh: "common.chinese"
+};
+const LANGUAGE_DISPLAY_OVERRIDES = {
+  id: "Indonesia",
+  in: "Indonesia",
+  ind: "Indonesia"
 };
 // Maps ISO 639-2 (bibliographic + terminologic) and a few legacy codes to
 // the ISO 639-1 / app language ids, so subtitle and audio tracks labelled
@@ -1131,6 +1141,12 @@ function getTrackLanguageLabel(track = {}) {
 
   const normalizedCode = normalizeTrackLanguageCode(rawLanguage);
   const displayCode = normalizedCode ? normalizedCode.split("-")[0] : "";
+  const displayOverride =
+    LANGUAGE_DISPLAY_OVERRIDES[rawLanguage.toLowerCase()] ||
+    LANGUAGE_DISPLAY_OVERRIDES[displayCode];
+  if (displayOverride) {
+    return displayOverride;
+  }
   const locale = typeof I18n.getLocale === "function" ? I18n.getLocale() : "en";
   if (displayCode) {
     const cacheKey = `${locale}::${displayCode}`;
@@ -2796,6 +2812,14 @@ export const PlayerScreen = {
     this.failedPlaybackUrls = new Set();
     this.failedPlaybackStreamIds = new Set();
     this.playbackStallTimer = null;
+    this.playbackEngineValidationEngine = "";
+    this.playbackEngineValidationStartedAt = 0;
+    this.playbackEngineValidationStartSeconds = null;
+    this.playbackEngineValidationLastSeconds = null;
+    this.playbackEngineValidationProgressSeconds = 0;
+    this.playbackEngineValidated = false;
+    this.postValidationRecoveryValidationActive = false;
+    this.postValidationSameEngineRecoveryAttempts = 0;
     this.engineFsStartupRetryTimer = null;
     this.engineFsStartupErrorRetries = 0;
     this.engineFsStallExtensions = 0;
@@ -5521,6 +5545,7 @@ export const PlayerScreen = {
     this.paused = false;
     this.playbackRecoveryActive = false;
     this.playbackRecoveryAttempts = 0;
+    this.resetPlaybackEngineValidation();
     this.hasPresentedPlaybackFrame = false;
     this.startupPlaybackBaselineSeconds = null;
     this.startupPlaybackHasAdvanced = false;
@@ -9103,6 +9128,11 @@ export const PlayerScreen = {
       if (this.isStartupErrorVisible()) {
         return;
       }
+      if (this.hasPresentedPlaybackFrame && !this.playbackEngineValidated) {
+        this.resetPlaybackEngineValidation();
+      } else if (this.postValidationRecoveryValidationActive) {
+        this.resetPostValidationRecoveryValidationWindow();
+      }
       const currentSeconds = this.getPlaybackCurrentSeconds();
       // AVPlay does not provide a browser-native buffering UI. Keep the
       // startup overlay hidden after the first frame, but expose the same
@@ -9145,6 +9175,7 @@ export const PlayerScreen = {
       }
       this.playbackRecoveryActive = false;
       this.playbackRecoveryAttempts = 0;
+      this.beginPlaybackEngineValidation();
       this.bufferingActive = false;
       this.clearBufferingSpinnerTimer();
       if (this.seekLoading) {
@@ -9248,6 +9279,11 @@ export const PlayerScreen = {
           : Boolean(video.ended);
       if (ended) {
         return;
+      }
+      if (this.hasPresentedPlaybackFrame && !this.playbackEngineValidated) {
+        this.resetPlaybackEngineValidation();
+      } else if (this.postValidationRecoveryValidationActive) {
+        this.resetPostValidationRecoveryValidationWindow();
       }
       // Immediate scrobble pause
       if (TrackingScrobbleService.isEnabled()) {
@@ -9354,6 +9390,11 @@ export const PlayerScreen = {
     const onSeeked = () => {
       if (this.isStartupErrorVisible()) {
         return;
+      }
+      if (this.hasPresentedPlaybackFrame && !this.playbackEngineValidated) {
+        this.resetPlaybackEngineValidation();
+      } else if (this.postValidationRecoveryValidationActive) {
+        this.resetPostValidationRecoveryValidationWindow();
       }
       this.attemptPendingPlaybackRestore();
       this.completeSeekLoadingIfReady();
@@ -10315,6 +10356,7 @@ export const PlayerScreen = {
       return false;
     }
     this.hasPresentedPlaybackFrame = true;
+    this.beginPlaybackEngineValidation();
     this.warmBitmapSubtitleSharedResources();
     if (!this.startupTrackPreferenceReady) {
       // Some P2P / engineFs startups expose tracks before the first real frame
@@ -11528,6 +11570,9 @@ export const PlayerScreen = {
     const preservePresentedPlaybackFrame = Boolean(
       preservePlaybackRecoveryState && this.hasPresentedPlaybackFrame
     );
+    if (!preservePresentedPlaybackFrame) {
+      this.resetPlaybackEngineValidation();
+    }
     if (!preservePlaybackRecoveryState) {
       this.playbackRecoveryActive = false;
       this.playbackRecoveryAttempts = 0;
@@ -12002,6 +12047,183 @@ export const PlayerScreen = {
     }
   },
 
+  resetPlaybackEngineValidation() {
+    this.playbackEngineValidationEngine = "";
+    this.playbackEngineValidationStartedAt = 0;
+    this.playbackEngineValidationStartSeconds = null;
+    this.playbackEngineValidationLastSeconds = null;
+    this.playbackEngineValidationProgressSeconds = 0;
+    this.playbackEngineValidated = false;
+    this.postValidationRecoveryValidationActive = false;
+    this.postValidationSameEngineRecoveryAttempts = 0;
+  },
+
+  resetPostValidationRecoveryValidationWindow() {
+    if (!this.postValidationRecoveryValidationActive) {
+      return;
+    }
+    this.playbackEngineValidationStartedAt = 0;
+    this.playbackEngineValidationStartSeconds = null;
+    this.playbackEngineValidationLastSeconds = null;
+    this.playbackEngineValidationProgressSeconds = 0;
+  },
+
+  armPostValidationRecoveryValidation() {
+    if (!this.playbackEngineValidated) {
+      return;
+    }
+    this.postValidationRecoveryValidationActive = true;
+    this.resetPostValidationRecoveryValidationWindow();
+  },
+
+  beginPlaybackEngineValidation() {
+    if (
+      !this.hasPresentedPlaybackFrame ||
+      (this.playbackEngineValidated && !this.postValidationRecoveryValidationActive)
+    ) {
+      return;
+    }
+    const currentEngine = String(PlayerController.playbackEngine || "").trim();
+    if (!currentEngine || !this.activePlaybackUrl) {
+      return;
+    }
+    const currentSeconds = Number(this.getPlaybackCurrentSeconds());
+    if (!Number.isFinite(currentSeconds) || currentSeconds < 0) {
+      return;
+    }
+    if (this.playbackEngineValidationEngine !== currentEngine) {
+      this.playbackEngineValidationEngine = currentEngine;
+      this.playbackEngineValidationStartedAt = Date.now();
+      this.playbackEngineValidationStartSeconds = currentSeconds;
+      this.playbackEngineValidationLastSeconds = currentSeconds;
+      this.playbackEngineValidationProgressSeconds = 0;
+      this.postValidationSameEngineRecoveryAttempts = 0;
+    } else if (!Number(this.playbackEngineValidationStartedAt || 0)) {
+      this.playbackEngineValidationStartedAt = Date.now();
+      this.playbackEngineValidationStartSeconds = currentSeconds;
+      this.playbackEngineValidationLastSeconds = currentSeconds;
+      this.playbackEngineValidationProgressSeconds = 0;
+    }
+  },
+
+  recordPlaybackEngineValidationProgress(currentSeconds = this.getPlaybackCurrentSeconds()) {
+    if (
+      !this.hasPresentedPlaybackFrame ||
+      (this.playbackEngineValidated && !this.postValidationRecoveryValidationActive)
+    ) {
+      return;
+    }
+    const current = Number(currentSeconds);
+    if (!Number.isFinite(current) || current < 0) {
+      return;
+    }
+    this.beginPlaybackEngineValidation();
+    if (!this.playbackEngineValidationEngine) {
+      return;
+    }
+    const last = Number(this.playbackEngineValidationLastSeconds);
+    if (!Number.isFinite(last)) {
+      this.playbackEngineValidationLastSeconds = current;
+      return;
+    }
+    const delta = current - last;
+    if (
+      delta < -STARTUP_PLAYBACK_ADVANCE_EPSILON_SECONDS ||
+      delta > PLAYBACK_ENGINE_VALIDATION_MAX_PROGRESS_GAP_SECONDS
+    ) {
+      this.playbackEngineValidationStartedAt = Date.now();
+      this.playbackEngineValidationStartSeconds = current;
+      this.playbackEngineValidationProgressSeconds = 0;
+    } else if (delta > STARTUP_PLAYBACK_ADVANCE_EPSILON_SECONDS) {
+      this.playbackEngineValidationProgressSeconds += delta;
+    }
+    this.playbackEngineValidationLastSeconds = current;
+  },
+
+  updatePlaybackEngineValidation() {
+    this.beginPlaybackEngineValidation();
+    const engineAlreadyValidated = Boolean(this.playbackEngineValidated);
+    if (this.playbackEngineValidated && !this.postValidationRecoveryValidationActive) {
+      return true;
+    }
+    const currentEngine = String(PlayerController.playbackEngine || "").trim();
+    const validationEngine = String(this.playbackEngineValidationEngine || "").trim();
+    const startedAt = Number(this.playbackEngineValidationStartedAt || 0);
+    if (!currentEngine || currentEngine !== validationEngine || !startedAt) {
+      return engineAlreadyValidated;
+    }
+    if (Date.now() - startedAt < PLAYBACK_ENGINE_VALIDATION_WINDOW_MS) {
+      return engineAlreadyValidated;
+    }
+    if (
+      Number(this.playbackEngineValidationProgressSeconds || 0) <
+      PLAYBACK_ENGINE_VALIDATION_WINDOW_MS / 1000
+    ) {
+      return engineAlreadyValidated;
+    }
+    if (Number(this.lastPlaybackProgressAt || 0) < startedAt) {
+      return engineAlreadyValidated;
+    }
+    const stablePlaybackMs = Date.now() - startedAt;
+    if (this.playbackEngineValidated) {
+      this.postValidationRecoveryValidationActive = false;
+      this.postValidationSameEngineRecoveryAttempts = 0;
+      console.info("Playback engine remained stable after same-engine recovery", {
+        engine: currentEngine,
+        stablePlaybackMs
+      });
+    } else {
+      this.playbackEngineValidated = true;
+      console.info("Playback engine validated after stable playback", {
+        engine: currentEngine,
+        stablePlaybackMs
+      });
+    }
+    return true;
+  },
+
+  isPlaybackEngineValidated() {
+    return this.updatePlaybackEngineValidation();
+  },
+
+  recoverValidatedPlaybackOnStall() {
+    if (!this.isPlaybackEngineValidated()) {
+      return false;
+    }
+    const stalledPlaybackUrl = String(this.activePlaybackUrl || "").trim();
+    const currentEngine = String(PlayerController.playbackEngine || "").trim();
+    if (
+      !stalledPlaybackUrl ||
+      !currentEngine ||
+      currentEngine === "none" ||
+      Number(this.postValidationSameEngineRecoveryAttempts || 0) >=
+        POST_VALIDATION_SAME_ENGINE_RECOVERY_MAX_ATTEMPTS
+    ) {
+      return false;
+    }
+
+    const sourceCandidate =
+      this.getStreamCandidateByUrl(stalledPlaybackUrl) || this.getCurrentStreamCandidate();
+    this.postValidationSameEngineRecoveryAttempts =
+      Number(this.postValidationSameEngineRecoveryAttempts || 0) + 1;
+    console.warn("Playback stalled after engine validation; retrying the same engine", {
+      url: stalledPlaybackUrl,
+      engine: currentEngine,
+      attempt: this.postValidationSameEngineRecoveryAttempts,
+      limit: POST_VALIDATION_SAME_ENGINE_RECOVERY_MAX_ATTEMPTS
+    });
+    this.armPostValidationRecoveryValidation();
+    void this.playStreamByUrl(stalledPlaybackUrl, {
+      preservePanel: true,
+      preservePlaybackState: true,
+      resetSilentAudioState: false,
+      preservePlaybackRecoveryState: true,
+      forceEngine: currentEngine,
+      sourceCandidate
+    });
+    return true;
+  },
+
   markPlaybackProgress() {
     const currentSeconds = this.getPlaybackCurrentSeconds();
     const bufferingBaselineSeconds = Number(this.bufferingSpinnerBaselineSeconds);
@@ -12041,6 +12263,9 @@ export const PlayerScreen = {
     }
     this.bufferingSpinnerBaselineSeconds = currentSeconds;
     this.lastPlaybackProgressAt = Date.now();
+    this.beginPlaybackEngineValidation();
+    this.recordPlaybackEngineValidationProgress(currentSeconds);
+    this.updatePlaybackEngineValidation();
     this.engineFsStallExtensions = 0;
     this.lastEngineFsStallStats = null;
     if (bufferingRecovered) {
@@ -12277,6 +12502,12 @@ export const PlayerScreen = {
   getPlaybackStallTimeoutMs({ startup = false } = {}) {
     const playbackEngine = String(PlayerController.playbackEngine || "");
     if (startup) {
+      if (Environment.isTizen() && playbackEngine === "native-hls") {
+        // The native-hls path is the first fallback after AVPlay fails on the
+        // affected Tizen TVs. Bound only this startup fallback; keep hls.js,
+        // AVPlay and post-first-frame buffering on their existing policies.
+        return TIZEN_NATIVE_HLS_STARTUP_STALL_TIMEOUT_MS;
+      }
       if (Environment.isTizen() || Environment.isWebOS()) {
         return playbackEngine.endsWith("avplay") ? 60000 : 45000;
       }
@@ -12418,17 +12649,31 @@ export const PlayerScreen = {
       }
 
       const currentPlaybackEngine = String(PlayerController.playbackEngine || "");
+      const playbackEngineValidated = !startup && this.isPlaybackEngineValidated();
+      let skipAutomaticPlaybackRecovery = false;
+
+      if (playbackEngineValidated) {
+        if (this.recoverValidatedPlaybackOnStall()) {
+          return;
+        }
+        // The current engine has already proven that it can play this source.
+        // Do not switch engines after a later rebuffer; let the existing error
+        // presentation handle a failed same-engine recovery.
+        skipAutomaticPlaybackRecovery = true;
+      }
+
       const recoverableHlsPlaybackStall =
         !startup &&
+        !playbackEngineValidated &&
         Environment.isWebOS() &&
         currentPlaybackEngine === "hls.js" &&
         isRecoverableHlsFragmentTimeout(lastHlsErrorDiagnostic);
       const sameEngineHlsRecoveryPending =
         !startup &&
+        !playbackEngineValidated &&
         Environment.isWebOS() &&
         currentPlaybackEngine === "hls.js" &&
         (recoverableHlsPlaybackStall || this.playbackRecoveryActive);
-      let skipAutomaticPlaybackRecovery = false;
       // Match Android's post-first-frame rebuffer behavior: keep the current
       // playback engine for a transient network timeout and bound the retry.
       if (sameEngineHlsRecoveryPending) {
@@ -12446,6 +12691,7 @@ export const PlayerScreen = {
             limit: WEBOS_HLS_PLAYBACK_RECOVERY_MAX_ATTEMPTS,
             hlsError: lastHlsErrorDiagnostic?.details || null
           });
+          this.resetPlaybackEngineValidation();
           void this.playStreamByUrl(stalledPlaybackUrl, {
             preservePanel: true,
             preservePlaybackState: true,
@@ -12461,6 +12707,7 @@ export const PlayerScreen = {
       }
 
       const targetEngine =
+        !playbackEngineValidated &&
         typeof PlayerController.getAlternativePlaybackEngine === "function"
           ? PlayerController.getAlternativePlaybackEngine(this.activePlaybackUrl)
           : null;
@@ -13661,7 +13908,7 @@ export const PlayerScreen = {
    * to a VTT object URL; callers that need that use
    * resolveSubtitlePlaybackUrl(), whose URL contract is unchanged.
    */
-  async fetchSubtitleRawBody(url, { timeoutMs = 0 } = {}) {
+  async fetchSubtitleRawBody(url, { timeoutMs = 0, languageHint = "" } = {}) {
     const original = String(url || "").trim();
     if (!original) {
       return null;
@@ -13701,8 +13948,12 @@ export const PlayerScreen = {
       if (!response.ok) {
         throw new Error(`Subtitle request failed with HTTP ${response.status}`);
       }
-      const body = await response.text();
       const contentType = String(response.headers?.get("content-type") || "").toLowerCase();
+      const decodedBody =
+        typeof TextDecoder === "function"
+          ? await decodeSubtitleResponseBody(response, { languageHint, contentType })
+          : null;
+      const body = decodedBody ?? (await response.text());
       return { body, sourceUrl: original, contentType, resolvedUrl: response.url || original };
     } catch (directError) {
       if (Environment.isWebOS()) {
@@ -13731,7 +13982,7 @@ export const PlayerScreen = {
     }
   },
 
-  async resolveSubtitlePlaybackUrl(url, { timeoutMs = 0 } = {}) {
+  async resolveSubtitlePlaybackUrl(url, { timeoutMs = 0, languageHint = "" } = {}) {
     const original = String(url || "").trim();
     if (!original) {
       return "";
@@ -13740,7 +13991,7 @@ export const PlayerScreen = {
       return original;
     }
     try {
-      const raw = await this.fetchSubtitleRawBody(url, { timeoutMs });
+      const raw = await this.fetchSubtitleRawBody(url, { timeoutMs, languageHint });
       if (!raw) {
         return "";
       }
@@ -14767,7 +15018,9 @@ export const PlayerScreen = {
     if (Environment.isWebOS() || (Environment.isTizen() && PlayerController.isUsingAvPlay?.())) {
       let raw = null;
       try {
-        raw = await this.fetchSubtitleRawBody(sourceUrl);
+        raw = await this.fetchSubtitleRawBody(sourceUrl, {
+          languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
+        });
       } catch (assFetchError) {
         if (!isCurrentSelection()) {
           return false;
@@ -14861,7 +15114,9 @@ export const PlayerScreen = {
 
     const subtitleUrl = Environment.isTizen()
       ? await this.resolveTizenAvPlaySubtitleUrl(subtitle?.url)
-      : await this.resolveSubtitlePlaybackUrl(subtitle?.url);
+      : await this.resolveSubtitlePlaybackUrl(subtitle?.url, {
+          languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
+        });
     if (!subtitleUrl) {
       return false;
     }
@@ -14869,7 +15124,13 @@ export const PlayerScreen = {
     if (!response.ok) {
       throw new Error(`HTML subtitle fetch failed with HTTP ${response.status}`);
     }
-    const text = await response.text();
+    const decodedText =
+      typeof TextDecoder === "function"
+        ? await decodeSubtitleResponseBody(response, {
+            languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
+          })
+        : null;
+    const text = decodedText ?? (await response.text());
     if (!isCurrentSelection()) {
       return false;
     }
@@ -17223,7 +17484,9 @@ export const PlayerScreen = {
       try {
         avPlaySubtitleUrl = Environment.isTizen()
           ? (await this.resolveTizenAvPlaySubtitleUrl(subtitle.url)) || subtitle.url
-          : (await this.resolveSubtitlePlaybackUrl(subtitle.url)) || subtitle.url;
+          : (await this.resolveSubtitlePlaybackUrl(subtitle.url, {
+              languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
+            })) || subtitle.url;
       } catch (_) {
         avPlaySubtitleUrl = subtitle.url;
       }
@@ -17271,7 +17534,9 @@ export const PlayerScreen = {
     let rawBody = null;
     let detectedAss = false;
     try {
-      const raw = await this.fetchSubtitleRawBody(subtitle.url);
+      const raw = await this.fetchSubtitleRawBody(subtitle.url, {
+        languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
+      });
       rawBody = raw;
       detectedAss = Boolean(
         raw?.body != null &&
@@ -17688,6 +17953,12 @@ export const PlayerScreen = {
     }
     if (scroll) {
       this.scrollSubtitleRailNodeIntoView(target);
+      // Tizen 5 can expose stale scrollHeight/clientHeight for one layout
+      // tick after the in-place focus class update. The full dialog render
+      // already had an asynchronous retry; keep that retry for the lighter
+      // in-place navigation path as well so a focused language cannot remain
+      // outside the visible rail.
+      this.scheduleSubtitleDialogScrollIntoView();
     }
     return true;
   },
@@ -20497,9 +20768,9 @@ export const PlayerScreen = {
             ${current ? `<div class="player-episode-current">&#10003;</div>` : ""}
           </div>
           <div class="player-episode-copy">
-            <div class="player-episode-item-title">${escapeHtml(episode.title || t("episodes_episode", {}, "Episode"))}</div>
+            <div class="player-episode-item-title" dir="auto">${escapeHtml(episode.title || t("episodes_episode", {}, "Episode"))}</div>
             ${date ? `<div class="player-episode-date">${escapeHtml(date)}</div>` : ""}
-            <div class="player-episode-item-subtitle">${escapeHtml(episode.overview || "")}</div>
+            <div class="player-episode-item-subtitle" dir="auto">${escapeHtml(episode.overview || "")}</div>
           </div>
         </div>
       `;
@@ -21955,6 +22226,7 @@ export const PlayerScreen = {
       this.renderedSourcesMarkup = null;
       this.clearTrackDiscoveryTimer();
       this.stopLoadingLogoFillAnimation();
+      this.resetPlaybackEngineValidation();
       this.clearPlaybackStallGuard();
       this.bufferingActive = false;
       this.clearBufferingSpinnerTimer();

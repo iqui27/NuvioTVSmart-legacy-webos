@@ -1827,6 +1827,31 @@ function getSettingsSectionById(sectionId) {
   return SECTION_META.find((section) => section.id === sectionId) || null;
 }
 
+function isFirstStrongRtlText(value = "") {
+  for (const character of String(value || "")) {
+    const codePoint = character.codePointAt(0) || 0;
+    const isRtl =
+      (codePoint >= 0x0590 && codePoint <= 0x08ff) ||
+      (codePoint >= 0xfb1d && codePoint <= 0xfdff) ||
+      (codePoint >= 0xfe70 && codePoint <= 0xfeff);
+    if (isRtl) {
+      return true;
+    }
+    const isLtr =
+      (codePoint >= 0x0041 && codePoint <= 0x005a) ||
+      (codePoint >= 0x0061 && codePoint <= 0x007a) ||
+      (codePoint >= 0x00c0 && codePoint <= 0x02af) ||
+      (codePoint >= 0x0370 && codePoint <= 0x058f) ||
+      (codePoint >= 0x0900 && codePoint <= 0x1fff) ||
+      (codePoint >= 0x2e80 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff);
+    if (isLtr) {
+      return false;
+    }
+  }
+  return false;
+}
+
 function updateSettingsMarqueeTargets(root) {
   root?.querySelectorAll?.(".settings-nav-label").forEach((label) => {
     label._settingsMarqueeAnimation?.cancel?.();
@@ -1837,6 +1862,8 @@ function updateSettingsMarqueeTargets(root) {
     const originalText = label.dataset.marqueeText || String(label.textContent || "");
     label.dataset.marqueeText = originalText;
     label.textContent = originalText;
+    const textIsRtl = isFirstStrongRtlText(originalText);
+    label.setAttribute("dir", textIsRtl ? "rtl" : "ltr");
 
     const item = label.closest(".settings-nav-item");
     if (!item?.classList.contains("focused")) {
@@ -1857,7 +1884,10 @@ function updateSettingsMarqueeTargets(root) {
     label.classList.add("is-marquee-active");
     if (typeof label.animate === "function") {
       label._settingsMarqueeAnimation = label.animate(
-        [{ transform: "translateX(0)" }, { transform: `translateX(-${distance}px)` }],
+        [
+          { transform: "translateX(0)" },
+          { transform: `translateX(${textIsRtl ? distance : -distance}px)` }
+        ],
         {
           duration: travelMs,
           iterations: Infinity,
@@ -3284,9 +3314,6 @@ export const SettingsScreen = {
         })
       );
     }
-    this.actionMap.set("profiles:rememberLast", () => {
-      ProfileManager.setRememberLastProfileEnabled(!ProfileManager.isRememberLastProfileEnabled());
-    });
     return `
       ${this.renderSectionHeader(SECTION_META.find((item) => item.id === "profiles"))}
       <div class="settings-group-card settings-profile-card">
@@ -3302,16 +3329,6 @@ export const SettingsScreen = {
                 })
               : ""
           }
-          ${this.renderToggleRow({
-            focusKey: "profiles:rememberLast",
-            title: t("settings.profiles.rememberLast.title", {}, "Remember Last Profile"),
-            subtitle: t(
-              "settings.profiles.rememberLast.subtitle",
-              {},
-              "Skip the profile picker at startup and use the last selected profile. Profiles with a PIN are always asked."
-            ),
-            checked: ProfileManager.isRememberLastProfileEnabled()
-          })}
         </div>
       </div>
     `;
@@ -3322,6 +3339,9 @@ export const SettingsScreen = {
       LayoutPreferences.set({
         fastHorizontalNavigationEnabled: !isFastHorizontalNavigationEnabled()
       });
+    });
+    this.actionMap.set("advanced:rememberLastProfile", () => {
+      ProfileManager.setRememberLastProfileEnabled(!ProfileManager.isRememberLastProfileEnabled());
     });
     const isEssential = model.experience?.mode === "ESSENTIAL";
     this.actionMap.set("advanced:switchExperience", () => {
@@ -3407,6 +3427,16 @@ export const SettingsScreen = {
               "Increase D-pad repeat speed in rows while keeping repeat throttling enabled."
             ),
             checked: Boolean(model.fastHorizontalNavigation)
+          })}
+          ${this.renderToggleRow({
+            focusKey: "advanced:rememberLastProfile",
+            title: t("advanced_remember_last_profile", {}, "Remember Last Profile"),
+            subtitle: t(
+              "advanced_remember_last_profile_subtitle",
+              {},
+              "Remember last selected profile at startup"
+            ),
+            checked: ProfileManager.isRememberLastProfileEnabled()
           })}
         </div>
       </div>

@@ -140,6 +140,30 @@ export function createAssRenderer({
             detail: "ass.js exposed ASS control fields as visible text"
           };
         }
+        // ass.js starts its frame loop only on a play/playing event. When a
+        // subtitle is selected mid-playback the video is already playing, so
+        // those events fired before this instance existed and the renderer
+        // would freeze at its initial seek. Re-dispatch play (ass.js listens
+        // to both play and playing, but the player binds only playing, so a
+        // synthetic playing would trigger onPlaying side effects).
+        if (video && typeof video.paused === "boolean" && !video.paused) {
+          try {
+            // Legacy webOS runtimes may lack the Event constructor; fall back
+            // to document.createEvent like PlayerController.emitVideoEvent.
+            let event = null;
+            if (typeof Event === "function") {
+              event = new Event("play");
+            } else if (typeof document !== "undefined" && document.createEvent) {
+              event = document.createEvent("Event");
+              event.initEvent("play", false, false);
+            }
+            if (event) {
+              video.dispatchEvent(event);
+            }
+          } catch (_) {
+            // Best effort: playback is already advancing; nothing to sync.
+          }
+        }
       } catch (error) {
         instance = null;
         clearContainer(container);

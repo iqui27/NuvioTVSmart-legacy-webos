@@ -1,4 +1,5 @@
 import { AuthManager } from "../auth/authManager.js";
+import { SessionStore } from "../storage/sessionStore.js";
 import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 import { MAX_PROFILES, ProfileManager } from "./profileManager.js";
 import { SupabaseApi } from "../../data/remote/supabase/supabaseApi.js";
@@ -12,9 +13,32 @@ const SET_PROFILE_PIN_RPC = "set_profile_pin";
 const CLEAR_PROFILE_PIN_RPC = "clear_profile_pin";
 const VERIFY_PROFILE_PIN_RPC = "verify_profile_pin";
 const DELETE_PROFILE_DATA_RPC = "sync_delete_profile_data";
+const PROFILE_PULL_MIN_INTERVAL_MS = 10_000;
 
 let lastPullStatus = "idle";
 let lastPullError = null;
+let pullInFlight = null;
+let lastPulledUserKey = null;
+let lastPulledAtMs = 0;
+let lastPulledProfiles = [];
+
+function currentAuthUserKey() {
+  const token = String(SessionStore.accessToken || "");
+  try {
+    const [, payload] = token.split(".");
+    if (payload && typeof atob === "function") {
+      const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+      const subject = String(JSON.parse(atob(padded))?.sub || "").trim();
+      if (subject) {
+        return subject;
+      }
+    }
+  } catch (_) {
+    // Fall back to the token itself so two sessions cannot share freshness.
+  }
+  return token || "authenticated";
+}
 
 function shouldTryLegacyTable(error) {
   if (!error) {
@@ -79,62 +103,94 @@ export const ProfileSyncService = {
     return lastPullError;
   },
 
-  async pull() {
+  async pull(force = false) {
     if (isSyncBackoffActive()) {
       lastPullStatus = "deferred";
       lastPullError = null;
       return [];
     }
-    lastPullStatus = "loading";
-    lastPullError = null;
-    try {
-      if (!AuthManager.isAuthenticated) {
-        lastPullStatus = "signed-out";
-        return [];
-      }
-      let rows = [];
+    if (pullInFlight) {
+      return pullInFlight;
+    }
+
+    let requestPromise = null;
+    requestPromise = (async () => {
+      lastPullStatus = "loading";
+      lastPullError = null;
       try {
-        rows = await SupabaseApi.rpc(PULL_RPC, {}, true);
-      } catch (rpcError) {
-        // A table fallback is useful only for deployments that do not expose
-        // the profiles RPC. Retrying network, auth, or server failures through
-        // another webOS proxy request can otherwise hold boot past its watchdog.
-        if (!shouldTryProfileTableFallback(rpcError)) {
-          throw rpcError;
+        if (!AuthManager.isAuthenticated) {
+          lastPullStatus = "signed-out";
+          return [];
         }
-        const ownerId = await AuthManager.getEffectiveUserId();
+        const userKey = currentAuthUserKey();
+        const now = Date.now();
+        if (
+          !force &&
+          lastPulledUserKey === userKey &&
+          lastPulledAtMs > 0 &&
+          now >= lastPulledAtMs &&
+          now - lastPulledAtMs < PROFILE_PULL_MIN_INTERVAL_MS
+        ) {
+          lastPullStatus = "ok";
+          return [...lastPulledProfiles];
+        }
+        let rows = [];
         try {
-          rows = await SupabaseApi.select(
-            FALLBACK_TABLE,
-            `user_id=eq.${encodeURIComponent(ownerId)}&select=*&order=profile_index.asc`,
-            true
-          );
-        } catch (primaryError) {
-          if (!shouldTryLegacyTable(primaryError)) {
+          rows = await SupabaseApi.rpc(PULL_RPC, {}, true);
+        } catch (rpcError) {
+          // A table fallback is useful only for deployments that do not expose
+          // the profiles RPC. Retrying network, auth, or server failures through
+          // another webOS proxy request can otherwise hold boot past its watchdog.
+          if (!shouldTryProfileTableFallback(rpcError)) {
             throw rpcError;
           }
-          rows = await SupabaseApi.select(
-            TABLE,
-            `owner_id=eq.${encodeURIComponent(ownerId)}&select=*&order=profile_index.asc`,
-            true
-          );
+          const ownerId = await AuthManager.getEffectiveUserId();
+          try {
+            rows = await SupabaseApi.select(
+              FALLBACK_TABLE,
+              `user_id=eq.${encodeURIComponent(ownerId)}&select=*&order=profile_index.asc`,
+              true
+            );
+          } catch (primaryError) {
+            if (!shouldTryLegacyTable(primaryError)) {
+              throw rpcError;
+            }
+            rows = await SupabaseApi.select(
+              TABLE,
+              `owner_id=eq.${encodeURIComponent(ownerId)}&select=*&order=profile_index.asc`,
+              true
+            );
+          }
         }
-      }
-      if (!AuthManager.isAuthenticated || isSyncBackoffActive()) {
-        lastPullStatus = "deferred";
+        if (!AuthManager.isAuthenticated || isSyncBackoffActive()) {
+          lastPullStatus = "deferred";
+          return [];
+        }
+        const profiles = (rows || []).map((row) => mapProfileRow(row));
+        if (profiles.length) {
+          await ProfileManager.replaceProfiles(profiles);
+        }
+        if (currentAuthUserKey() === userKey) {
+          lastPulledUserKey = userKey;
+          lastPulledAtMs = Date.now();
+          lastPulledProfiles = [...profiles];
+        }
+        lastPullStatus = "ok";
+        return profiles;
+      } catch (error) {
+        lastPullStatus = "error";
+        lastPullError = error;
+        console.warn("Profile sync pull failed", error);
         return [];
       }
-      const profiles = (rows || []).map((row) => mapProfileRow(row));
-      if (profiles.length) {
-        await ProfileManager.replaceProfiles(profiles);
+    })();
+    pullInFlight = requestPromise;
+    try {
+      return await requestPromise;
+    } finally {
+      if (pullInFlight === requestPromise) {
+        pullInFlight = null;
       }
-      lastPullStatus = "ok";
-      return profiles;
-    } catch (error) {
-      lastPullStatus = "error";
-      lastPullError = error;
-      console.warn("Profile sync pull failed", error);
-      return [];
     }
   },
 

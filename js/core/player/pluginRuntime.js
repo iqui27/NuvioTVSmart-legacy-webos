@@ -31,28 +31,49 @@ export const PluginRuntime = {
   },
 
   saveSources(sources) {
-    LocalStore.set(KEY, normalizeSources(sources));
+    const normalized = normalizeSources(sources);
+    if (JSON.stringify(this.listSources()) === JSON.stringify(normalized)) {
+      return false;
+    }
+    LocalStore.set(KEY, normalized);
+    return true;
   },
 
   addSource(source) {
     const current = this.listSources();
-    current.push(source);
-    this.saveSources(current);
+    const normalizedUrl = String(source?.urlTemplate || "").trim();
+    if (!normalizedUrl || current.some((entry) => entry.urlTemplate === normalizedUrl)) {
+      return false;
+    }
+    current.push({ ...source, urlTemplate: normalizedUrl });
+    return this.saveSources(current);
   },
 
   removeSource(sourceId) {
     const next = this.listSources().filter((source) => source.id !== sourceId);
-    this.saveSources(next);
+    return this.saveSources(next);
   },
 
   setSourceEnabled(sourceId, enabled) {
-    const next = this.listSources().map((source) => {
+    const current = this.listSources();
+    const normalizedEnabled = Boolean(enabled);
+    if (!current.some((source) => source.id === sourceId)) {
+      return false;
+    }
+    if (
+      current.some(
+        (source) => source.id === sourceId && Boolean(source.enabled) === normalizedEnabled
+      )
+    ) {
+      return false;
+    }
+    const next = current.map((source) => {
       if (source.id !== sourceId) {
         return source;
       }
-      return { ...source, enabled: Boolean(enabled) };
+      return { ...source, enabled: normalizedEnabled };
     });
-    this.saveSources(next);
+    return this.saveSources(next);
   },
 
   execute({ tmdbId, mediaType, season = null, episode = null } = {}) {

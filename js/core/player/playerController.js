@@ -8,6 +8,7 @@ import {
 } from "../../data/local/cloudLibraryPlaybackStore.js";
 import { Platform } from "../../platform/index.js";
 import { TizenPlaybackProxy } from "../../platform/tizen/tizenPlaybackProxy.js";
+import { WebOsPlaybackProxy } from "../../platform/webos/webosPlaybackProxy.js";
 import { WatchProgressSyncService } from "../profile/watchProgressSyncService.js";
 import { nativeVideoEngine } from "./engines/nativeVideoEngine.js";
 import { hlsJsEngine } from "./engines/hlsJsEngine.js";
@@ -39,6 +40,12 @@ function logEngineFsDebug(...args) {
 
 function logTizenAvPlayDebug(...args) {
   if (globalThis.__NUVIO_DEBUG_TIZEN_AVPLAY__ || globalThis.__NUVIO_DEBUG_ENGINEFS__) {
+    console.info(...args);
+  }
+}
+
+function logWebOsPlaybackDebug(...args) {
+  if (globalThis.__NUVIO_DEBUG_WEBOS_PLAYBACK__ || globalThis.__NUVIO_DEBUG_ENGINEFS__) {
     console.info(...args);
   }
 }
@@ -1459,11 +1466,12 @@ export const PlayerController = {
       return false;
     }
     const mode = normalizeAvPlaySubtitleRenderMode(renderMode);
-    // Keep the proven 0.3.31 decoder re-arm for startup and ordinary track
-    // changes. When returning from Off/an addon, keep the requested renderer
-    // active throughout selection so the reactivation retries do not switch
-    // AVPlay back through the state that already failed on affected TVs.
-    const preselectSilent = reactivate ? mode === "html" : mode === "native";
+    // Keep the proven decoder re-arm for startup, ordinary track changes, and
+    // returning from Off/an addon. Native AVPlay subtitles must be selected
+    // while the subtitle output is muted and unmuted again immediately after
+    // setSelectTrack(); otherwise some TVs report the new TEXT index without
+    // reactivating the native subtitle renderer.
+    const preselectSilent = mode === "native" || reactivate;
     try {
       avplay.setSilentSubtitle?.(preselectSilent);
     } catch (_) {
@@ -4717,19 +4725,30 @@ export const PlayerController = {
     }
 
     let playbackUrl = requestedUrl;
-    if (Platform.isTizen() && this.canUseAvPlay()) {
-      const proxyResult = await TizenPlaybackProxy.resolve(requestedUrl, requestHeaders);
+    const playbackProxy =
+      Platform.isTizen() && this.canUseAvPlay()
+        ? TizenPlaybackProxy
+        : Platform.isWebOS()
+          ? WebOsPlaybackProxy
+          : null;
+    if (playbackProxy) {
+      const proxyResult = await playbackProxy.resolve(requestedUrl, requestHeaders);
       if (!this.isPlaybackRequestActive(playToken, requestedUrl)) {
         return;
       }
       playbackUrl = String(proxyResult?.url || requestedUrl).trim() || requestedUrl;
       if (proxyResult?.proxied) {
         this.currentPlaybackUrl = playbackUrl;
-        logTizenAvPlayDebug("PlayerController: Tizen playback proxy selected", {
+        const debugPayload = {
           baseUrl: proxyResult.baseUrl,
           headerNames: proxyResult.headerNames,
           playbackUrl
-        });
+        };
+        if (Platform.isTizen()) {
+          logTizenAvPlayDebug("PlayerController: Tizen playback proxy selected", debugPayload);
+        } else {
+          logWebOsPlaybackDebug("PlayerController: webOS playback proxy selected", debugPayload);
+        }
       }
     }
 
@@ -4754,7 +4773,7 @@ export const PlayerController = {
     } catch (_) {
       // ignore logging errors
     }
-    // Tizen may replace the requested source with a local EngineFS proxy URL.
+    // Tizen/webOS may replace the requested source with a local proxy URL.
     // Keep failover attempts keyed by the stable source URL because PlayerScreen
     // asks for alternatives using the original stream URL.
     this.rememberPlaybackEngineAttempt(requestedUrl, preferredEngine, {

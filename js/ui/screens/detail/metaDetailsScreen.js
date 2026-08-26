@@ -3296,7 +3296,7 @@ export const MetaDetailsScreen = {
 
   renderHeroMetaRows(meta) {
     const hasExternalRatings = hasMdbListRatings(meta?.mdbListRatings);
-    const genresText = normalizeGenreList(meta).map(localizedGenreLabel).join(" • ");
+    const genresText = normalizeGenreList(meta).slice(0, 6).map(localizedGenreLabel).join(" • ");
     const yearText = formatMovieReleaseDate(meta);
     const imdbValue = resolveImdbRating(meta);
     const imdbText =
@@ -3319,7 +3319,7 @@ export const MetaDetailsScreen = {
       .trim()
       .toUpperCase();
     const primaryParts = [
-      genresText ? `<span>${escapeHtml(genresText)}</span>` : "",
+      genresText ? `<span class="detail-meta-genres">${escapeHtml(genresText)}</span>` : "",
       yearText ? `<span>${escapeHtml(yearText)}</span>` : "",
       imdbText &&
       showStandardDetailRatings(
@@ -3782,7 +3782,7 @@ export const MetaDetailsScreen = {
               : ""
           }
         </div>
-        <div class="movie-cast-name">${escapeHtml(name)}</div>
+        <div class="movie-cast-name" dir="auto">${escapeHtml(name)}</div>
         <div class="movie-cast-role">${escapeHtml(person.character || "")}</div>
       </article>
     `;
@@ -4047,7 +4047,7 @@ export const MetaDetailsScreen = {
           ${isUnavailable ? `<div class="series-episode-unavailable">${escapeHtml(t("episodes_unavailable", {}, "Unavailable").toUpperCase())}</div>` : ""}
           <div class="series-episode-copy">
             <div class="series-episode-badge">${escapeHtml(t("episodes_episode", {}, "Episode").toUpperCase())} ${Number(episode.episode || 0)}</div>
-            <div class="series-episode-title">${escapeHtml(normalizeEpisodeTitle(episode.title, episode.episode))}</div>
+            <div class="series-episode-title" dir="auto">${escapeHtml(normalizeEpisodeTitle(episode.title, episode.episode))}</div>
             <div class="series-episode-overview">${escapeHtml(episode.overview || t("episodes_episode", {}, "Episode"))}</div>
             ${metaParts ? `<div class="series-episode-meta">${metaParts}</div>` : ""}
           </div>
@@ -7590,6 +7590,13 @@ export const MetaDetailsScreen = {
       return Math.max(0, Math.min(maxScrollLeft, target.offsetLeft - leftPad));
     }
 
+    // The first focusable item already sits after the track's safe gutter.
+    // Applying the generic edge padding to its offsetLeft leaves a residual
+    // horizontal shift after navigating back to the start of TV rails.
+    if (horizontalTrack.querySelector(".focusable") === target) {
+      return 0;
+    }
+
     const edgePadding = horizontalTrack.classList.contains("home-track") ? 0 : 24;
     const targetLeft = target.offsetLeft;
     const targetRight = targetLeft + target.offsetWidth;
@@ -7758,7 +7765,25 @@ export const MetaDetailsScreen = {
     const kind = isSeriesDetailMeta(this.meta, this.episodes) ? "series" : "movie";
     const activeTab =
       kind === "series" ? String(this.seriesInsightTab || "") : String(this.movieInsightTab || "");
-    return `${activeTab === "collection" ? "collection" : "morelike"}:${kind}`;
+    const railTab = ["morelike", "trailer", "collection"].includes(activeTab)
+      ? activeTab
+      : "morelike";
+    return `${railTab}:${kind}`;
+  },
+
+  getPreviewRailTabKey(target) {
+    const railKey = String(target?.closest?.(".detail-morelike-track")?.dataset?.scrollKey || "");
+    const railTab = railKey.split(":", 1)[0];
+    if (["morelike", "trailer", "collection"].includes(railTab)) {
+      return railTab;
+    }
+    return this.getActiveInsightTabKey();
+  },
+
+  getInsightTabIndexForPreviewRail(tabs = [], target) {
+    const railTab = this.getPreviewRailTabKey(target);
+    const index = tabs.findIndex((node) => String(node?.dataset?.tab || "") === railTab);
+    return index >= 0 ? index : this.getActiveInsightTabIndex(tabs);
   },
 
   focusInList(list, targetIndex, options = {}) {
@@ -8447,11 +8472,12 @@ export const MetaDetailsScreen = {
       if (direction === "right") return this.focusInList(moreLikeCards, moreLikeIndex + 1) || true;
       if (direction === "up") {
         if (insightTabs.length) {
-          const moreLikeTabIndex = Math.max(
-            0,
-            insightTabs.findIndex((node) => String(node?.dataset?.tab || "") === "morelike")
+          return (
+            this.focusInList(
+              insightTabs,
+              this.getInsightTabIndexForPreviewRail(insightTabs, current)
+            ) || true
           );
-          return this.focusInList(insightTabs, moreLikeTabIndex) || true;
         }
         if (episodes.length) {
           return (
@@ -8677,11 +8703,9 @@ export const MetaDetailsScreen = {
       if (direction === "right") return this.focusInList(moreLikeCards, moreLikeIndex + 1) || true;
       if (direction === "up") {
         if (tabs.length) {
-          const moreLikeTabIndex = Math.max(
-            0,
-            tabs.findIndex((node) => String(node?.dataset?.tab || "") === "morelike")
+          return (
+            this.focusInList(tabs, this.getInsightTabIndexForPreviewRail(tabs, current)) || true
           );
-          return this.focusInList(tabs, moreLikeTabIndex) || true;
         }
         if (cast.length) {
           return this.focusInList(cast, Math.min(moreLikeIndex, cast.length - 1)) || true;

@@ -1032,8 +1032,18 @@ class AddonRepository {
         { name: "meta", types: ["movie", "series"], idPrefixes: null }
       ],
       catalogs: [
-        { id: "top", name: "Top Movies", apiType: "movie", extra: [] },
-        { id: "top", name: "Top Series", apiType: "series", extra: [] }
+        {
+          id: "top",
+          name: "Top Movies",
+          apiType: "movie",
+          extra: [{ name: "search" }]
+        },
+        {
+          id: "top",
+          name: "Top Series",
+          apiType: "series",
+          extra: [{ name: "search" }]
+        }
       ]
     };
   }

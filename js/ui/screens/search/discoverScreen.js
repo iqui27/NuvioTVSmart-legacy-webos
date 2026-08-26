@@ -1233,13 +1233,20 @@ export const DiscoverScreen = {
     };
   },
 
-  resolvePreferredNodeForRow(rowNodes = []) {
+  resolvePreferredNodeForRow(rowNodes = [], preferredCol = undefined) {
     if (!Array.isArray(rowNodes) || !rowNodes.length) {
       return null;
     }
     const rowIndex = Number(rowNodes[0]?.dataset?.navRow || -1);
     const storedIndex = rowIndex >= 0 ? Number(this.rowFocusedIndexByRow?.[rowIndex]) : Number.NaN;
-    const preferredIndex = Number.isFinite(storedIndex) ? storedIndex : 0;
+    const currentCol = Number(preferredCol);
+    // Android TV keeps vertical D-pad movement in the current grid column.
+    // A row's remembered index is only a fallback for callers without a current column.
+    const preferredIndex = Number.isFinite(currentCol)
+      ? currentCol
+      : Number.isFinite(storedIndex)
+        ? storedIndex
+        : 0;
     return rowNodes[Math.max(0, Math.min(rowNodes.length - 1, preferredIndex))] || rowNodes[0];
   },
 
@@ -1334,7 +1341,7 @@ export const DiscoverScreen = {
     if (!targetRowNodes?.length) {
       return true;
     }
-    return this.focusNode(this.resolvePreferredNodeForRow(targetRowNodes)) || true;
+    return this.focusNode(this.resolvePreferredNodeForRow(targetRowNodes, col)) || true;
   },
 
   focusFirstContentCard() {
@@ -1498,17 +1505,62 @@ export const DiscoverScreen = {
     ].join("");
   },
 
+  renderPickerMarkup(kind) {
+    if (kind === "type") {
+      return this.renderFilterPicker("type", "Type", formatAddonTypeLabel(this.selectedType));
+    }
+    if (kind === "catalog") {
+      return this.renderFilterPicker(
+        "catalog",
+        "Catalog",
+        this.getSelectedCatalog()?.catalogName || "Select"
+      );
+    }
+    if (kind === "genre") {
+      return this.renderFilterPicker("genre", "Genre", this.selectedGenre || "Default");
+    }
+    return "";
+  },
+
   updateRenderedPickerRow() {
     const pickerRow = this.container?.querySelector("#discoverPickerRow");
     if (!(pickerRow instanceof HTMLElement)) {
       return false;
     }
 
-    pickerRow.innerHTML = this.renderPickerRowMarkup();
+    const pickerKind = this.openPicker;
+    const currentPicker = pickerKind
+      ? pickerRow
+          .querySelector(`.library-picker-anchor[data-picker="${pickerKind}"]`)
+          ?.closest(".library-picker")
+      : null;
+    if (!(currentPicker instanceof HTMLElement)) {
+      return false;
+    }
+
+    const previousPicker = pickerRow.querySelector(".library-picker.open");
+    if (previousPicker && previousPicker !== currentPicker) {
+      // Pointer activation can switch pickers without going through the D-pad
+      // close path. Remove the old menu before replacing only the new picker.
+      this.closePickerMenuInDom(this.lastFocusedAction);
+    }
+
+    if (currentPicker.classList.contains("open") && this.lastRenderedOpenPicker === pickerKind) {
+      this.applyOpenPickerOptionFocus();
+      this.syncOpenPickerScroll();
+      return true;
+    }
+
+    currentPicker.outerHTML = this.renderPickerMarkup(pickerKind);
+    const renderedPicker = pickerRow
+      .querySelector(`.library-picker-anchor[data-picker="${pickerKind}"]`)
+      ?.closest(".library-picker");
     this.lastRenderedOpenPicker = this.openPicker || null;
-    // Only the small picker row was replaced; keep the existing poster grid and
-    // its image decoders alive while refreshing focus metadata for the new menu.
-    ScreenUtils.indexFocusables(this.container);
+    // Only the active picker was replaced. Keep the poster grid and the other
+    // picker nodes alive, and avoid scanning every card on constrained Tizen.
+    if (renderedPicker instanceof HTMLElement) {
+      ScreenUtils.indexFocusables(renderedPicker);
+    }
     this.restoreContentFocus({ scrollMode: "none" });
     this.syncOpenPickerScroll();
     return true;

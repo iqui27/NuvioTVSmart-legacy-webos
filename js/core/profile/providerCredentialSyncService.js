@@ -146,6 +146,26 @@ export function mergeProviderCredentialRows(snapshot, rows = []) {
   };
 }
 
+export function shouldSeedProviderCredentials(snapshot, rows = []) {
+  const remoteProviders = new Set(
+    (Array.isArray(rows) ? rows : [])
+      .map((row) =>
+        String(row?.provider || "")
+          .trim()
+          .toLowerCase()
+      )
+      .filter(Boolean)
+  );
+  return (snapshot?.values || []).some(
+    (credential) =>
+      !remoteProviders.has(
+        String(credential?.provider || "")
+          .trim()
+          .toLowerCase()
+      )
+  );
+}
+
 function snapshotsEqual(left, right) {
   return JSON.stringify(left?.values || []) === JSON.stringify(right?.values || []);
 }
@@ -281,8 +301,10 @@ export const ProviderCredentialSyncService = {
           await pushSnapshot(localSnapshot);
           clearPending(scope);
         }
-        await seedSnapshot(localSnapshot);
         const rows = await pullRows(scope.profileId);
+        if (shouldSeedProviderCredentials(localSnapshot, rows)) {
+          await seedSnapshot(localSnapshot);
+        }
         await requireCurrentScope(scope);
         const remoteSnapshot = mergeProviderCredentialRows(localSnapshot, rows);
         const applied = !snapshotsEqual(localSnapshot, remoteSnapshot);
