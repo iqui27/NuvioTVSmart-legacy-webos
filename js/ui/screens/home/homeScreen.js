@@ -9444,6 +9444,16 @@ export const HomeScreen = {
           }
           const nextDisplaySignature = buildContinueWatchingSignature(this.continueWatchingDisplay);
           const nextHeroIdentity = buildHeroIdentity(this.heroItem);
+          // Success path MUST release the initial-load gate too. When the home
+          // mounts with an empty display snapshot (waitForInitialContinueWatching
+          // = true) and there IS watch progress, this was the only branch that
+          // never called releaseInitialHomeAfterContinueWatching(): render()
+          // then repainted the spinner forever because isInitialHomeLoading was
+          // never cleared (measured on a real C9: render fired with rows:16,
+          // continueWatching:10 and still painted 0 rows).
+          if (releaseInitialHomeAfterContinueWatching()) {
+            return;
+          }
           if (
             previousLoadingState !== this.continueWatchingLoading ||
             previousDisplaySignature !== nextDisplaySignature ||
