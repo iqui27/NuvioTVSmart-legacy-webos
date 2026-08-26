@@ -21,6 +21,8 @@ const TMDB_TRAILER_FALLBACK_LANGUAGE = "en-US";
 const ENTITY_RAIL_MAX_ITEMS = 20;
 const TOP_RATED_VOTE_COUNT_FLOOR = 200;
 const ENTITY_RAIL_TYPES = ["popular", "top_rated", "recent"];
+const TMDB_ENGLISH_CREDIT_LANGUAGE = "en-US";
+const NATIVE_PERSON_NAME_LANGUAGES = new Set(["ja", "ko", "zh"]);
 const entityHeaderCache = new Map();
 const entityRailCache = new Map();
 const entityBrowseCache = new Map();
@@ -31,6 +33,147 @@ function resolveType(contentType) {
     return "tv";
   }
   return "movie";
+}
+
+function languageBase(language = "") {
+  return normalizeTmdbLanguageCode(language).split("-", 1)[0].toLowerCase();
+}
+
+export function containsCjkOrHangul(text = "") {
+  for (const character of String(text || "")) {
+    const codePoint = character.codePointAt(0) || 0;
+    if (
+      (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
+      (codePoint >= 0x2e80 && codePoint <= 0x2fff) ||
+      (codePoint >= 0x3040 && codePoint <= 0x30ff) ||
+      (codePoint >= 0x3130 && codePoint <= 0x318f) ||
+      (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+      (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xa960 && codePoint <= 0xa97f) ||
+      (codePoint >= 0xd7b0 && codePoint <= 0xd7ff)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolvePersonName({
+  localizedName = "",
+  originalName = "",
+  fallbackEnglishName = "",
+  preferredLanguage = "en"
+} = {}) {
+  const name = String(localizedName || "").trim();
+  const original = String(originalName || "").trim();
+  const fallback = String(fallbackEnglishName || "").trim();
+  const language = languageBase(preferredLanguage);
+
+  if (!name) {
+    return original || fallback || null;
+  }
+  if (NATIVE_PERSON_NAME_LANGUAGES.has(language)) {
+    return name;
+  }
+  if (!containsCjkOrHangul(name)) {
+    return name;
+  }
+  if (original && !containsCjkOrHangul(original)) {
+    return original;
+  }
+  if (fallback && !containsCjkOrHangul(fallback)) {
+    return fallback;
+  }
+  return fallback || original || name;
+}
+
+function needsEnglishPersonNameFallback(data = {}, language = "en") {
+  const normalizedLanguage = languageBase(language);
+  if (!normalizedLanguage || normalizedLanguage === "en") {
+    return false;
+  }
+  if (NATIVE_PERSON_NAME_LANGUAGES.has(normalizedLanguage)) {
+    return false;
+  }
+
+  const people = [
+    ...(Array.isArray(data?.credits?.cast) ? data.credits.cast : []),
+    ...(Array.isArray(data?.credits?.crew) ? data.credits.crew : []),
+    ...(Array.isArray(data?.created_by) ? data.created_by : [])
+  ];
+  return people.some((person) => {
+    const name = String(person?.name || "").trim();
+    const original = String(person?.original_name || "").trim();
+    return Boolean(
+      name && containsCjkOrHangul(name) && (!original || containsCjkOrHangul(original))
+    );
+  });
+}
+
+function addEnglishPersonNames(target, people = []) {
+  (Array.isArray(people) ? people : []).forEach((person) => {
+    const id = String(person?.id || "").trim();
+    const name = String(person?.name || "").trim();
+    if (id && name) {
+      target.set(id, name);
+    }
+  });
+}
+
+async function fetchEnglishPersonNames({ type, tmdbId, apiKey, data, language } = {}) {
+  if (!needsEnglishPersonNameFallback(data, language)) {
+    return new Map();
+  }
+
+  try {
+    const params = `api_key=${encodeURIComponent(apiKey)}&language=${encodeURIComponent(TMDB_ENGLISH_CREDIT_LANGUAGE)}&append_to_response=credits`;
+    const url = `${TMDB_BASE_URL}/${type}/${encodeURIComponent(String(tmdbId))}?${params}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      return new Map();
+    }
+    const englishData = await response.json();
+    const names = new Map();
+    addEnglishPersonNames(names, englishData?.credits?.cast);
+    addEnglishPersonNames(names, englishData?.credits?.crew);
+    addEnglishPersonNames(names, englishData?.created_by);
+    return names;
+  } catch (error) {
+    console.warn("TMDB English person-name fallback failed", error);
+    return new Map();
+  }
+}
+
+function resolveCreditEntries(items, englishNames, language) {
+  if (!Array.isArray(items)) {
+    return items;
+  }
+  return items.map((item) => {
+    const name = resolvePersonName({
+      localizedName: item?.name,
+      originalName: item?.original_name,
+      fallbackEnglishName: englishNames.get(String(item?.id || "")),
+      preferredLanguage: language
+    });
+    return name && name !== item?.name ? { ...item, name } : item;
+  });
+}
+
+function resolveCredits(credits, englishNames, language) {
+  if (!credits || typeof credits !== "object") {
+    return credits || null;
+  }
+  return {
+    ...credits,
+    ...(Array.isArray(credits.cast)
+      ? { cast: resolveCreditEntries(credits.cast, englishNames, language) }
+      : {}),
+    ...(Array.isArray(credits.crew)
+      ? { crew: resolveCreditEntries(credits.crew, englishNames, language) }
+      : {})
+  };
 }
 
 function toImageUrl(path, kind = "backdrop") {
@@ -367,6 +510,14 @@ export const TmdbMetadataService = {
     }
 
     const data = await response.json();
+    const englishPersonNames = await fetchEnglishPersonNames({
+      type,
+      tmdbId,
+      apiKey,
+      data,
+      language: lang
+    });
+    const resolvedCredits = resolveCredits(data?.credits, englishPersonNames, lang);
     const logoPath = selectBestLocalizedLogoPath(data?.images?.logos, lang);
     const releaseYear =
       type === "tv"
@@ -416,7 +567,7 @@ export const TmdbMetadataService = {
       language: spokenLanguage?.iso_639_1 || spokenLanguage?.english_name || null,
       originalLanguage: data?.original_language || null,
       imdbId: data?.external_ids?.imdb_id || null,
-      credits: data.credits || null,
+      credits: resolvedCredits,
       companies,
       productionCompanies: companies,
       networks,

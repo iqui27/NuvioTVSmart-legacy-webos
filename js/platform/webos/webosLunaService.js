@@ -10,10 +10,15 @@ function getPalmServiceBridge() {
   return typeof globalThis.PalmServiceBridge === "function" ? globalThis.PalmServiceBridge : null;
 }
 
-function buildPalmServiceUrl(service, method) {
+function normalizeServiceUrl(service) {
   const normalizedService = String(service || "")
     .trim()
     .replace(/\/+$/, "");
+  return normalizedService ? `${normalizedService}/` : "";
+}
+
+function buildPalmServiceUrl(service, method) {
+  const normalizedService = normalizeServiceUrl(service).replace(/\/+$/, "");
   const normalizedMethod = String(method || "")
     .trim()
     .replace(/^\/+/, "");
@@ -47,7 +52,17 @@ export const WebOsLunaService = {
     return new Promise((resolve, reject) => {
       const request = getServiceRequest();
       if (request) {
-        request(String(service || "").trim(), {
+        const serviceUrl = normalizeServiceUrl(service);
+        if (!serviceUrl) {
+          reject({
+            returnValue: false,
+            errorCode: -1,
+            errorText: "Luna service URL unavailable"
+          });
+          return;
+        }
+
+        request(serviceUrl, {
           method: String(method || "").trim(),
           parameters: parameters && typeof parameters === "object" ? { ...parameters } : {},
           subscribe: Boolean(subscribe),
@@ -110,7 +125,16 @@ export const WebOsLunaService = {
   subscribe(service, { method = "", parameters = {}, onSuccess = null, onFailure = null } = {}) {
     const request = getServiceRequest();
     if (request) {
-      const handle = request(String(service || "").trim(), {
+      const serviceUrl = normalizeServiceUrl(service);
+      if (!serviceUrl) {
+        throw {
+          returnValue: false,
+          errorCode: -1,
+          errorText: "Luna service URL unavailable"
+        };
+      }
+
+      const handle = request(serviceUrl, {
         method: String(method || "").trim(),
         parameters: parameters && typeof parameters === "object" ? { ...parameters } : {},
         subscribe: true,

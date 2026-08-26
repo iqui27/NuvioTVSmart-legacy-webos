@@ -26,8 +26,9 @@ import {
   resetSyncBackoff
 } from "../sync/syncBackoffPolicy.js";
 
-const SYNC_INTERVAL_MS = 120000;
-const LIBRARY_SYNC_INTERVAL_MS = 240000;
+const FOREGROUND_ACTIVITY_PULL_DELAY_MS = 2500;
+const FOREGROUND_ACTIVITY_PULL_MIN_INTERVAL_MS = 2 * 60 * 1000;
+const PERIODIC_SURFACE_PULL_INTERVAL_MS = 15 * 60 * 1000;
 const ADDON_PUSH_DEBOUNCE_MS = 1000;
 const MAX_PULL_ATTEMPTS = 3;
 const FORCE_RESYNC_MIN_INTERVAL_MS = 30000;
@@ -110,6 +111,10 @@ export const StartupSyncService = {
   started: false,
   intervalId: null,
   libraryIntervalId: null,
+  foregroundPullTimer: null,
+  foregroundPullPromise: null,
+  lastForegroundPullKey: null,
+  lastForegroundPullAtMs: 0,
   inFlight: false,
   inFlightPromise: null,
   inFlightGeneration: 0,
@@ -194,6 +199,8 @@ export const StartupSyncService = {
     this.lastPulledKey = key;
     this.lastPulledIncludedProfileSettings = included;
     this.lastPulledAtMs = now;
+    this.lastForegroundPullKey = key;
+    this.lastForegroundPullAtMs = now;
     this.lastPullCompleted = true;
     LocalStore.set(STARTUP_SYNC_STATE_KEY, {
       ...readStartupSyncState(),
@@ -228,11 +235,8 @@ export const StartupSyncService = {
       return;
     }
     this.intervalId = setInterval(() => {
-      void this.requestWatchStateSyncNow();
-    }, SYNC_INTERVAL_MS);
-    this.libraryIntervalId = setInterval(() => {
-      void this.requestLibrarySyncNow();
-    }, LIBRARY_SYNC_INTERVAL_MS);
+      this.scheduleSurfacePull("periodic");
+    }, PERIODIC_SURFACE_PULL_INTERVAL_MS);
   },
 
   stop() {
@@ -244,6 +248,13 @@ export const StartupSyncService = {
     this.lastPulledIncludedProfileSettings = false;
     this.lastPulledAtMs = 0;
     this.lastPullCompleted = false;
+    this.lastForegroundPullKey = null;
+    this.lastForegroundPullAtMs = 0;
+    if (this.foregroundPullTimer) {
+      clearTimeout(this.foregroundPullTimer);
+      this.foregroundPullTimer = null;
+    }
+    this.foregroundPullPromise = null;
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
@@ -278,6 +289,72 @@ export const StartupSyncService = {
     }
     syncPullCompletedListeners.add(listener);
     return () => syncPullCompletedListeners.delete(listener);
+  },
+
+  scheduleSurfacePull(reason = "foreground", delayMs = 0, minIntervalMs = 0, force = false) {
+    if (!this.started || !this.profileScopedSyncEnabled || !AuthManager.isAuthenticated) {
+      return false;
+    }
+    const profileId = ProfileManager.getActiveProfileId();
+    const key = currentSyncKey(profileId);
+    const now = Date.now();
+    if (this.inFlightPromise || this.foregroundPullTimer || this.foregroundPullPromise) {
+      return false;
+    }
+    if (
+      !force &&
+      this.lastForegroundPullKey === key &&
+      this.lastForegroundPullAtMs > 0 &&
+      now >= this.lastForegroundPullAtMs &&
+      now - this.lastForegroundPullAtMs < minIntervalMs
+    ) {
+      return false;
+    }
+
+    this.foregroundPullTimer = setTimeout(
+      () => {
+        this.foregroundPullTimer = null;
+        if (!this.started || !this.profileScopedSyncEnabled || !AuthManager.isAuthenticated) {
+          return;
+        }
+        if (this.inFlightPromise) {
+          return;
+        }
+        let foregroundPullPromise = null;
+        foregroundPullPromise = Promise.all([
+          this.requestWatchStateSyncNow(),
+          this.requestLibrarySyncNow()
+        ])
+          .then(([watchSucceeded, librarySucceeded]) => {
+            if (watchSucceeded && librarySucceeded) {
+              this.lastForegroundPullKey = key;
+              this.lastForegroundPullAtMs = Date.now();
+            }
+            return Boolean(watchSucceeded && librarySucceeded);
+          })
+          .catch((error) => {
+            console.warn(`Startup sync ${reason} surface pull failed`, error);
+            return false;
+          })
+          .finally(() => {
+            if (this.foregroundPullPromise === foregroundPullPromise) {
+              this.foregroundPullPromise = null;
+            }
+          });
+        this.foregroundPullPromise = foregroundPullPromise;
+      },
+      Math.max(0, Number(delayMs) || 0)
+    );
+    return true;
+  },
+
+  requestForegroundSync(force = false) {
+    return this.scheduleSurfacePull(
+      "foreground",
+      force ? 0 : FOREGROUND_ACTIVITY_PULL_DELAY_MS,
+      force ? 0 : FOREGROUND_ACTIVITY_PULL_MIN_INTERVAL_MS,
+      force
+    );
   },
 
   async requestSyncNow({
@@ -529,6 +606,9 @@ export const StartupSyncService = {
         const watchedResult = await runSurface("periodic watched items", () =>
           WatchedItemsSyncService.pull(profileId)
         );
+        if (!watchedResult.ok) {
+          return false;
+        }
         if (
           watchedResult.ok &&
           WatchedItemsSyncService.getLastPullHadUnsynced?.() &&
@@ -545,6 +625,9 @@ export const StartupSyncService = {
           const progressResult = await runSurface("periodic watch progress", () =>
             WatchProgressSyncService.pull(profileId)
           );
+          if (!progressResult.ok) {
+            return false;
+          }
           if (
             progressResult.ok &&
             WatchProgressSyncService.getLastPullHadUnsynced?.() &&
@@ -593,10 +676,13 @@ export const StartupSyncService = {
         if (!this.isCurrentProfile(profileId, profileKey)) {
           return false;
         }
-        await Promise.all([
+        const [addonsResult, savedLibraryResult] = await Promise.all([
           runSurface("periodic addons", () => LibrarySyncService.pull()),
           runSurface("periodic saved library", () => SavedLibrarySyncService.pull(profileId))
         ]);
+        if (!addonsResult.ok || !savedLibraryResult.ok) {
+          return false;
+        }
         if (isSyncBackoffActive()) {
           this.scheduleBackoffRetry();
           return false;

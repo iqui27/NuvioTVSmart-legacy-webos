@@ -105,7 +105,12 @@ function itemLabel(item) {
 }
 
 function syncSidebarStateClasses(container) {
-  const root = container?.closest?.(".home-shell, .settings-shell, .library-shell") || container;
+  const rootSelector = ".home-shell, .settings-shell, .library-shell";
+  const root =
+    (container?.matches?.(rootSelector) && container) ||
+    container?.closest?.(rootSelector) ||
+    container?.querySelector?.(rootSelector) ||
+    container;
   if (!root?.classList) {
     return;
   }

@@ -2,6 +2,8 @@ import { safeApiCall } from "../../core/network/safeApiCall.js";
 import { addonRepository } from "./addonRepository.js";
 import { MetaApi } from "../remote/api/metaApi.js";
 
+const INSTALLED_ADDONS_WAIT_MS = 750;
+
 function normalizeDisplayText(value) {
   return String(value ?? "")
     .replace(/\\'/g, "'")
@@ -16,22 +18,38 @@ class MetaRepository {
   }
 
   async getMeta(addonBaseUrl, type, id) {
-    // Direct addon lookups already have an addon-specific contract. Preserve
-    // the requested type here; the all-addons path selects the canonical type
-    // only when the candidate does not advertise the requested one.
-    const normalizedType = String(type || "").trim();
+    const requestedType = String(type || "").trim();
     const normalizedId = String(id || "").trim();
-    const cacheKey = `${addonRepository.canonicalizeUrl(addonBaseUrl)}:${normalizedType}:${normalizedId}`;
+    const inferredType = this.inferCanonicalType(requestedType, normalizedId);
+    const addonKey = addonRepository.canonicalizeUrl(addonBaseUrl);
+    const probeTypes = [requestedType, inferredType].filter(
+      (candidate, index, values) =>
+        candidate &&
+        values.findIndex((value) => value.toLowerCase() === candidate.toLowerCase()) === index
+    );
+    for (const probeType of probeTypes) {
+      const probeKey = `${addonKey}:${probeType}:${normalizedId}`;
+      if (this.metaCache.has(probeKey)) {
+        return { status: "success", data: this.metaCache.get(probeKey) };
+      }
+    }
+
+    const effectiveType = await this.resolveDirectMetaType(
+      addonBaseUrl,
+      requestedType,
+      inferredType,
+      normalizedId
+    );
+    const cacheKey = `${addonKey}:${effectiveType}:${normalizedId}`;
     if (this.metaCache.has(cacheKey)) {
       return { status: "success", data: this.metaCache.get(cacheKey) };
     }
-
     if (this.inFlightMeta.has(cacheKey)) {
       return this.inFlightMeta.get(cacheKey);
     }
 
     const request = (async () => {
-      const url = this.buildMetaUrl(addonBaseUrl, normalizedType, normalizedId);
+      const url = this.buildMetaUrl(addonBaseUrl, effectiveType, normalizedId);
       const result = await safeApiCall(() => MetaApi.getMeta(url));
       if (result.status !== "success") {
         return result;
@@ -42,7 +60,11 @@ class MetaRepository {
         return { status: "error", message: "Meta not found", code: 404 };
       }
 
-      this.metaCache.set(cacheKey, meta);
+      [effectiveType, requestedType, inferredType].forEach((cacheType) => {
+        if (cacheType) {
+          this.metaCache.set(`${addonKey}:${cacheType}:${normalizedId}`, meta);
+        }
+      });
       return { status: "success", data: meta };
     })();
 
@@ -57,7 +79,7 @@ class MetaRepository {
   async getMetaFromAllAddons(type, id) {
     const requestedType = String(type || "").trim();
     const inferredType = this.inferCanonicalType(requestedType, id);
-    const cacheKey = `all:${requestedType}:${inferredType}:${String(id || "").trim()}`;
+    const cacheKey = `all:${inferredType.toLowerCase()}:${String(id || "").trim()}`;
     if (this.metaCache.has(cacheKey)) {
       return { status: "success", data: this.metaCache.get(cacheKey) };
     }
@@ -166,6 +188,40 @@ class MetaRepository {
       queryStart >= 0 ? cleanBaseUrl.slice(0, queryStart).replace(/\/+$/, "") : cleanBaseUrl;
     const baseQuery = queryStart >= 0 ? cleanBaseUrl.slice(queryStart) : "";
     return `${basePath}/meta/${this.encode(type)}/${this.encode(id)}.json${baseQuery}`;
+  }
+
+  async resolveDirectMetaType(addonBaseUrl, requestedType, inferredType, id) {
+    const candidates = [requestedType, inferredType].filter(
+      (candidate, index, values) =>
+        candidate &&
+        values.findIndex((value) => value.toLowerCase() === candidate.toLowerCase()) === index
+    );
+    if (!candidates.length) {
+      return requestedType;
+    }
+    try {
+      const addons = await addonRepository.getInstalledAddons({
+        timeoutMs: INSTALLED_ADDONS_WAIT_MS
+      });
+      const target = addonRepository.canonicalizeUrl(addonBaseUrl);
+      const addon = addons.find(
+        (entry) => addonRepository.canonicalizeUrl(entry?.baseUrl) === target
+      );
+      if (!addon) {
+        return requestedType;
+      }
+      for (const candidate of candidates) {
+        const supported = addonRepository.resolveResourceRequestType(addon, "meta", candidate, id, {
+          caseInsensitive: true
+        });
+        if (supported) {
+          return supported;
+        }
+      }
+    } catch (_) {
+      // A manifest lookup must not prevent the direct requested-type fallback.
+    }
+    return requestedType;
   }
 
   inferCanonicalType(type, id) {

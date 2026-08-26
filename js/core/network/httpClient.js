@@ -3,6 +3,98 @@ import { AuthManager } from "../auth/authManager.js";
 import { fetchViaWebOsSupabaseProxy } from "../../platform/webos/webosSupabaseProxy.js";
 
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 60_000;
+const BACKEND_RETRY_MAX_DELAY_MS = 30_000;
+const BACKEND_RETRY_JITTER_MS = 1_000;
+const SAFE_BACKEND_READ_RPCS = new Set([
+  "get_avatar_catalog",
+  "get_member_profile_avatar_catalog",
+  "get_member_profile_background_catalog",
+  "get_my_member_access",
+  "get_my_membership_overview",
+  "get_sync_code",
+  "get_sync_overview",
+  "get_sync_owner"
+]);
+let backendCooldownUntilMs = 0;
+
+function isSupabaseBackendRequest(url) {
+  return /\/(?:rest\/v1|storage\/v1)\//i.test(String(url || ""));
+}
+
+function isSafeBackendRetryRequest(url, method) {
+  if (!isSupabaseBackendRequest(url)) {
+    return false;
+  }
+  if (method === "GET" || method === "HEAD") {
+    return true;
+  }
+  if (method !== "POST") {
+    return false;
+  }
+  const rpcName = String(url || "")
+    .split("/rpc/")[1]
+    ?.split(/[/?#]/)[0]
+    ?.toLowerCase();
+  return Boolean(
+    rpcName &&
+    (rpcName.startsWith("sync_pull_") ||
+      rpcName.startsWith("sync_get_") ||
+      SAFE_BACKEND_READ_RPCS.has(rpcName))
+  );
+}
+
+function retryAfterDelayMs(headerValue, nowMs = Date.now()) {
+  const value = String(headerValue || "").trim();
+  if (!value) {
+    return null;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.max(0, Math.trunc(seconds * 1000));
+  }
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - nowMs) : null;
+}
+
+function recordBackendCooldown(response) {
+  const status = Number(response?.status || 0);
+  const retryAfter = response?.headers?.get?.("retry-after") || "";
+  if (status !== 429 && !(status === 503 && retryAfter)) {
+    return;
+  }
+  const delayMs = retryAfterDelayMs(retryAfter) ?? 1000;
+  backendCooldownUntilMs = Math.max(backendCooldownUntilMs, Date.now() + delayMs);
+}
+
+async function waitForBackendCooldown() {
+  while (backendCooldownUntilMs > Date.now()) {
+    await new Promise((resolve) => setTimeout(resolve, backendCooldownUntilMs - Date.now()));
+  }
+}
+
+async function fetchWithBackendRetry(url, fetchInit, method) {
+  const safeRetry = isSafeBackendRetryRequest(url, method);
+  await waitForBackendCooldown();
+  let response =
+    (await fetchViaWebOsSupabaseProxy(url, fetchInit)) || (await fetch(url, fetchInit));
+  recordBackendCooldown(response);
+
+  if (safeRetry && [429, 503].includes(Number(response?.status || 0))) {
+    const headerDelay = retryAfterDelayMs(response?.headers?.get?.("retry-after"));
+    const fallbackDelay = Math.min(BACKEND_RETRY_MAX_DELAY_MS, 1000);
+    const delayMs = Math.min(
+      BACKEND_RETRY_MAX_DELAY_MS + BACKEND_RETRY_JITTER_MS,
+      (headerDelay ?? fallbackDelay) + Math.floor(Math.random() * (BACKEND_RETRY_JITTER_MS + 1))
+    );
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    await waitForBackendCooldown();
+    response = (await fetchViaWebOsSupabaseProxy(url, fetchInit)) || (await fetch(url, fetchInit));
+    recordBackendCooldown(response);
+  }
+  return response;
+}
 
 function toHeaderObject(headers) {
   if (!headers) {
@@ -120,8 +212,7 @@ export async function httpRequest(url, options = {}) {
         ...(requestSignal ? { signal: requestSignal } : {})
       };
 
-      let response =
-        (await fetchViaWebOsSupabaseProxy(url, fetchInit)) || (await fetch(url, fetchInit));
+      let response = await fetchWithBackendRetry(url, fetchInit, method);
 
       if (response.status === 401 && includeSessionAuth && SessionStore.refreshToken) {
         const refreshed = await AuthManager.refreshSessionIfNeeded({ force: true });
@@ -135,8 +226,7 @@ export async function httpRequest(url, options = {}) {
               Authorization: `Bearer ${SessionStore.accessToken}`
             }
           };
-          response =
-            (await fetchViaWebOsSupabaseProxy(url, retryInit)) || (await fetch(url, retryInit));
+          response = await fetchWithBackendRetry(url, retryInit, method);
         }
       }
 

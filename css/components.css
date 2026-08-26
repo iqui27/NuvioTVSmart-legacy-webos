@@ -7479,6 +7479,11 @@ button:focus-visible {
   padding-left: var(--settings-marquee-gap, 32px);
 }
 
+.settings-nav-label.is-marquee-active[dir="rtl"]::after {
+  padding-left: 0;
+  padding-right: var(--settings-marquee-gap, 32px);
+}
+
 .settings-nav-label-wrap {
   min-width: 0;
   flex: 1 1 auto;
@@ -15913,6 +15918,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.series-insight-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .series-insight-tab {
@@ -15922,6 +15933,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   font-size: 22px;
   font-weight: 700;
   padding: 0;
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
@@ -15929,6 +15941,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   color: rgba(220, 231, 244, 0.62);
   font-size: 22px;
   font-weight: 700;
+  flex: 0 0 auto;
 }
 
 .series-insight-tab.selected {
@@ -16860,6 +16873,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   font-size: var(--tv-secondary-text);
   line-height: 1.4;
   color: var(--detail-text-secondary);
+}
+
+.detail-meta-row .detail-meta-genres {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .detail-meta-row.secondary {
@@ -17898,6 +17919,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .stream-route-list {
   height: 100%;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 8px 8px 10px;
   box-sizing: border-box;
   scrollbar-width: none;

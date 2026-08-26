@@ -5,18 +5,32 @@ import { createStorageAssetUrl, revokeStorageAssetUrl } from "./storageAsset.js"
 
 const AVATAR_BUCKET = "avatars";
 const MEMBER_AVATAR_BUCKET = "membership-profile-avatars";
+const AVATAR_CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
 let cachedStandardCatalog = null;
 let standardCatalogPromise = null;
 let standardCatalogRefreshPromise = null;
 let standardCatalogHydrated = false;
+let lastStandardRefreshAtMs = 0;
 let cachedMemberCatalog = null;
 let memberCatalogPromise = null;
 let memberCatalogRefreshPromise = null;
 let memberCatalogHydrationPromise = null;
 let memberCatalogHydrated = false;
+let lastMemberRefreshAtMs = 0;
 let memberCacheGeneration = 0;
 const memberObjectUrls = new Set();
+
+export function isAvatarCatalogRefreshDue(
+  lastRefreshAtMs,
+  nowMs = Date.now(),
+  intervalMs = AVATAR_CATALOG_REFRESH_INTERVAL_MS
+) {
+  const last = Number(lastRefreshAtMs || 0);
+  const now = Number(nowMs || 0);
+  const interval = Math.max(0, Number(intervalMs) || 0);
+  return last <= 0 || now < last || now - last >= interval;
+}
 
 function avatarImageUrl(storagePath = "") {
   const normalizedPath = String(storagePath || "")
@@ -163,6 +177,7 @@ async function fetchStandardAvatarCatalog() {
   cachedStandardCatalog = rows
     .map((row) => mapAvatar(row))
     .filter((avatar) => avatar.id && avatar.imageUrl);
+  lastStandardRefreshAtMs = Date.now();
   saveStoredCatalog({ standardItems: rows, standardLoaded: true });
   return cachedStandardCatalog;
 }
@@ -186,7 +201,11 @@ async function loadStandardCatalog() {
 }
 
 function refreshStandardCatalogInBackground() {
-  if (standardCatalogRefreshPromise || standardCatalogPromise) {
+  if (
+    standardCatalogRefreshPromise ||
+    standardCatalogPromise ||
+    !isAvatarCatalogRefreshDue(lastStandardRefreshAtMs)
+  ) {
     return;
   }
   let requestPromise;
@@ -218,6 +237,7 @@ async function fetchMemberAvatarCatalog() {
       return [];
     }
     cachedMemberCatalog = loaded.filter(Boolean);
+    lastMemberRefreshAtMs = Date.now();
     memberCatalogHydrated = true;
     return cachedMemberCatalog;
   } catch (error) {
@@ -256,7 +276,11 @@ async function loadMemberCatalog() {
 }
 
 function refreshMemberCatalogInBackground() {
-  if (memberCatalogRefreshPromise || memberCatalogPromise) {
+  if (
+    memberCatalogRefreshPromise ||
+    memberCatalogPromise ||
+    !isAvatarCatalogRefreshDue(lastMemberRefreshAtMs)
+  ) {
     return;
   }
   let requestPromise;
@@ -316,11 +340,13 @@ export const AvatarRepository = {
     standardCatalogPromise = null;
     standardCatalogRefreshPromise = null;
     standardCatalogHydrated = false;
+    lastStandardRefreshAtMs = 0;
     cachedMemberCatalog = null;
     memberCatalogPromise = null;
     memberCatalogRefreshPromise = null;
     memberCatalogHydrationPromise = null;
     memberCatalogHydrated = false;
+    lastMemberRefreshAtMs = 0;
     memberCacheGeneration += 1;
     memberObjectUrls.forEach((url) => revokeStorageAssetUrl(url));
     memberObjectUrls.clear();

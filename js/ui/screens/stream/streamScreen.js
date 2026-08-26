@@ -798,6 +798,9 @@ export const StreamScreen = {
   },
 
   shouldUseStreamVirtualization(streams = []) {
+    // Keep ordinary-sized Tizen lists on the stable eager path. The Android
+    // LazyColumn equivalent is still used for genuinely long lists, where a
+    // full DOM would make every D-pad layout pass scale with result count.
     return Array.isArray(streams) && streams.length > STREAM_VIRTUALIZATION_THRESHOLD;
   },
 
@@ -1005,8 +1008,9 @@ export const StreamScreen = {
     const streams = this.getFilteredStreams();
     this.streamVirtualItems = streams;
     const model = this.getStreamVirtualModel(streams);
+    const previousScrollTop = this.getListScrollTop(list);
     const virtualWindow = getStreamVirtualWindow(model, {
-      scrollTop: this.getListScrollTop(list),
+      scrollTop: previousScrollTop,
       viewportHeight: this.getStreamVirtualViewportHeight(list),
       overscanPx: STREAM_VIRTUALIZATION_OVERSCAN_PX,
       minWindow: STREAM_VIRTUALIZATION_MIN_WINDOW,
@@ -1074,6 +1078,13 @@ export const StreamScreen = {
         this.focusElement(target, { ensureVisible: false });
       }
     }
+
+    // Rebinding the virtual window replaces the focused DOM subtree. Older TV
+    // Chromium builds may apply native scroll anchoring (or focus scrolling)
+    // after that replacement and move the list far beyond the logical row.
+    // Restore the logical position after focus has been restored so the
+    // virtualizer remains an implementation detail, like Android LazyColumn.
+    this.restoreStreamVirtualScrollPosition(list, previousScrollTop);
     return true;
   },
 
@@ -2425,6 +2436,40 @@ export const StreamScreen = {
     listNode.scrollTop = requested;
     this.listScrollTop = requested;
     this.requestStreamVirtualSync();
+  },
+
+  restoreStreamVirtualScrollPosition(listNode, scrollTop) {
+    if (!listNode) {
+      return;
+    }
+    const requestedValue = Number(scrollTop || 0);
+    const requested = Number.isFinite(requestedValue) ? Math.max(0, requestedValue) : 0;
+    if (listNode.classList?.contains("manual-scroll")) {
+      this.applyManualListScroll(listNode, requested);
+      return;
+    }
+    try {
+      listNode.scrollTop = requested;
+    } catch (_) {
+      // Keep the logical value when an older TV engine rejects the assignment.
+    }
+    const applied = Number(listNode.scrollTop);
+    this.listScrollTop = Number.isFinite(applied) ? applied : requested;
+    if (
+      Number.isFinite(applied) &&
+      Math.abs(applied - requested) > 1 &&
+      typeof listNode.scrollTo === "function"
+    ) {
+      try {
+        listNode.scrollTo(0, requested);
+        const afterScrollTo = Number(listNode.scrollTop);
+        if (Number.isFinite(afterScrollTo)) {
+          this.listScrollTop = afterScrollTo;
+        }
+      } catch (_) {
+        // Direct scrollTop assignment above remains the safe fallback.
+      }
+    }
   },
 
   ensureListItemVisible(listNode, target) {

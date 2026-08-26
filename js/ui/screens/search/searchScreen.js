@@ -833,7 +833,7 @@ export const SearchScreen = {
                 ${item.poster ? `<img class="search-result-poster" src="${item.poster}" alt="${item.name || "content"}" loading="lazy" decoding="async" />` : `<div class="search-result-poster placeholder"></div>`}
                 ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
               </div>
-              <div class="search-result-name">${item.name || "Untitled"}</div>
+              <div class="search-result-name" dir="auto">${item.name || "Untitled"}</div>
               <div class="search-result-date">${formatReleaseYear(item)}</div>
             </article>
           `
@@ -1563,6 +1563,11 @@ export const SearchScreen = {
       if (direction === "down") {
         const firstRow = nav.rows?.[0] || [];
         const target = this.resolvePreferredResultsNode(firstRow, col);
+        if (target && current?.id === "searchInput") {
+          // Match Android TV: leaving the query field with DPAD_DOWN must dismiss the
+          // platform IME before focus moves to the first result row.
+          current.blur?.();
+        }
         return this.focusNode(current, target) || true;
       }
       if (direction === "up") {

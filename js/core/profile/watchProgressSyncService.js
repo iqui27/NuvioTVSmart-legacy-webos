@@ -459,8 +459,7 @@ function buildPushSignature(rows = []) {
       Number(row.season || 0),
       Number(row.episode || 0),
       Number(row.position || 0),
-      Number(row.duration || 0),
-      Number(row.last_watched || 0)
+      Number(row.duration || 0)
     ])
   );
 }
