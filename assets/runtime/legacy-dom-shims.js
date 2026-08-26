@@ -167,4 +167,29 @@
       };
     }
   }
+
+  // `Node.isConnected` chegou no Chrome 51; o Chromium 38 do webOS 3 devolve
+  // `undefined`. Nao e detalhe: o app consulta `node.isConnected` em 66 pontos,
+  // e `undefined` e falso — entao TODO no e tratado como desconectado. A vitima
+  // mais visivel e a hidratacao de imagens adiadas da home
+  // (hydrateHomeLazyImages descarta cada fileira e cada <img> por
+  // `!row.isConnected` / `!image.isConnected`), o que deixava os thumbnails do
+  // continue watching permanentemente em branco no webOS 3: sao as unicas
+  // imagens da primeira dobra que nascem com `data-src` em vez de `src`.
+  // Getter no prototype, como o polyfill de referencia do DOM spec.
+  if (window.Node && !("isConnected" in window.Node.prototype)) {
+    Object.defineProperty(window.Node.prototype, "isConnected", {
+      configurable: true,
+      enumerable: true,
+      get: function isConnected() {
+        return (
+          !this.ownerDocument ||
+          !(
+            this.ownerDocument.compareDocumentPosition(this) &
+            this.DOCUMENT_POSITION_DISCONNECTED
+          )
+        );
+      }
+    });
+  }
 })(window);

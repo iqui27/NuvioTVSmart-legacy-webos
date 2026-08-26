@@ -42,7 +42,10 @@ export function toLegacyRgbChannels(hex, fallback = "255, 255, 255") {
  * Aplica AMOLED sobre uma paleta. Devolve um objeto novo — nao muta a entrada,
  * porque a paleta vem de ThemeColors e e compartilhada.
  */
-export function applyAmoledOverrides(colors, { amoledMode = false, amoledSurfacesMode = false } = {}) {
+export function applyAmoledOverrides(
+  colors,
+  { amoledMode = false, amoledSurfacesMode = false } = {}
+) {
   if (!amoledMode) {
     return { ...colors };
   }

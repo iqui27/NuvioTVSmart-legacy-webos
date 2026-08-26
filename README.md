@@ -53,13 +53,13 @@
 > Taken with `globalThis.__NUVIO_DEBUG_HOME_PERF__ = true`, which turns on the
 > per-stage probes.
 >
-> | stage                                  | before        | now    |
-> | -------------------------------------- | ------------- | ------ |
-> | `installed-addons` (addon manifests)   | 906ms         | 26ms   |
-> | profile activation, six local steps    | not attributed| 19ms   |
-> | `Router.navigate` → home mounted       | —             | 1440ms |
-> | Enter on the profile → home on screen  | —             | 1459ms |
-> | `startup-sync-await`                   | 2641ms        | gone   |
+> | stage                                 | before         | now    |
+> | ------------------------------------- | -------------- | ------ |
+> | `installed-addons` (addon manifests)  | 906ms          | 26ms   |
+> | profile activation, six local steps   | not attributed | 19ms   |
+> | `Router.navigate` → home mounted      | —              | 1440ms |
+> | Enter on the profile → home on screen | —              | 1459ms |
+> | `startup-sync-await`                  | 2641ms         | gone   |
 >
 > The manifest cache is upstream's, and it is a clear win — that row is why this
 > fork takes their implementation instead of ours. The `startup-sync-await` stage
@@ -68,7 +68,7 @@
 >
 > Two numbers that are **not** bottlenecks, measured so nobody chases them:
 > `watch-progress-recent` (3082ms) and `watch-progress-all` (2437ms) run inside
-> the startup-sync gate and only appear in the stage report about 6s *after* the
+> the startup-sync gate and only appear in the stage report about 6s _after_ the
 > first paint — they are network wait off the critical path, not CPU.
 >
 > ### Installing on an older LG
@@ -111,11 +111,11 @@
 > Three checks run in CI, and each one exists because the matching defect reached
 > the TV without any build step noticing:
 >
-> | command                     | catches                                                                                            |
-> | --------------------------- | -------------------------------------------------------------------------------------------------- |
-> | `npm run check:no-undef`    | identifier used and never declared — esbuild bundles it happily, `ReferenceError` fires at runtime |
-> | `npm run check:legacy-regex`| post-ES2017 regex in `dist/`; a literal with an unsupported flag becomes `new RegExp(src, flags)`  |
-> | `npm run check:legacy-css`  | fallback coverage report (informational — it exits 0 on purpose)                                    |
+> | command                      | catches                                                                                            |
+> | ---------------------------- | -------------------------------------------------------------------------------------------------- |
+> | `npm run check:no-undef`     | identifier used and never declared — esbuild bundles it happily, `ReferenceError` fires at runtime |
+> | `npm run check:legacy-regex` | post-ES2017 regex in `dist/`; a literal with an unsupported flag becomes `new RegExp(src, flags)`  |
+> | `npm run check:legacy-css`   | fallback coverage report (informational — it exits 0 on purpose)                                   |
 >
 > The first one matters more than it sounds: `Router` catches a screen mount
 > failure and downgrades it to `console.warn`, so an undeclared identifier in the

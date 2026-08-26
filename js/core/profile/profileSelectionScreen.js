@@ -46,7 +46,8 @@ const PROFILE_PIN_TEXT = {
   removed: (name) => `PIN lock removed for ${name}.`,
   saveFailed: "Could not save PIN. Try again.",
   verifyFailed: "Could not verify PIN. Try again.",
-  activateFailed: "Profile unlocked, but the app failed to start. Details in Settings > About > Debug console.",
+  activateFailed:
+    "Profile unlocked, but the app failed to start. Details in Settings > About > Debug console.",
   invalidPin: "Invalid PIN. Try again.",
   incorrectCurrent: "Current PIN is incorrect.",
   lockedRetry: (seconds) => `Profile is locked. Try again in ${seconds}s.`
@@ -939,19 +940,7 @@ export const ProfileSelectionScreen = {
       .join("");
   },
 
-  renderPinOverlay() {
-    const state = this.getRenderedPinOverlayState();
-    const profile = this.getPinOverlayProfile();
-    if (!state || !profile) {
-      return "";
-    }
-    const phaseClass =
-      this.pinOverlayPhase === "closing"
-        ? " is-closing"
-        : this.pinOverlayPhase === "opening"
-          ? " is-opening"
-          : " is-open";
-
+  getPinOverlayTexts(state, profile) {
     const isSingleEntryMode = state.type !== "set";
     let heading = PROFILE_PIN_TEXT.headingSet(profile.name);
     let support = PROFILE_PIN_TEXT.supportSet;
@@ -975,6 +964,23 @@ export const ProfileSelectionScreen = {
     } else if (this.isPinOperationInProgress) {
       support = isSingleEntryMode ? PROFILE_PIN_TEXT.verifying : PROFILE_PIN_TEXT.saving;
     }
+    return { heading, support, isSingleEntryMode };
+  },
+
+  renderPinOverlay() {
+    const state = this.getRenderedPinOverlayState();
+    const profile = this.getPinOverlayProfile();
+    if (!state || !profile) {
+      return "";
+    }
+    const phaseClass =
+      this.pinOverlayPhase === "closing"
+        ? " is-closing"
+        : this.pinOverlayPhase === "opening"
+          ? " is-opening"
+          : " is-open";
+
+    const { heading, support, isSingleEntryMode } = this.getPinOverlayTexts(state, profile);
 
     return `
       <div class="profile-pin-layer${phaseClass}">
@@ -1037,6 +1043,10 @@ export const ProfileSelectionScreen = {
       node.addEventListener("focus", () => this.handleFocusableFocus(node));
       node.addEventListener("click", async (event) => {
         event.stopPropagation();
+        if (this.shouldIgnoreKeyboardClick(node)) {
+          event.preventDefault();
+          return;
+        }
         await this.activatePinKey(node.dataset.pinKey);
       });
     });
@@ -1981,7 +1991,7 @@ export const ProfileSelectionScreen = {
     }
 
     this.isPinOperationInProgress = true;
-    this.render();
+    this.renderPinOverlayUpdate();
 
     if (state.type === "set") {
       const success = await ProfileSyncService.setProfilePin(profile.id, pin, state.currentPin);
@@ -1998,7 +2008,7 @@ export const ProfileSelectionScreen = {
       }
       this.pinOverlayError = PROFILE_PIN_TEXT.saveFailed;
       this.pinValue = "";
-      this.render();
+      this.renderPinOverlayUpdate();
       this.triggerPinShake();
       return;
     }
@@ -2018,7 +2028,7 @@ export const ProfileSelectionScreen = {
       }
       this.pinOverlayError = PROFILE_PIN_TEXT.incorrectCurrent;
       this.pinValue = "";
-      this.render();
+      this.renderPinOverlayUpdate();
       this.triggerPinShake();
       return;
     }
@@ -2028,7 +2038,7 @@ export const ProfileSelectionScreen = {
     if (!verification) {
       this.pinOverlayError = PROFILE_PIN_TEXT.verifyFailed;
       this.pinValue = "";
-      this.render();
+      this.renderPinOverlayUpdate();
       this.triggerPinShake();
       return;
     }
@@ -2037,7 +2047,7 @@ export const ProfileSelectionScreen = {
       if (state.type === "unlock") {
         this.pinOverlayError = "";
         this.isPinOperationInProgress = true;
-        this.render();
+        this.renderPinOverlayUpdate();
         try {
           await this.activateProfile(profile.id);
         } finally {
@@ -2058,7 +2068,7 @@ export const ProfileSelectionScreen = {
           ? PROFILE_PIN_TEXT.invalidPin
           : PROFILE_PIN_TEXT.incorrectCurrent;
     this.pinValue = "";
-    this.render();
+    this.renderPinOverlayUpdate();
     this.triggerPinShake();
   },
 
@@ -2079,7 +2089,7 @@ export const ProfileSelectionScreen = {
       this.pinValue = "";
       this.pinOverlayError = "";
       this.pinEntryStage = "confirm";
-      this.render();
+      this.renderPinOverlayUpdate();
       return;
     }
     if (this.pinDraftValue === this.pinValue) {
@@ -2090,8 +2100,46 @@ export const ProfileSelectionScreen = {
     this.pinDraftValue = "";
     this.pinEntryStage = "create";
     this.pinOverlayError = PROFILE_PIN_TEXT.mismatch;
-    this.render();
+    this.renderPinOverlayUpdate();
     this.triggerPinShake();
+  },
+
+  /**
+   * Atualiza o overlay de PIN sem reconstruir a tela inteira.
+   *
+   * Cada digito costumava passar por this.render(), que refaz o innerHTML do
+   * container completo (grade de perfis, avatares, fundo) e re-decodifica as
+   * imagens. Num SoC de 2016 isso custa centenas de ms por tecla e foi
+   * relatado como o menu de perfis "aparecendo por meio segundo" a cada OK no
+   * teclado do PIN. Aqui so os nos que mudam sao tocados: caixas, titulo e
+   * texto de suporte. O teclado permanece vivo, entao o foco nem se move.
+   * Devolve false quando o overlay nao esta montado (cai no render completo).
+   */
+  refreshPinOverlayInPlace() {
+    const state = this.getRenderedPinOverlayState();
+    const profile = this.getPinOverlayProfile();
+    const overlayRoot = this.container?.querySelector("[data-overlay-root='pin']");
+    if (!state || !profile || !overlayRoot) {
+      return false;
+    }
+    const boxRow = overlayRoot.querySelector("[data-role='pin-box-row']");
+    const supportNode = overlayRoot.querySelector(".profile-pin-support");
+    const headingNode = overlayRoot.querySelector(".profile-pin-heading");
+    if (!boxRow || !supportNode || !headingNode) {
+      return false;
+    }
+    const { heading, support } = this.getPinOverlayTexts(state, profile);
+    boxRow.innerHTML = this.renderPinBoxes();
+    headingNode.textContent = heading;
+    supportNode.textContent = support;
+    supportNode.classList.toggle("is-error", Boolean(this.pinOverlayError));
+    return true;
+  },
+
+  renderPinOverlayUpdate() {
+    if (!this.refreshPinOverlayInPlace()) {
+      this.render();
+    }
   },
 
   async activatePinKey(value) {
@@ -2103,7 +2151,7 @@ export const ProfileSelectionScreen = {
         this.pinValue = this.pinValue.slice(0, -1);
         this.pinOverlayError = "";
         this.pendingFocusKey = "pin:delete";
-        this.render();
+        this.renderPinOverlayUpdate();
       }
       return;
     }
@@ -2114,7 +2162,7 @@ export const ProfileSelectionScreen = {
     this.pinValue += digit;
     this.pinOverlayError = "";
     this.pendingFocusKey = `pin:${digit}`;
-    this.render();
+    this.renderPinOverlayUpdate();
     await this.handleCompletedPinEntry();
   },
 
@@ -2126,7 +2174,7 @@ export const ProfileSelectionScreen = {
       if (!this.isPinOperationInProgress && this.pinValue) {
         this.pinValue = this.pinValue.slice(0, -1);
         this.pinOverlayError = "";
-        this.render();
+        this.renderPinOverlayUpdate();
       }
       return true;
     }
@@ -2148,6 +2196,11 @@ export const ProfileSelectionScreen = {
         this.container?.querySelector(".profile-pin-key.focused") ||
         (document.activeElement?.matches?.(".profile-pin-key") ? document.activeElement : null);
       if (focused) {
+        // No webOS o OK pode chegar como keydown 13 E como click sintetico no
+        // botao focado. Sem este registro o mesmo digito entra duas vezes e um
+        // PIN correto vira um PIN errado de 4 digitos antes de o usuario
+        // terminar de digitar. Mesmo mecanismo dos demais botoes de overlay.
+        this.rememberKeyboardActivation(focused);
         await this.activatePinKey(focused.dataset.pinKey);
       }
       return true;
@@ -2159,7 +2212,7 @@ export const ProfileSelectionScreen = {
     event?.preventDefault?.();
     this.pinValue += digit;
     this.pinOverlayError = "";
-    this.render();
+    this.renderPinOverlayUpdate();
     await this.handleCompletedPinEntry();
     return true;
   },

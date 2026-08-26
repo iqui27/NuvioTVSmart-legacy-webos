@@ -2766,12 +2766,17 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
     focusedItemIndex = -1,
     expandFocusedPoster = false,
     rowItemLimit = HOME_MAX_ITEMS_PER_ROW_DEFAULT,
-    watchedTitleIds = null
+    watchedTitleIds = null,
+    // Deslocamento do indice quando `rows` e uma fatia appendada ao fim da
+    // lista ja montada (crescimento do teto no layout classic/grid). Sem ele o
+    // data-row-index recomecaria em 0 e o proximo crescimento nunca dispararia.
+    rowIndexOffset = 0
   } = options;
   const catalogSeeAllMap = new Map();
   const sectionsMarkup = [];
 
-  rows.forEach((rowData, rowIndex) => {
+  rows.forEach((rowData, rowIndexInSlice) => {
+    const rowIndex = rowIndexInSlice + rowIndexOffset;
     const isCollectionRow = rowData?.rowKind === "collection";
     const items = Array.isArray(rowData?.result?.data?.items) ? rowData.result.data.items : [];
     const isLoading = rowData?.result?.status === "loading";
@@ -9751,11 +9756,63 @@ export const HomeScreen = {
     // C9 com `requestBackgroundRender` no lugar disto: o foco saltava da fileira
     // 4 de volta para a 0 no meio da navegacao — exatamente o sintoma que o
     // testador da issue #1 relatou como "volta para a primeira linha".
-    if (!this.reconcileHomeCatalogRows()) {
+    if (!this.reconcileHomeCatalogRows() && !this.appendLegacyCatalogRows(montadas)) {
       this.requestBackgroundRender("row-ceiling-grow");
     } else {
       this.renderedMarkup = null;
     }
+    return true;
+  },
+
+  /**
+   * Crescimento append-only da janela nos layouts classic e grid.
+   *
+   * O reconciliador com chave so existe para o layout modern; nos demais o
+   * crescimento do teto caia em requestBackgroundRender — um render completo,
+   * que foi medido no C9 jogando o foco de volta para a fileira 0 no meio da
+   * navegacao (o "scrolling broken" da issue #1). Como o crescimento SO
+   * acrescenta fileiras ao fim da lista ja montada, basta appendar o markup
+   * novo em #homeCatalogRows: os nos vivos (e o foco) nao sao tocados.
+   */
+  appendLegacyCatalogRows(previousRowCount) {
+    if (this.layoutMode !== "classic" && this.layoutMode !== "grid") {
+      return false;
+    }
+    const host = this.container?.querySelector("#homeCatalogRows");
+    if (!host) {
+      return false;
+    }
+    const offset = Math.max(0, Number(previousRowCount) || 0);
+    const newRows = (this.rows || []).slice(offset);
+    if (!newRows.length) {
+      return true;
+    }
+    const focusedNode = this.getCurrentFocusedNode();
+    const payload = renderLegacyCatalogRowsMarkup(newRows, {
+      layoutMode: this.layoutMode,
+      showPosterLabels: this.layoutPrefs?.posterLabelsEnabled !== false,
+      showCatalogAddonName: this.layoutPrefs?.catalogAddonNameEnabled !== false,
+      showCatalogTypeSuffix: this.layoutPrefs?.catalogTypeSuffixEnabled !== false,
+      focusedRowKey: focusedNode ? String(focusedNode.dataset?.navRowKey || "") : "",
+      focusedItemIndex: -1,
+      expandFocusedPoster: false,
+      rowItemLimit: this.getRowItemLimit(),
+      watchedTitleIds: this.watchedTitleIds,
+      rowIndexOffset: offset
+    });
+    if (!payload.markup) {
+      return true;
+    }
+    host.insertAdjacentHTML("beforeend", payload.markup);
+    if (!(this.catalogSeeAllMap instanceof Map)) {
+      this.catalogSeeAllMap = new Map();
+    }
+    payload.catalogSeeAllMap.forEach((value, key) => {
+      this.catalogSeeAllMap.set(key, value);
+    });
+    this.invalidateNavigationModel();
+    this.buildNavigationModel();
+    this.scheduleHomeLazyImageHydration(null, { refreshIndex: true });
     return true;
   },
 

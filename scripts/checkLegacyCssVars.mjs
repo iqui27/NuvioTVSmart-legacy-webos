@@ -15,7 +15,9 @@ import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 const DIST_CSS = path.resolve("dist", "css");
 
 if (!compatibilityPolicy.webOsLegacyBabelTarget) {
-  console.log("css-vars: variante sem alvo legado (webOS 4) — custom properties sao suportadas, nada a checar");
+  console.log(
+    "css-vars: variante sem alvo legado (webOS 4) — custom properties sao suportadas, nada a checar"
+  );
   process.exit(0);
 }
 
@@ -43,7 +45,9 @@ for (const nome of fs.readdirSync(DIST_CSS)) {
 if (problemas.length > 0) {
   console.error("custom properties no dist da variante Chromium 38:");
   problemas.forEach((p) => console.error(`  ${p}`));
-  console.error("\nCada uma invalida a declaracao inteira no aparelho. Verifique o cssVarsInlinePlugin.");
+  console.error(
+    "\nCada uma invalida a declaracao inteira no aparelho. Verifique o cssVarsInlinePlugin."
+  );
   process.exit(1);
 }
 

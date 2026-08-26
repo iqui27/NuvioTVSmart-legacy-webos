@@ -22,7 +22,9 @@ const achados = [];
 for (const r of resultados) {
   for (const m of r.messages) {
     if (m.ruleId === "no-undef") {
-      achados.push(`${r.filePath.replace(process.cwd() + "/", "")}:${m.line}:${m.column} ${m.message}`);
+      achados.push(
+        `${r.filePath.replace(process.cwd() + "/", "")}:${m.line}:${m.column} ${m.message}`
+      );
     }
   }
 }

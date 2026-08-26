@@ -100,4 +100,27 @@ if (semJustificativa.length > 0) {
   process.exit(1);
 }
 
+// O eslint-plugin-compat enxerga chamadas e globais, nao LEITURA de
+// propriedade — `node.isConnected` (Chrome 51) passou batido por aqui e chegou
+// ao aparelho: no Chromium 38 devolve undefined, todo no e tratado como
+// desconectado e a hidratacao de imagens da home nunca acontece (thumbnails do
+// continue watching em branco, relato do webOS 3). Esta lista cobre o ponto
+// cego: propriedade usada no codigo cujo shim precisa existir no runtime.
+import { readFileSync } from "node:fs";
+const PROPRIEDADES_COM_SHIM_OBRIGATORIO = [
+  { propriedade: "isConnected", shimMarker: '"isConnected" in window.Node.prototype' }
+];
+const shims = readFileSync("assets/runtime/legacy-dom-shims.js", "utf8");
+const shimsFaltando = PROPRIEDADES_COM_SHIM_OBRIGATORIO.filter(
+  (entrada) => !shims.includes(entrada.shimMarker)
+);
+if (shimsFaltando.length > 0) {
+  console.error("\npropriedade(s) sem shim em assets/runtime/legacy-dom-shims.js:");
+  shimsFaltando.forEach((entrada) => console.error(`  ${entrada.propriedade}`));
+  process.exit(1);
+}
+console.log(
+  `propriedades com shim obrigatorio verificadas: ${PROPRIEDADES_COM_SHIM_OBRIGATORIO.map((e) => e.propriedade).join(", ")}`
+);
+
 console.log("\ntodas as APIs ausentes tem cobertura declarada");

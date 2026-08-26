@@ -33,7 +33,7 @@ const TOLERADAS = {
   "css-focus-within": "idem — fallback de seletor gerado",
   "css-has": "idem — fallback de seletor gerado",
   "css-appearance": "autoprefixer emite -webkit-appearance, que o 38 entende",
-  "multicolumn": "autoprefixer emite -webkit-column-*",
+  multicolumn: "autoprefixer emite -webkit-column-*",
   "css-logical-props":
     "`inset: 0` sempre acompanhado das longhands top/right/bottom/left, que o 38 usa",
   "css-overflow":
@@ -85,7 +85,9 @@ for (const nome of fs.readdirSync(DIST_CSS).filter((f) => f.endsWith(".css"))) {
 
 const desconhecidas = [...contagem.keys()].filter((f) => !(f in TOLERADAS));
 
-console.log(`css-support: alvo Chrome ${alvo}; ${contagem.size} feature(s) nao suportadas, todas justificadas?`);
+console.log(
+  `css-support: alvo Chrome ${alvo}; ${contagem.size} feature(s) nao suportadas, todas justificadas?`
+);
 [...contagem.entries()]
   .sort((a, b) => b[1] - a[1])
   .forEach(([f, n]) => {

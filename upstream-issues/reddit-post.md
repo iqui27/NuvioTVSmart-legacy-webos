@@ -8,6 +8,7 @@ custom ports", que é o que isto é. Sem ela o post entra na fila errada.
 platforms the official build dropped
 
 **Checado contra as regras do sub (2026-08-24):**
+
 - Regra 2 / política de addons: o texto não cita nenhum scraper de terceiros, nem
   debrid, nem link de conteúdo. Só o cliente, hardware e desempenho — que é
   explicitamente o que pertence ao sub.
@@ -29,7 +30,7 @@ I maintain a fork that lowers that floor, and it is now on the 0.3.42 base:
 To be clear about what this is: an **unofficial modified build**, not affiliated
 with the Nuvio authors. Everything good in it is theirs. Please star and support
 the original project — https://github.com/NuvioMedia/NuvioTVSmart — and report
-bugs to *my* repo, not theirs, unless you can reproduce them on the official
+bugs to _my_ repo, not theirs, unless you can reproduce them on the official
 build.
 
 ## What works on webOS 4.x
