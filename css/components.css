@@ -23674,3 +23674,29 @@ html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dial
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* Verificacao de PIN em andamento: a troca de texto para "Verifying…" sozinha
+   e imperceptivel numa TV, e o RPC de verificacao leva segundos (medido: ~11s
+   no caminho legitimo numa OLED65C9). O ponto pulsante da o sinal de vida que
+   faltava. Animacao so de opacity, que e composta na GPU. */
+.profile-pin-support.is-busy::before {
+  animation: profile-pin-busy-pulse 1s ease-in-out infinite;
+  background: currentColor;
+  border-radius: 50%;
+  content: "";
+  display: inline-block;
+  height: 10px;
+  margin-right: 10px;
+  vertical-align: middle;
+  width: 10px;
+}
+
+@keyframes profile-pin-busy-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}

@@ -990,7 +990,9 @@ export const ProfileSelectionScreen = {
           <div class="profile-pin-content">
             <div class="profile-pin-heading">${escapeHtml(heading)}</div>
             <div class="profile-pin-box-row" data-role="pin-box-row">${this.renderPinBoxes()}</div>
-            <div class="profile-pin-support${this.pinOverlayError ? " is-error" : ""}">${escapeHtml(support)}</div>
+            <div class="profile-pin-support${this.pinOverlayError ? " is-error" : ""}${
+              this.isPinOperationInProgress ? " is-busy" : ""
+            }">${escapeHtml(support)}</div>
             <div class="profile-pin-keypad" aria-label="PIN keypad">${this.renderPinKeypad()}</div>
             ${isSingleEntryMode ? `<div class="profile-pin-forgot">${escapeHtml(PROFILE_PIN_TEXT.forgot)}</div>` : ""}
             <div class="profile-pin-back-hint">${escapeHtml(PROFILE_PIN_TEXT.back)}</div>
@@ -2135,6 +2137,11 @@ export const ProfileSelectionScreen = {
     headingNode.textContent = heading;
     supportNode.textContent = support;
     supportNode.classList.toggle("is-error", Boolean(this.pinOverlayError));
+    // Sem isto o unico sinal de "estou verificando" e a troca do texto de apoio,
+    // que a 3 metros de distancia ninguem percebe — e foi por isso que o relator
+    // da issue #1 descreveu o PIN correto como "nothing happens". A classe liga
+    // um ponto pulsante no ::before (ver css/components.css).
+    supportNode.classList.toggle("is-busy", Boolean(this.isPinOperationInProgress));
     return true;
   },
 
