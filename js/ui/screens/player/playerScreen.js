@@ -1680,6 +1680,33 @@ function pushPlaybackDiagnosticLine(lines, label, value, maxLength = 320) {
   }
 }
 
+// Signed stream URLs (PenguPlay's `psig`, generic `expires`/`exp`/`e`) carry a
+// unix timestamp; when the resolve-to-play window is long (tens of seconds on
+// webOS 3) the URL can arrive at the <video> already dead. Surfacing the delta
+// in the error panel turns "startup-stall, HTTP status 0" reports into a
+// measurable answer for the expired-signature hypothesis.
+function extractPlaybackUrlExpiryInfo(url = "") {
+  const query = String(url || "").split("?")[1] || "";
+  if (!query) {
+    return null;
+  }
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const pattern =
+    /(?:^|[&?])(psig|expires|expire|exp|e|validto|valid_until)=(\d{9,13})(?:\.|&|$)/gi;
+  let match = null;
+  while ((match = pattern.exec(query)) !== null) {
+    let epoch = Number(match[2]);
+    if (epoch > 1e12) {
+      epoch = Math.floor(epoch / 1000);
+    }
+    // Only trust values within +/- 5 years of now; anything else is not a time.
+    if (Math.abs(epoch - nowEpoch) < 5 * 365 * 24 * 3600) {
+      return { param: match[1], epoch, deltaSeconds: epoch - nowEpoch };
+    }
+  }
+  return null;
+}
+
 function extractPlaybackHttpStatus(value = "") {
   const text = String(value || "");
   if (!text) {
@@ -6004,6 +6031,7 @@ export const PlayerScreen = {
     const detail = eventDetail && typeof eventDetail === "object" ? eventDetail : {};
     const hlsResponseCode = Number(detail.hlsResponseCode || 0);
     return [
+      detail.sourceError,
       detail.avplayError,
       detail.hlsErrorType,
       detail.hlsErrorDetails,
@@ -6191,6 +6219,18 @@ export const PlayerScreen = {
     pushPlaybackDiagnosticLine(lines, "Source", sourceLabel);
     pushPlaybackDiagnosticLine(lines, "Source type", sourceType);
     pushPlaybackDiagnosticLine(lines, "URL", activeUrl, 420);
+    pushPlaybackDiagnosticLine(lines, "URL length", activeUrl ? String(activeUrl).length : "");
+    {
+      const expiryInfo = extractPlaybackUrlExpiryInfo(activeUrl);
+      if (expiryInfo) {
+        const state = expiryInfo.deltaSeconds >= 0 ? "valid for" : "EXPIRED";
+        pushPlaybackDiagnosticLine(
+          lines,
+          "URL signature",
+          `${expiryInfo.param}=${expiryInfo.epoch} (${state} ${Math.abs(expiryInfo.deltaSeconds)}s)`
+        );
+      }
+    }
     pushPlaybackDiagnosticLine(lines, "Proxy header names", headerNames);
     pushPlaybackDiagnosticLine(lines, "Resolver status", resolverStatus);
     pushPlaybackDiagnosticLine(lines, "Resolver detail", resolverDetail);
