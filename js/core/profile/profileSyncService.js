@@ -8,6 +8,15 @@ const FALLBACK_TABLE = "profiles";
 const PULL_RPC = "sync_pull_profiles";
 const PUSH_RPC = "sync_push_profiles";
 const PULL_LOCKS_RPC = "sync_pull_profile_locks";
+
+// Rede de seguranca contra RPC pendurado, NAO um juizo sobre lentidao.
+// Medido na OLED65C9 (webOS 4, Chromium 53, rede boa): o caminho legitimo do
+// PIN correto consumiu ~11s entre o ultimo digito e a home aparecer. Na LG
+// UH617V de 2016 do relator da issue #1 isso e maior, entao um teto de 12s
+// transformaria PIN CORRETO em "Could not verify PIN" — trocar falta de
+// feedback por erro falso e pior, porque manda o usuario desistir.
+// O sintoma real e ausencia de progresso na tela, resolvido no overlay.
+const VERIFY_PIN_TIMEOUT_MS = 45000;
 const SET_PROFILE_PIN_RPC = "set_profile_pin";
 const CLEAR_PROFILE_PIN_RPC = "clear_profile_pin";
 const VERIFY_PROFILE_PIN_RPC = "verify_profile_pin";
@@ -317,7 +326,7 @@ export const ProfileSyncService = {
       const response = await Promise.race([
         rpcPromise,
         new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("verify pin timeout")), 12000);
+          setTimeout(() => reject(new Error("verify pin timeout")), VERIFY_PIN_TIMEOUT_MS);
         })
       ]);
       const payload = Array.isArray(response) ? response[0] || {} : response || {};
