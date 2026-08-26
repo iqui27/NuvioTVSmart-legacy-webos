@@ -46,6 +46,8 @@ const TOLERADAS = {
   "css-masks": "mascara decorativa; degrada para elemento sem recorte",
   "css-placeholder": "cor de placeholder; degrada para a cor padrao do motor",
   "css-caret-color": "cor do cursor de texto; irrelevante numa TV sem edicao intensa",
+  "css-overflow-anchor":
+    "`overflow-anchor: none` em .stream-route-list (nossa lista de streams) desliga o scroll anchoring; o 38 nao implementa scroll anchoring, entao descartar a declaracao produz exatamente o comportamento pedido",
   "css-display-contents": "usado 1x; degrada para caixa extra no layout",
   "css-sticky": "position: sticky degrada para static — verificar se algum cabecalho depende disso",
   "word-break": "`break-word` e o valor legado, entendido pelo 38",
