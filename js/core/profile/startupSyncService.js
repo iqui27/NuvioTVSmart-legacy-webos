@@ -533,8 +533,11 @@ export const StartupSyncService = {
     }
 
     await Promise.all([
+      // Reconciliação bidirecional: adota a credencial da nuvem quando ela
+      // existe, e EMPURRA a local quando a nuvem não tem — sem isso o vínculo
+      // Trakt vivia só no localStorage e morria em qualquer signOut.
       runSurface("Trakt credentials", () =>
-        TraktCredentialSyncService.pullFromRemote(activeProfileId)
+        TraktCredentialSyncService.reconcileWithRemote(activeProfileId)
       ),
       runSurface("Simkl credentials", () =>
         SimklCredentialSyncService.pullFromRemote(activeProfileId)

@@ -4,6 +4,7 @@ import { Platform } from "../../../platform/index.js";
 import { TraktAuthService } from "../../../data/repository/traktAuthService.js";
 import { SimklAuthService } from "../../../data/repository/simklAuthService.js";
 import { SimklSyncService } from "../../../data/repository/simklSyncService.js";
+import { TraktCredentialSyncService } from "../../../core/profile/traktCredentialSyncService.js";
 import {
   SimklAnimeIdPreference,
   MoreLikeThisSourcePreference,
@@ -407,18 +408,30 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
       })
     );
 
-    const providerRow = ({ id, title, connected, waiting, username }) =>
+    // Aviso quando o vínculo está ativo mas a credencial NÃO subiu para a
+    // nuvem (push rejeitado/falhou): sem backup, o próximo logout ou 401
+    // destrói o vínculo permanentemente. Medido em TV real antes do fix.
+    const traktBackupFailed = TraktCredentialSyncService.getLastPushStatus?.().state === "error";
+    const providerRow = ({ id, title, connected, waiting, username, backupFailed }) =>
       this.renderActionRow({
         focusKey: `tracking:${id}`,
         leadingIconSrc:
           id === "simkl" ? "assets/icons/simkl_tv_glyph.svg" : "assets/icons/trakt_tv_glyph.svg",
         title,
         subtitle: connected
-          ? t(
+          ? `${t(
               id === "simkl" ? "simkl_connected_as" : "trakt_connected_as",
               [username || `${title} user`],
               `Connected as ${username || `${title} user`}`
-            )
+            )}${
+              backupFailed
+                ? ` — ${t(
+                    "tracking_backup_not_synced",
+                    {},
+                    "cloud backup failed; the link will be lost on sign-out"
+                  )}`
+                : ""
+            }`
           : waiting
             ? t("tracking_status_waiting", {}, "Waiting for approval")
             : t(id === "simkl" ? "simkl_connect" : "trakt_connect", {}, `Connect ${title}`),
@@ -441,7 +454,7 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
           <div class="settings-trakt-card">
             <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_accounts_title", {}, "Accounts"))}</h3>
             <div class="settings-trakt-options-stack">
-              ${providerRow({ id: "trakt", title: "Trakt", connected: traktConnected, waiting: traktWaiting, username: trakt.username })}
+              ${providerRow({ id: "trakt", title: "Trakt", connected: traktConnected, waiting: traktWaiting, username: trakt.username, backupFailed: traktBackupFailed })}
               ${providerRow({ id: "simkl", title: "Simkl", connected: simklConnected, waiting: simklWaiting, username: simkl.username })}
             </div>
           </div>
