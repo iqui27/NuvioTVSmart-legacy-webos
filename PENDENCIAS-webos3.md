@@ -106,3 +106,36 @@ nada muda no webOS 4):
 
 Nada disto foi verificado em aparelho webOS 3 — nao ha aparelho no projeto;
 verificacao estatica apenas (gates + leitura dos consumidores no CSS).
+
+## Reporte do 2º testador (baneadopolitico, 49UJ6300, webOS 3.9, exp.8) — triagem 2026-08-26
+
+**Séries não tocam, filmes tocam (PenguPlay, todos os provedores).** Painel:
+startup-stall, readyState 0, networkState 3 (NETWORK_NO_SOURCE), sem MediaError,
+engine native-file. Diagnóstico fechado por medição em Chromium local: MP4 direto
+monta `<source type=video/mp4>`, e falha de fetch nesse caminho dispara `error`
+só no SOURCE — o `<video>` fica mudo em networkState 3. O app só ouvia o
+`<video>`, então a falha era invisível até o guard de stall. Corrigido
+(re-dispatch com `detail.mediaErrorCode=4`) + painel agora imprime `URL length`
+e `URL signature` (delta do epoch de `psig`/`expires` vs agora). A ASSIMETRIA
+série-vs-filme continua SEM causa provada — a C9 estava inacessível (Mac fora da
+LAN); reproduzir lá um episódio + um filme do mesmo provedor é o próximo passo,
+agora com os números no painel.
+
+**Foco não acompanha o scroll em Ajustes.** Causa apontada por leitura: sob
+`no-css-grid` os frames de Ajustes ficam sem altura explícita e o Chromium 38
+não resolve `height:100%` de filho de item de flex esticado (fix ~Chrome 51) —
+`maxScroll = 0` e as rotinas de scroll retornam sem rolar. Corrigido com
+`height:100%` explícito nos frames. Não verificado em aparelho.
+
+**Plugins (d3adly rocket, adrianjael) não aparecem como fonte.** NÃO é bug do
+webOS 3: `PluginManager.executeScrapersStreaming` retorna `[]` a menos que a
+flag local `pluginsEnabled` seja true, e `setPluginsEnabled` NÃO é chamado em
+lugar nenhum (nem aqui, nem na legacy-tv, nem no upstream/main) — o runtime de
+plugin da TV é um stub de template de URL, sem execução dos plugins reais do
+Nuvio. Limitação herdada do upstream; corrigir é feature, não fix.
+
+**Torrentio lista mas não toca**: esperado — P2P/EngineFS não roda na plataforma.
+
+**Performance relatada** (1min30 boot+catálogo, 48s provider→play): não
+investigado nesta rodada; a janela de 48s é relevante para a hipótese de
+assinatura vencida acima.
