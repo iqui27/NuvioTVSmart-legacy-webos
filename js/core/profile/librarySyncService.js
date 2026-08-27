@@ -11,16 +11,6 @@ const TABLE = "tv_addons";
 // visible sync state on TV.
 let lastPullStatus = { state: "idle", count: 0, error: null, at: 0 };
 
-// Verdadeiro quando o último applyPulledAddons manteve addons que só existem
-// neste aparelho (a nuvem respondeu com linhas, mas sem eles). Divergência
-// CONFIRMADA: o pull sozinho nunca a corrige, porque o push de addons só roda
-// em evento de mudança local (onInstalledAddonsChanged) e um addon restaurado
-// de backup/união nunca dispara esse evento — medido em TV real: nuvem com 5/6
-// addons do perfil 1 e 4/8 do perfil 2 indefinidamente. O caso keptLocal
-// (resposta VAZIA) fica de fora de propósito: vazio pode ser indisponibilidade
-// transitória, e um push ali substituiria a nuvem às cegas.
-let lastPullHadLocalOnly = false;
-
 function recordPullStatus(state, { count = 0, error = null, keptLocal = false } = {}) {
   lastPullStatus = {
     state,
@@ -146,7 +136,6 @@ function applyPulledAddons(rows = []) {
   const localOnlyUrls = addonRepository
     .getInstalledAddonUrls()
     .filter((url) => !cloudSet.has(addonRepository.canonicalizeUrl(url)));
-  lastPullHadLocalOnly = localOnlyUrls.length > 0;
   if (localOnlyUrls.length) {
     console.info("Addon sync keeping addons present only on this device", {
       count: localOnlyUrls.length
@@ -189,18 +178,6 @@ export const LibrarySyncService = {
     return lastPullStatus;
   },
 
-  // Convergência nuvem<-local depois de um pull que confirmou divergência:
-  // best-effort, uma tentativa, sem retry próprio (o próximo pull reavalia).
-  schedulePushIfLocalOnly() {
-    if (!lastPullHadLocalOnly) {
-      return;
-    }
-    lastPullHadLocalOnly = false;
-    void this.push().catch((error) => {
-      console.warn("Addon sync convergence push failed", error);
-    });
-  },
-
   async pull() {
     let readError = null;
     try {
@@ -230,7 +207,6 @@ export const LibrarySyncService = {
         }
         await addonRepository.setAddonOrder(addonUrls, { silent: true });
         recordPullStatus("ok", { count: addonUrls.length });
-        this.schedulePushIfLocalOnly();
         return addonUrls;
       } catch (addonsTableError) {
         addonTableMissing = isMissingResourceError(addonsTableError);
@@ -257,7 +233,6 @@ export const LibrarySyncService = {
         }
         await addonRepository.setAddonOrder(urls, { silent: true });
         recordPullStatus("ok", { count: urls.length });
-        this.schedulePushIfLocalOnly();
         return urls;
       } catch (tvTableError) {
         tvTableMissing = isMissingResourceError(tvTableError);
