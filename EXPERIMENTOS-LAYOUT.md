@@ -92,27 +92,29 @@ A aba "Todos" interpolava o literal inglês `"all"` na string traduzida
 (`library_empty_local_title`). Agora usa `cloud_library_empty_title`
 ("Nada por aqui ainda"), já traduzida em todos os idiomas. Verificado na bancada.
 
-### 3.3 `144e3b3` — fidelidade da bancada (ver §0)
+### 3.3 `6e50d03` — busca: gutter alinhado ao resto do app
+
+Cabeçalho, títulos de seção e trilhas de resultado da busca começavam em x=48
+enquanto home/detalhe usam 104 (`--home-content-start`). Medido: primeiro card em
+x=48 antes, x=104 depois. Valores estáticos, sem risco no Chromium 53.
+
+### 3.4 `144e3b3` — fidelidade da bancada (ver §0)
 
 ## 4. Backlog priorizado (valor/esforço) — ainda não prototipado
 
-1. **Gutter da busca ≠ gutter do resto do app.** Cabeçalho e grade da busca começam
-   em x=48; home/detalhe usam 104. Medido: primeiro card em `[48,242]`. Proposta:
-   alinhar a 104px (ou ao token `--home-content-start`). Custo: baixo (CSS).
-   Risco Chromium 53: nenhum. Valor: consistência imediata em uma tela muito usada.
-2. **Contraste da meta na tela de detalhe.** Ano/nota renderizam em
+1. **Contraste da meta na tela de detalhe.** Ano/nota renderizam em
    `rgb(179,179,179)` ~21px por cima do backdrop sem scrim (medido no canto
    inferior direito, `[1685,889]`). Proposta: scrim local ou token mais claro.
    Custo: baixo. Risco: nenhum.
-3. **Rótulos truncados no menu de Ajustes** ("Conteúdo e de..."). Proposta: coluna
+2. **Rótulos truncados no menu de Ajustes** ("Conteúdo e de..."). Proposta: coluna
    um pouco mais larga ou duas linhas. Custo: baixo. Risco: nenhum. Antes de mexer,
    medir com o bench fiel (a coluna é afetada por regras `performance-constrained`).
-4. **Imagens vivas na home.** 539 `<img>` e ~2.081 nós de DOM com 25 fileiras
+3. **Imagens vivas na home.** 539 `<img>` e ~2.081 nós de DOM com 25 fileiras
    montadas. Em Chrome desktop é nada; numa LG 2018 é memória de GPU e decodificação.
    Vale investigar se as fileiras fora da viewport mantêm `src` e, se sim, liberar
    (`src=""` fora de alcance, repor ao aproximar). Custo: médio. Risco: médio
    (regressão de navegação/flicker) — só com medição no aparelho.
-5. **Padronizar o corte de texto em linhas inteiras fora do hero.** O mesmo padrão
+4. **Padronizar o corte de texto em linhas inteiras fora do hero.** O mesmo padrão
    de guilhotina pode existir em outros clamps (há 60 usos de `-webkit-line-clamp`
    com alturas fixas). Auditar os que convivem com `max-height` fixo. Custo: médio.
 
@@ -127,14 +129,14 @@ A aba "Todos" interpolava o literal inglês `"all"` na string traduzida
 
 ## 6. Layout vs. funcionalidade nova
 
-**Melhorias de layout** (decisão barata, reversível): tudo em §3 e itens 1–3, 5 do §4.
+**Melhorias de layout** (decisão barata, reversível): tudo em §3 e itens 1–2, 4 do §4.
 
 **Funcionalidade nova** (decisão de produto):
 
 - Botão/CTA focável no estado vazio da biblioteca ("Buscar títulos") em vez de só texto.
 - Teclado on-screen próprio na busca (Jellyfin/Stremio fazem isso para não depender
   do IME da plataforma) — custo alto, só se o IME da LG estiver incomodando.
-- Virtualização/descarte de imagens da home (item 4 do §4) — é engenharia de
+- Virtualização/descarte de imagens da home (item 3 do §4) — é engenharia de
   performance, não layout.
 
 ## 7. Como reproduzir as medições

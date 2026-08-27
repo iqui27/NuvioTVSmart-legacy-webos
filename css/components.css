@@ -3426,7 +3426,7 @@ button:focus-visible {
   gap: 24px;
   align-items: center;
   margin-bottom: 16px;
-  padding: 0 48px;
+  padding: 0 104px; /* alinhado ao --home-content-start (104px) do resto do app */
   scroll-margin-top: 22px;
 }
 
@@ -3904,7 +3904,7 @@ button:focus-visible {
 
 .search-results-title {
   margin: 0;
-  padding: 0 48px;
+  padding: 0 104px;
   font-size: 48px;
   font-weight: 600;
   line-height: 1.08;
@@ -3913,7 +3913,7 @@ button:focus-visible {
 
 .search-results-subtitle {
   margin-top: 4px;
-  padding: 0 48px;
+  padding: 0 104px;
   font-size: 20px;
   color: var(--text-secondary);
 }
@@ -3924,7 +3924,7 @@ button:focus-visible {
   gap: 16px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 4px 64px 14px 48px;
+  padding: 4px 104px 14px 104px;
   scrollbar-width: none;
 }
 
@@ -3939,7 +3939,7 @@ button:focus-visible {
   background: transparent;
   border: none;
   overflow: visible;
-  scroll-margin-inline: 48px;
+  scroll-margin-inline: 104px;
   transform-origin: center center;
   transition: transform 160ms ease;
 }
