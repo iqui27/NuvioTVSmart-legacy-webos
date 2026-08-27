@@ -385,6 +385,27 @@ function legacyDeclarationFallbackPlugin() {
 
       const legacyValue = toLegacyColorValue(toLegacyLengthValue(decl.value));
       if (legacyValue && legacyValue !== decl.value) {
+        // Custom property: SUBSTITUIR, nunca clonar antes.
+        //
+        // A tecnica de fallback (declaracao estatica antes da moderna) so
+        // funciona em propriedade normal, onde o motor REJEITA o valor que nao
+        // entende e a declaracao anterior prevalece. Custom property nao valida
+        // conteudo: `--x: clamp(...)` e guardado como texto mesmo num motor sem
+        // clamp(), entao a declaracao moderna sempre vence a estatica, e a
+        // falha so aparece la na frente, no `var()`, onde vira valor invalido e
+        // a propriedade cai para o inicial.
+        //
+        // MEDIDO na OLED65C9 (Chromium 53, CSS.supports('width','clamp(...)')
+        // === false): 13 de 15 tokens devolviam a string do clamp em
+        // getComputedStyle — --tv-safe-gutter, --tv-title-text, --tv-body-text,
+        // --tv-button-height, --tv-card-gap e companhia. Ou seja a escala de
+        // tipografia, os espacamentos e as margens de seguranca inteiras
+        // estavam sem valor nessa TV. O sintoma visivel foi o overlay de pausa
+        // colado na borda, sem margem.
+        if (decl.prop.startsWith("--")) {
+          decl.value = legacyValue;
+          return;
+        }
         const previous = decl.prev();
         if (
           !previous ||
