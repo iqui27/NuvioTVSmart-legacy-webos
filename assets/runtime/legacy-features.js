@@ -14,7 +14,15 @@
     "no-css-grid",
     "no-css-math",
     "no-aspect-ratio",
-    "no-backdrop-filter"
+    "no-backdrop-filter",
+    // On the device these two are also always on: app.js derives them from the
+    // platform and the runtime-performance profile, and on webOS 4.x both are
+    // true. Pinning them here keeps the browser bench rendering the SAME
+    // stylesheet state as the TV — before this, all `.legacy-webos` and
+    // `.performance-constrained` rules (260+ declarations, including the hero
+    // safe-area geometry) were invisible in the bench.
+    "legacy-webos",
+    "performance-constrained"
   ];
 
   function removeClass(name) {

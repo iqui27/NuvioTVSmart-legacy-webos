@@ -147,9 +147,16 @@ function isLowEndDevice() {
 
 function applyPerformanceMode() {
   const tvRuntime = getTvRuntimePerformanceProfile();
-  const constrained = tvRuntime.isPerformanceConstrained || isLowEndDevice();
+  const rootClassesEarly = document.documentElement.classList;
+  // Browser bench parity: legacy-features.js pins `legacy-webos` and
+  // `performance-constrained` alongside the `no-*` classes so the bench renders
+  // the exact stylesheet state of the device. Honor that pin here instead of
+  // stripping it — on a real TV these flags are derived from the platform and
+  // this branch never fires (Platform.isBrowser() is false there).
+  const pinnedLegacyBench = Platform.isBrowser() && rootClassesEarly.contains("legacy-webos");
+  const constrained = tvRuntime.isPerformanceConstrained || isLowEndDevice() || pinnedLegacyBench;
   const webOsMajorVersion = Platform.isWebOS() ? Number(Platform.getWebOsMajorVersion() || 0) : 0;
-  const legacyWebOs = Platform.isWebOS() && tvRuntime.isLegacyTvRuntime;
+  const legacyWebOs = (Platform.isWebOS() && tvRuntime.isLegacyTvRuntime) || pinnedLegacyBench;
   const legacyWebOs38 = Platform.isWebOS() && webOsMajorVersion > 0 && webOsMajorVersion <= 3;
   // Keep the Tizen class as a platform-layout fallback; performance gating is
   // handled exclusively by the runtime profile above.
