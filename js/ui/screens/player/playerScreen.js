@@ -144,6 +144,21 @@ const STARTUP_AUDIO_PREFERENCE_RETRY_INTERVAL_MS = 250;
 // retry window below: past that point there is nothing left to wait for, and a
 // late audio switch on a playing video beats a black screen.
 const WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS = STARTUP_AUDIO_PREFERENCE_RETRY_WINDOW_MS;
+// O gate de audio de startup PAUSA a reproducao nativa quando
+// allowNativePlayback e falso — o caso de todo MP4 remoto no webOS, que nao e
+// HLS nem MKV priorizado. Sem prazo (maxWaitMs 0 -> deadline 0), as DUAS saidas
+// de isStartupGateReleaseReady() ficam inalcancaveis: gateDeadlineExpired exige
+// deadline > 0, e canReleasePlayingNativeStartupAudioGate() exige
+// hasPresentedPlaybackFrame, que por sua vez exige o currentTime avancar — o que
+// nao acontece com o video pausado pelo proprio gate. Deadlock ate o stall guard
+// desistir e mostrar "Erro de reproducao".
+//
+// Medido numa OLED65C9: episodio de serie por MP4 remoto parou com
+// readyState 4, networkState 2, buffered 0-37s, MediaError null e paused=true em
+// currentTime 0. Chamar video.play() pelo CDP tocou normalmente — a midia sempre
+// esteve boa, so nunca foi despausada. Filmes escapavam por outras fontes
+// (HLS/MKV) caminharem por ramos com prazo.
+const STARTUP_AUDIO_GATE_MAX_WAIT_MS = STARTUP_AUDIO_PREFERENCE_RETRY_WINDOW_MS;
 const WEBOS_NATIVE_STARTUP_LOADING_EXTENSION_MS = 120000;
 const WEBOS_HLS_REBUFFER_STALL_TIMEOUT_MS = 20000;
 const WEBOS_NATIVE_FILE_REBUFFER_STALL_TIMEOUT_MS = 35000;
@@ -2949,7 +2964,9 @@ export const PlayerScreen = {
         this.engineFsPlaybackToken = "";
         this.enableStartupAudioGate({
           allowNativePlayback: allowNativePlaybackDuringStartupAudioGate,
-          maxWaitMs: prioritizeWebOsRemoteMkvPlayback ? WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS : 0
+          maxWaitMs: prioritizeWebOsRemoteMkvPlayback
+            ? WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS
+            : STARTUP_AUDIO_GATE_MAX_WAIT_MS
         });
       }
       const playbackStartPromise = this.startPlayerControllerPlayback(
@@ -11620,7 +11637,9 @@ export const PlayerScreen = {
     } else {
       this.enableStartupAudioGate({
         allowNativePlayback: allowNativePlaybackDuringStartupAudioGate,
-        maxWaitMs: prioritizeWebOsRemoteMkvPlayback ? WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS : 0
+        maxWaitMs: prioritizeWebOsRemoteMkvPlayback
+          ? WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS
+          : STARTUP_AUDIO_GATE_MAX_WAIT_MS
       });
     }
     this.cancelSeekPreview({ commit: false });
