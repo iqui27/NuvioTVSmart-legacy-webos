@@ -15916,7 +15916,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .series-insight-tabs {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* gap: 0 de proposito. O espacamento desta faixa vem da margem propria de
+     .series-insight-divider (margin: 0 10px), que precisa ficar SIMETRICA dos
+     dois lados do "|". Um gap aqui seria letra morta — a regra mais abaixo ja
+     zera o gap — mas geraria fallback de flex-gap no build legado, e esse
+     fallback (`html.no-flex-gap <sel> > * + *`) vence por especificidade a
+     margem do separador: o resultado medido na TV era 0px antes do "|" e 20px
+     depois, com o traco colado na palavra anterior. */
+  gap: 0;
   margin-bottom: 14px;
   overflow-x: auto;
   scrollbar-width: none;

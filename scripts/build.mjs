@@ -571,6 +571,22 @@ function flexGapFallbackPlugin() {
       rowGap ||= "0";
       columnGap ||= "0";
 
+      // gap: 0 nao precisa de emulacao — e emitir o fallback mesmo assim faz
+      // dano. A regra gerada (`html.no-flex-gap <sel> > * + *`) tem
+      // especificidade maior que a de qualquer filho por classe, entao um
+      // `margin-left: 0` vindo daqui APAGA margem que o autor definiu no filho.
+      //
+      // Caso real: `.series-insight-tabs { gap: 0 }` (o container zera o gap de
+      // proposito porque `.series-insight-divider` traz `margin: 0 10px`). No
+      // legado o fallback zerava a margem ESQUERDA do separador e deixava a
+      // direita, entao o "|" colava na palavra anterior e o vao inteiro ia para
+      // depois dele. Medido no bench a 1920px: vaos 0, 20, 0, 20, 0, 20.
+      const rowGapZero = /^0(?:[a-z%]*)?$/i.test(rowGap.trim());
+      const columnGapZero = /^0(?:[a-z%]*)?$/i.test(columnGap.trim());
+      if (rowGapZero && columnGapZero) {
+        return;
+      }
+
       const scopedSelectors = rule.selectors.map((selector) => `html.no-flex-gap ${selector}`);
       const isColumnDirection = flexDirection.includes("column");
       const wraps = flexWrap.includes("wrap") && !flexWrap.includes("nowrap");
