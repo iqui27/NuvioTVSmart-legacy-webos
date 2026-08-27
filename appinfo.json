@@ -13,6 +13,7 @@
   "splashBackground": "splash.png",
   "iconColor": "#0e0f12",
   "handlesRelaunch": true,
+  "disableBackHistoryAPI": true,
   "resolution": "1920x1080",
   "transparent": false,
   "services": ["space.nuvio.webos.service"],
