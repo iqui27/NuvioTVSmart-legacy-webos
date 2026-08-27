@@ -56,6 +56,7 @@ import { AuthManager } from "../../../core/auth/authManager.js";
 import { SupabaseApi } from "../../../data/remote/supabase/supabaseApi.js";
 import { Platform } from "../../../platform/index.js";
 import { TizenCapabilities } from "../../../platform/tizen/tizenCapabilities.js";
+import { WebOsP2pCapability } from "../../../platform/webos/webosP2pCapability.js";
 import { isFastHorizontalNavigationEnabled } from "../../../platform/sharedKeys.js";
 import { CW_DISPLAY_SNAPSHOT_KEY, CW_ENRICHMENT_CACHE_KEY } from "../home/homeConstants.js";
 import { I18n } from "../../../i18n/index.js";
@@ -5624,8 +5625,13 @@ export const SettingsScreen = {
     this.ensureExpandedState("playback");
     const expanded = this.expandedSections.playback;
     const torrentSettings = model.torrent || TorrentSettingsStore.get();
-    const tizenP2pUnsupported = TizenCapabilities.isP2pUnsupported();
-    const p2pUnavailableSubtitle = tizenP2pUnsupported
+    // webOS <= 4 nao consegue rodar o EngineFS (Node 0.12), entao oferecer o
+    // interruptor de P2P la e prometer o que o aparelho nao entrega — o usuario
+    // liga, continua sem funcionar, e conclui que o app esta quebrado.
+    const p2pUnsupported =
+      TizenCapabilities.isP2pUnsupported() || WebOsP2pCapability.isP2pUnsupported();
+    const tizenP2pUnsupported = p2pUnsupported;
+    const p2pUnavailableSubtitle = p2pUnsupported
       ? t("settings_p2p_unsupported_subtitle", {}, "Not supported on this TV.")
       : t("settings_p2p_subtitle");
 
@@ -6723,7 +6729,10 @@ export const SettingsScreen = {
           ${this.renderCollapsibleRow({
             focusKey: "playback:toggle:p2p",
             title: t("settings_p2p_title"),
-            subtitle: t("settings_p2p_subtitle"),
+            // Tambem no cabecalho: quem passa pela lista sem abrir a secao
+            // precisa ver que nao ha P2P neste aparelho, senao a promessa fica
+            // de pe e so se desfaz para quem abre.
+            subtitle: p2pUnavailableSubtitle,
             expanded: Boolean(expanded.p2p),
             bodyHtml: p2pBody
           })}
