@@ -18283,10 +18283,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-logo {
+  /* 160px em vez de 200px: com top-safe de 40px a caixa de copy tem 460px e
+     logo(160) + meta + sinopse de 4 linhas somam ~390px; com 200px a sinopse
+     estourava a caixa e era guilhotinada no meio da linha. */
   width: 440px;
   max-width: 440px;
-  height: 200px;
-  max-height: 200px;
+  height: 160px;
+  max-height: 160px;
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-title-text {
@@ -18297,8 +18300,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-meta-line,
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-secondary,
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-description {
-  width: 560px;
-  max-width: 560px;
+  /* 640px = largura da propria caixa de copy. Com 560px a linha de meta
+     ("S1 E1 - titulo do episodio - genero - ano") quebrava em 2-3 linhas e o
+     bloco de meta sozinho chegava a 119px de altura, empurrando a sinopse
+     para fora da caixa. */
+  width: 640px;
+  max-width: 640px;
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-meta-line {
@@ -22302,7 +22309,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
    resolved; that also discards earlier declarations from the same cascade. */
 .legacy-tizen .home-screen-shell.home-layout-modern .home-modern-hero-copy,
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-copy {
-  top: 0;
+  /* 40px preserva a zona segura superior (mesmo top-safe do motor moderno);
+     o conteudo cabe porque o logo caiu para 160px e a sinopse fecha em linhas
+     inteiras logo abaixo. */
+  top: 40px;
   bottom: 52vh;
 }
 

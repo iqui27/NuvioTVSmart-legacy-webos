@@ -7151,7 +7151,21 @@ export const HomeScreen = {
         1,
         Math.ceil(lineHeight || fontSize * 1.35 || description.offsetHeight || 1)
       );
-      description.style.maxHeight = `${lineBoxHeight * modernHeroDescriptionMaxLines}px`;
+      // Cap the line budget by the space actually left inside the copy box.
+      // The box is overflow:hidden, so a fixed 4-line cap that does not fit
+      // shaves the last line mid-glyph instead of dropping it. Measured on the
+      // legacy bench at 1920x1080: 113px remained below the description while
+      // 4 lines need 119px, so the 4th line rendered with its bottom 6px cut.
+      let lineBudget = modernHeroDescriptionMaxLines;
+      const copyBox = description.closest(".home-modern-hero-copy");
+      if (copyBox instanceof HTMLElement) {
+        const available =
+          copyBox.getBoundingClientRect().bottom - description.getBoundingClientRect().top;
+        if (available > 0) {
+          lineBudget = Math.max(1, Math.min(lineBudget, Math.floor(available / lineBoxHeight)));
+        }
+      }
+      description.style.maxHeight = `${lineBoxHeight * lineBudget}px`;
     });
   },
 
