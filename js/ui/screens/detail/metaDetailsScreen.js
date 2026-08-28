@@ -12,7 +12,10 @@ import { detailWatchedEnrichmentService } from "../../../data/repository/detailW
 import { watchedSeriesReconciliationService } from "../../../data/repository/watchedSeriesReconciliationService.js";
 import { TmdbService } from "../../../core/tmdb/tmdbService.js";
 import { TmdbMetadataService } from "../../../core/tmdb/tmdbMetadataService.js";
-import { normalizeTmdbBackdropUrl } from "../../../core/tmdb/tmdbImageUrl.js";
+import {
+  normalizeTmdbBackdropUrl,
+  tmdbArteParaTelaEstatica
+} from "../../../core/tmdb/tmdbImageUrl.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import {
   showHomeRatings,
@@ -121,7 +124,12 @@ function resolveDetailBackdropUrl(meta = {}) {
     if (!value) {
       continue;
     }
-    return index < candidates.length - 1 ? normalizeTmdbBackdropUrl(value) : value;
+    // Tela estatica: sobe para `original`. O w1280 de normalizeTmdbBackdropUrl
+    // existe para o hero da Home, que redecodifica a cada movimento; aqui a arte
+    // e carregada uma vez. Com dpr 2 num painel 4K, w1280 em 1920 CSS e upscale
+    // de 3x em pixel fisico.
+    const emTamanhoDeTela = tmdbArteParaTelaEstatica(normalizeTmdbBackdropUrl(value));
+    return index < candidates.length - 1 ? emTamanhoDeTela : value;
   }
   return "";
 }
@@ -3233,7 +3241,16 @@ export const MetaDetailsScreen = {
     // elemento, e o usuario le como "o titulo encolheu sozinho". A lista de onde
     // viemos ja carrega o logo (data-logo-src), entao usamos essa dica aqui, no
     // unico ponto por onde TODOS os renders do hero passam.
-    const heroLogo = meta.logo || this.params?.fallbackLogo || "";
+    // O logo chega em w300 tanto do meta quanto do card da lista, e o hero
+    // desenha no maximo ~520 CSS = 1040 pixels fisicos, entao w300 e upscale.
+    // w500 e nao `original` de proposito: medido nesta TV, um logo `original`
+    // veio 2612x1297 (3,4MP) para desenhar 209x104 — decode caro para pixel que
+    // ninguem ve. Quando o arquivo do TMDB e menor que 500px ele devolve o
+    // proprio arquivo, entao nao ha perda no caso pequeno.
+    const heroLogo = tmdbArteParaTelaEstatica(
+      meta.logo || this.params?.fallbackLogo || "",
+      "original"
+    );
     const logoOrTitle = heroLogo
       ? `<img src="${heroLogo}" class="series-detail-logo" alt="${escapeHtml(meta.name || "logo")}" decoding="async" fetchpriority="high" />`
       : `<h1 class="series-detail-title">${escapeHtml(meta.name || "Untitled")}</h1>`;

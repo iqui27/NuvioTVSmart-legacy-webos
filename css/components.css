@@ -21860,6 +21860,17 @@ html.tizen-tv.no-css-math .cast-detail-shell {
 }
 
 .series-detail-logo {
+  /* O pai e flex column, entao sem align-self o <img> ESTICA na largura ate o
+     max-width e o object-fit:contain desenha o logo CENTRALIZADO nessa caixa —
+     medido na C9: caixa de 710px para um logo de 300px, que e o que fazia ele
+     parecer pequeno e fora do lugar. */
+  align-self: flex-start;
+  /* Escala por ALTURA, nao por largura: os logos do TMDB variam de 333x63 a
+     mais de 1000px de largura, e limitar pela largura deixava os estreitos
+     minusculos ao lado do hero. Com altura fixa todos chegam com o mesmo peso
+     visual, e a largura segue a proporcao ate o teto de 37vw. */
+  height: 104px;
+  width: auto;
   max-width: 37vw;
   max-height: 180px;
   margin-bottom: 40px;
