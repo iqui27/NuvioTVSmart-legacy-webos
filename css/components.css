@@ -5514,6 +5514,75 @@ button:focus-visible {
   line-height: 1.33;
 }
 
+/* ---- Row identity: eyebrow + kind accents + chart numbering -----------------
+   The row's kind (streaming / genre / curated / themed / collection) comes from
+   data-row-kind, stamped by the render from the catalog identifier. Static
+   values only: no grid, no gap, no clamp — legacy webOS (Chromium 53) renders
+   these rules as-is. */
+.home-screen-shell .home-row-eyebrow {
+  /* .home-row-head is a flex row (gap 14px, align center), so the eyebrow sits
+     inline after the title — row height does not change, so the vertical D-pad
+     travel across 43 rows stays exactly what it was (measured: head 31.2px with
+     and without eyebrow). */
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.home-screen-shell .home-row[data-row-kind="streaming"] .home-row-eyebrow {
+  color: rgba(125, 195, 255, 0.78);
+}
+
+.home-screen-shell .home-row[data-row-kind="genre"] .home-row-eyebrow {
+  color: rgba(126, 226, 186, 0.78);
+}
+
+.home-screen-shell .home-row[data-row-kind="curated"] .home-row-eyebrow {
+  color: rgba(240, 200, 110, 0.82);
+}
+
+.home-screen-shell .home-row[data-row-kind="themed"] .home-row-eyebrow {
+  color: rgba(232, 148, 170, 0.78);
+}
+
+.home-screen-shell .home-row[data-row-kind="collection"] .home-row-eyebrow {
+  color: rgba(186, 156, 255, 0.78);
+}
+
+/* Chart rows (data-row-ranked): position number on each poster via CSS
+   counters — zero extra DOM nodes, so the 539-img budget is untouched. The
+   counter resets per track and increments only on poster cards, so the
+   see-all card (home-seeall-card, not a poster card) never gets a number. */
+.home-screen-shell .home-row[data-row-ranked="true"] .home-track {
+  counter-reset: home-rank;
+}
+
+.home-screen-shell .home-row[data-row-ranked="true"] .home-poster-card {
+  counter-increment: home-rank;
+}
+
+.home-screen-shell .home-row[data-row-ranked="true"] .home-poster-card .home-poster-frame::after {
+  content: counter(home-rank);
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(10, 10, 14, 0.78);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 30px;
+  text-align: center;
+}
+
 .home-screen-shell .home-track {
   --home-track-gap: var(--home-row-gap);
   gap: var(--home-track-gap);

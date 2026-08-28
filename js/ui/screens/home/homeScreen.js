@@ -41,6 +41,7 @@ import { LocalStore } from "../../../core/storage/localStore.js";
 import { TMDB_API_KEY, YOUTUBE_PROXY_URL } from "../../../config.js";
 import { I18n } from "../../../i18n/index.js";
 import { localizedGenreLabel } from "../../../i18n/genreLabels.js";
+import { getHomeRowKind, homeRowEyebrowKind, isRankedHomeRow } from "./homeRowKind.js";
 import {
   buildWatchedTitleIdSet,
   isTitleItemWatched,
@@ -378,6 +379,27 @@ function logHomeLoadStages(phase) {
     stages,
     storage: homeStoragePerfReport(8)
   });
+}
+
+// Eyebrow labels for home rows, memoized per locale. Both the full render and
+// the keyed reconciler pass this same object into renderModernRowSection, which
+// keeps their markup byte-identical (the reconciler compares strings).
+let homeRowKindLabelsCache = null;
+let homeRowKindLabelsLocale = "";
+function getHomeRowKindLabels() {
+  const locale = String(I18n.getLocale() || "");
+  if (homeRowKindLabelsCache && homeRowKindLabelsLocale === locale) {
+    return homeRowKindLabelsCache;
+  }
+  homeRowKindLabelsLocale = locale;
+  homeRowKindLabelsCache = {
+    streaming: t("home.rowKind.streaming", {}, "Streaming"),
+    genre: t("home.rowKind.genre", {}, "Genre"),
+    curated: t("home.rowKind.curated", {}, "Curated"),
+    themed: t("home.rowKind.themed", {}, "Themed"),
+    collection: t("home.rowKind.collection", {}, "Collection")
+  };
+  return homeRowKindLabelsCache;
 }
 
 function t(key, params = {}, fallback = key) {
@@ -2543,10 +2565,11 @@ function buildPosterSubtitle(item, layoutMode) {
   return firstNonEmpty(extractYear(normalized), normalized.releaseInfo, "");
 }
 
-function renderRowHeader(title, subtitle = "") {
+function renderRowHeader(title, subtitle = "", eyebrow = "") {
   return `
     <div class="home-row-head">
       <h2 class="home-row-title">${escapeHtml(title)}</h2>
+      ${eyebrow ? `<div class="home-row-eyebrow" aria-hidden="true">${escapeHtml(eyebrow)}</div>` : ""}
       ${subtitle ? `<div class="home-row-subtitle">${escapeHtml(subtitle)}</div>` : ""}
     </div>
   `;
@@ -2850,11 +2873,15 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
       return;
     }
 
+    const rowKind = getHomeRowKind(rowData);
+    const rowRanked = !isLoading && isRankedHomeRow(rowData);
+    const eyebrowKind = homeRowEyebrowKind(rowData);
+    const eyebrowLabel = eyebrowKind ? getHomeRowKindLabels()[eyebrowKind] || "" : "";
     sectionsMarkup.push(`
       <section class="home-row"
                data-row-key="${escapeAttribute(rowKey)}"
-               data-row-index="${rowIndex}">
-        ${renderRowHeader(rowTitle, rowSubtitle)}
+               data-row-index="${rowIndex}"${rowKind ? ` data-row-kind="${escapeAttribute(rowKind)}"` : ""}${rowRanked ? ` data-row-ranked="true"` : ""}>
+        ${renderRowHeader(rowTitle, rowSubtitle, eyebrowLabel)}
         ${trackMarkup}
       </section>
     `);
@@ -9951,6 +9978,7 @@ export const HomeScreen = {
         formatCatalogRowTitle,
         shouldDeferRowImages: shouldDeferHomeRowImages,
         watchedTitleIds: this.watchedTitleIds,
+        rowKindLabels: getHomeRowKindLabels(),
         escapeHtml,
         escapeAttribute
       });
@@ -11667,6 +11695,7 @@ export const HomeScreen = {
       watchedTitleIds: this.watchedTitleIds,
       createPosterCardMarkup,
       formatCatalogRowTitle,
+      rowKindLabels: getHomeRowKindLabels(),
       escapeHtml
     };
 

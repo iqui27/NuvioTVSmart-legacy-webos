@@ -2587,6 +2587,11 @@
     <string name="detail.creatorCast">Criador e elenco</string>
     <string name="detail.ratings">Avaliações</string>
     <string name="detail.moreLikeThis">Mais como este</string>
+    <string name="home.rowKind.streaming">Streaming</string>
+    <string name="home.rowKind.genre">Gênero</string>
+    <string name="home.rowKind.curated">Curadoria</string>
+    <string name="home.rowKind.themed">Temático</string>
+    <string name="home.rowKind.collection">Coleção</string>
     <string name="home.continueWatching">Continuar assistindo</string>
     <string name="home.removeContinueWatching">Remover de Continuar assistindo</string>
     <string name="player.track.audioDescription">Audiodescrição</string>

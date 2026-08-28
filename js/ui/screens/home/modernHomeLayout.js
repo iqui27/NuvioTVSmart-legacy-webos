@@ -1,3 +1,5 @@
+import { getHomeRowKind, homeRowEyebrowKind, isRankedHomeRow } from "./homeRowKind.js";
+
 export const MODERN_HOME_CONSTANTS = {
   heroFocusDelayMs: 450,
   heroRapidNavThresholdMs: 130,
@@ -48,6 +50,7 @@ export function renderModernHomeLayout({
   formatCatalogRowTitle,
   shouldDeferRowImages,
   watchedTitleIds = null,
+  rowKindLabels = null,
   escapeHtml,
   escapeAttribute
 } = {}) {
@@ -71,6 +74,7 @@ export function renderModernHomeLayout({
       watchedTitleIds,
       createPosterCardMarkup,
       formatCatalogRowTitle,
+      rowKindLabels,
       escapeHtml
     });
     if (!section) {
@@ -312,6 +316,7 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
     watchedTitleIds = null,
     createPosterCardMarkup,
     formatCatalogRowTitle,
+    rowKindLabels = null,
     escapeHtml
   } = options;
 
@@ -371,14 +376,24 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
     )
     .join("");
 
+  // Presentational row identity: kind accents + chart numbering. Derived from
+  // rowData only, so the full render and the keyed reconciler produce the same
+  // bytes (see the byte-identical contract in this function's doc comment).
+  const rowKind = getHomeRowKind(rowData);
+  const rowRanked = !isLoading && isRankedHomeRow(rowData);
+  const eyebrowKind = homeRowEyebrowKind(rowData);
+  const eyebrowLabel =
+    eyebrowKind && rowKindLabels ? String(rowKindLabels[eyebrowKind] || "").trim() : "";
+
   return {
     rowKey,
     seeAllId,
     seeAllEntry,
     markup: `
-      <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}">
+      <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}"${rowKind ? ` data-row-kind="${escapeHtml(rowKind)}"` : ""}${rowRanked ? ` data-row-ranked="true"` : ""}>
         <div class="home-row-head">
           <h2 class="home-row-title">${escapeHtml(rowTitle)}</h2>
+          ${eyebrowLabel ? `<div class="home-row-eyebrow" aria-hidden="true">${escapeHtml(eyebrowLabel)}</div>` : ""}
         </div>
         <div class="home-track" data-track-row-key="${escapeHtml(rowKey)}">
           ${cardsMarkup}
