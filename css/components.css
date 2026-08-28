@@ -15592,9 +15592,9 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 
 .series-episode-card {
   position: relative;
-  flex: 0 0 286px;
-  border-radius: 22px;
-  padding: 10px 10px 12px;
+  flex: 0 0 240px;
+  border-radius: 18px;
+  padding: 8px 8px 10px;
   background: rgba(11, 15, 22, 0.68);
   border: 1px solid rgba(255, 255, 255, 0.14);
   backdrop-filter: blur(6px);
@@ -21777,9 +21777,11 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .series-season-row {
-  gap: 24px;
-  padding-top: 48px;
-  padding-bottom: 48px;
+  /* Densidade: era 48/48 de padding para 80px de conteudo — mais da metade do
+     bloco era ar. Medido na C9: bloco de 176px de altura. */
+  gap: 16px;
+  padding-top: 20px;
+  padding-bottom: 14px;
 }
 
 .series-season-btn {
@@ -22142,7 +22144,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .series-insight-tabs {
-  padding-top: 40px;
+  padding-top: 18px;
 }
 
 .series-insight-tab,
@@ -22158,28 +22160,31 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .movie-cast-track,
 .series-cast-track {
   gap: 16px;
-  padding-top: 12px;
-  padding-bottom: 16px;
+  padding-top: 8px;
+  padding-bottom: 10px;
 }
 
 .movie-cast-card,
 .series-cast-card {
-  flex-basis: 300px;
-  width: 300px;
+  /* Avatar de 200px num card de 300px consumia 332px de altura por linha de
+     elenco. A 3 metros o rosto segue identificavel bem menor; o nome e que
+     precisa continuar legivel, entao encolhe menos que o circulo. */
+  flex-basis: 220px;
+  width: 220px;
 }
 
 .movie-cast-avatar {
-  width: 200px;
-  height: 200px;
-  margin-bottom: 20px;
+  width: 140px;
+  height: 140px;
+  margin-bottom: 10px;
 }
 
 .movie-cast-name {
-  font-size: 30px;
+  font-size: 26px;
 }
 
 .movie-cast-role {
-  font-size: 24px;
+  font-size: 21px;
 }
 
 .detail-company-title {
