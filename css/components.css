@@ -23614,3 +23614,55 @@ html.no-flex-gap .stream-route-card-badges-lazy > * {
     right: var(--tv-safe-gutter-wide, 96px);
   }
 }
+
+/* Painel de legendas no Chromium 53: a linha "− rotulo +" perdia o rotulo.
+ *
+ * `.player-dialog-style-item` e um grid `<botao> minmax(0,1fr) <botao>` e o
+ * rotulo fica na coluna do meio. Sem grid, o fallback vira flex e o meio recebe
+ * `flex: 1 1 0%` — que no Chromium 53 resulta em largura ZERO quando os botoes
+ * ja ocupam quase toda a linha (medido na C9: filhos 108 / 0 / 112 numa coluna
+ * de 274px). Com largura zero e `overflow: visible`, o texto do rotulo escapa
+ * por cima dos botoes e das linhas vizinhas — foi o que apareceu na TV como
+ * "Atraso", "Tamanho da fonte" e "Contorno" empilhados uns sobre os outros.
+ *
+ * Medido tambem: nao adianta trocar o `0%` por `0px`, nem forcar `flex-grow`.
+ * O que devolve largura ao meio e diminuir os botoes — o proprio CSS base usa
+ * 58px, e so o modal de legendas os alarga para var(--player-overlay-step-width)
+ * (112px), largura que so cabe quando existe grid de verdade.
+ *
+ * O rotulo tambem precisa caber na ALTURA da linha (~55px), senao volta a
+ * transbordar por baixo; dai o corte com reticencias em vez de quebra de linha.
+ */
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dialog-step {
+  flex: 0 0 58px;
+  width: 58px;
+  min-width: 58px;
+  max-width: 58px;
+}
+
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dialog-item-center {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item .player-dialog-item-main,
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item .player-dialog-item-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Rotulo (nome em cima, valor embaixo) somava 73px numa linha de 66 e vazava por
+ * baixo, empurrando o texto para dentro da linha seguinte. Apertar a entrelinha
+ * resolve sem esticar a linha: medido na C9, `min-height: 78px` tambem zera o
+ * transbordo, mas leva a altura rolavel do painel de 743px para 853px contra os
+ * 736px visiveis — mais rolagem para ver as mesmas dez opcoes. */
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item .player-dialog-item-main {
+  line-height: 1.15;
+}
+
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item .player-dialog-item-sub {
+  font-size: 22px;
+  line-height: 1.1;
+}
