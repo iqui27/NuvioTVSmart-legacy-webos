@@ -16956,6 +16956,15 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* A meta fica sobre a arte de fundo sem scrim algum. Medido no aparelho: os
+     itens secundarios (ano, nota, duracao, pais) renderizam em rgb(179,179,179)
+     a ~21px, sem text-shadow — sobre um backdrop claro o contraste cai perto de
+     1.9:1, muito abaixo dos 4.5:1 que texto pede, e a linha some.
+     A sombra e o remedio mais barato: nao muda layout, nao adiciona no, nao
+     escurece a arte como um scrim faria, e funciona no Chromium 53. */
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.85),
+    0 2px 10px rgba(0, 0, 0, 0.6);
   transition:
     opacity 400ms ease,
     transform 400ms ease;
