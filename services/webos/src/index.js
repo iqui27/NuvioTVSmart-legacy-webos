@@ -117,6 +117,14 @@ function buildBasePayload() {
     bootTimestamp: runtimeState.bootTimestamp,
     bootCount: runtimeState.bootCount,
     runtimePath: RUNTIME_PATH,
+    // O modo precisa viajar no ping. Em "proxy-only" o servidor local responde
+    // 404 para TUDO, inclusive /proxy/ (serverHost.js: startProxyOnlyServer),
+    // porque essa rota vive dentro do runtime EngineFS que nao carregou. Sem
+    // este campo o app so via `settingsReachable: true` e uma URL valida, dava
+    // o proxy como aplicado, e a fonte que exige cabecalho falhava assim mesmo
+    // — sem nada na tela explicando por que.
+    mode: runtimeState.mode || "",
+    proxyOnly: runtimeState.mode === "proxy-only",
     error: runtimeState.error
   };
 }
