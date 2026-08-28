@@ -7544,7 +7544,17 @@ button:focus-visible {
   font-size: clamp(26px, 1.7vw, 32px); /* ATV titleMedium 16sp -> 32px */
   font-weight: 400;
   line-height: min(2.5vw, 48px); /* ATV titleMedium lineHeight 24sp -> 48px */
-  white-space: nowrap;
+  /* Duas linhas em vez de reticencias. Medido no aparelho: "Conteudo e
+     descoberta" precisa de 356px e a caixa tem 274, entao virava
+     "Conteudo e de…". O item tem min-height 112px para UMA linha de 48px — ou
+     seja 64px de folga vertical — e duas linhas somam 96px, que ainda cabem sem
+     o item crescer. Alargar a coluna deslocaria a tela inteira e reduzir a fonte
+     custaria legibilidade a 3 metros; empilhar nao custa nenhum dos dois.
+     `-webkit-line-clamp` verificado funcionando neste Chromium 53. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
   will-change: transform;
