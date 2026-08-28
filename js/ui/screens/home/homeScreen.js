@@ -51,6 +51,7 @@ import {
   buildModernRowKey,
   getHomeRowKey,
   renderModernRowSection,
+  rowHasSeeAllDoor,
   MODERN_HOME_CONSTANTS,
   renderModernHomeLayout
 } from "./modernHomeLayout.js";
@@ -2828,7 +2829,10 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
         ? `from ${rowData.addonName}`
         : "";
     const maxItems = Math.max(1, Number(rowItemLimit || HOME_MAX_ITEMS_PER_ROW_DEFAULT));
-    const hasSeeAll = !isCollectionRow && !isLoading && items.length > maxItems;
+    // Same criterion as the modern layout: a full page means "probably more".
+    // The old `items.length > maxItems` never fired on this TV, where catalogs
+    // return exactly `rowItemLimit` items on the first page (8 > 8 is false).
+    const hasSeeAll = !isCollectionRow && !isLoading && rowHasSeeAllDoor(rowData, maxItems);
     const gridLimit = Math.max(1, hasSeeAll ? maxItems - 1 : maxItems);
     const visibleItems = isCollectionRow
       ? rowItems
@@ -2912,7 +2916,7 @@ export function createSeeAllCardMarkup(seeAllId, rowData, itemIndex = 0, rowInde
              data-catalog-type="${escapeAttribute(rowData.type || "")}">
       <div class="home-seeall-card-inner">
         <div class="home-seeall-arrow" aria-hidden="true">&#8594;</div>
-        <div class="home-seeall-label">See All</div>
+        <div class="home-seeall-label">${escapeHtml(t("action_see_all", {}, "See All"))}</div>
       </div>
     </article>
   `;
@@ -11680,7 +11684,15 @@ export const HomeScreen = {
 
     const focusedNode = this.getCurrentFocusedNode();
     const focusedRowKey = focusedNode ? String(focusedNode.dataset?.navRowKey || "") : "";
-    const focusedItemIndex = focusedNode ? Number(focusedNode.dataset?.navCol || 0) : -1;
+    // focusedItemIndex exists so a card the horizontal pagination appended past
+    // `rowItemLimit` survives a re-render. The see-all door sits at navCol
+    // === visibleItems.length, so reading its index here would ask the row for
+    // one MORE poster than it has, change the markup, replace the node and drop
+    // the focus that was on the door. Doors are always inside the limit.
+    const focusedItemIndex =
+      focusedNode && focusedNode.dataset?.action !== "openCatalogSeeAll"
+        ? Number(focusedNode.dataset?.navCol || 0)
+        : -1;
     const focusedRowSection = focusedNode ? focusedNode.closest(".home-modern-row") : null;
 
     const sectionOptions = {
@@ -11694,6 +11706,7 @@ export const HomeScreen = {
       shouldDeferRowImages: shouldDeferHomeRowImages,
       watchedTitleIds: this.watchedTitleIds,
       createPosterCardMarkup,
+      createSeeAllCardMarkup,
       formatCatalogRowTitle,
       rowKindLabels: getHomeRowKindLabels(),
       escapeHtml
@@ -12317,6 +12330,21 @@ export const HomeScreen = {
           return;
         }
         const rowPayload = rowResult.data;
+        // A row that ends in a see-all door is a fixed shelf, not an infinite
+        // rail. Measured on the 1920x1080 bench before this guard: pressing
+        // Right past the door appended a 10th poster after it, so the door
+        // drifted to column 9, then 10, and stopped being "the end of the row".
+        // The door IS the pagination now — the full list lives behind it, where
+        // catalogSeeAllScreen already pages with skip=. This is also the part
+        // that actually reduces what the Home loads.
+        if (
+          rowHasSeeAllDoor(
+            rowData,
+            Math.max(1, Number(this.getRowItemLimit?.() || HOME_MAX_ITEMS_PER_ROW_DEFAULT))
+          )
+        ) {
+          return;
+        }
         const currentItems = Array.isArray(rowPayload.items) ? rowPayload.items : [];
         const rowIndex = (this.rows || []).indexOf(rowData);
         const layoutPrefs = this.layoutPrefs || {};

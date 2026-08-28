@@ -7008,6 +7008,18 @@ button:focus-visible {
   height: var(--home-modern-portrait-poster-height);
 }
 
+/* The see-all door has no .home-poster-frame, so nothing gave it the poster
+   height and it collapsed to its own content (measured 132px against a 347px
+   poster on the 1920x1080 bench). Match the frame explicitly. */
+.home-screen-shell.home-layout-modern .home-seeall-card .home-seeall-card-inner {
+  height: var(--home-modern-portrait-poster-height);
+}
+
+/* Chromium 53 ignores flex `gap`; the arrow/label pair needs a margin instead. */
+.no-flex-gap .home-seeall-card-inner > * + * {
+  margin-top: 14px;
+}
+
 .home-screen-shell.home-layout-modern .home-poster-card.is-landscape {
   flex-basis: var(--home-landscape-poster-width);
   min-width: var(--home-landscape-poster-width);
