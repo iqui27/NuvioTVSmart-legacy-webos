@@ -1,4 +1,5 @@
 import { Router } from "../../navigation/router.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
@@ -702,9 +703,9 @@ export const CatalogSeeAllScreen = {
                    data-item-id="${item.id || ""}"
                     data-item-type="${item.type || item.catalogType || descriptor.type || "movie"}"
                    data-item-title="${escapeHtml(item.name || "Untitled")}"
-                    data-poster-src="${escapeHtml(item.poster || "")}"
-                    data-backdrop-src="${escapeHtml(item.background || item.backdrop || "")}"
-                    data-logo-src="${escapeHtml(item.logo || "")}"
+                    data-poster-src="${escapeHtml(tmdbImageAtSize(item.poster || "", "w500"))}"
+                    data-backdrop-src="${escapeHtml(tmdbImageAtSize(item.background || item.backdrop || "", "w780"))}"
+                    data-logo-src="${escapeHtml(tmdbImageAtSize(item.logo || "", "w500"))}"
                     data-addon-base-url="${escapeHtml(descriptor.addonBaseUrl || item.addonBaseUrl || "")}"
                     data-addon-id="${escapeHtml(descriptor.addonId || item.addonId || "")}"
                     data-addon-name="${escapeHtml(descriptor.addonName || item.addonName || "")}"
@@ -718,7 +719,7 @@ export const CatalogSeeAllScreen = {
             <div class="seeall-card-poster-wrap">
               ${
                 item.poster
-                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
                   : `<div class="seeall-card-poster placeholder"></div>`
               }
               ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}

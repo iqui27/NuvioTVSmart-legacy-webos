@@ -17,6 +17,7 @@ import {
 } from "../../../data/repository/libraryRepository.js";
 import { mapWithConcurrency } from "../../../core/network/mapWithConcurrency.js";
 import { filterReleasedItems } from "../../../core/util/releaseInfoUtils.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { showHomeRatings } from "../../../core/util/imdbRatingVisibility.js";
 import {
@@ -513,7 +514,7 @@ function renderHeroBackdropImage(display) {
   const fallbackAttribute = fallbackQueue
     ? ` data-fallback-srcs="${escapeAttribute(fallbackQueue)}"`
     : "";
-  return `<img class="home-hero-backdrop" src="${escapeAttribute(display.backdrop)}"${fallbackAttribute} alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" onerror="${buildImageFallbackErrorHandler()}" />`;
+  return `<img class="home-hero-backdrop" src="${escapeAttribute(tmdbImageAtSize(display.backdrop, "w1280"))}"${fallbackAttribute} alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" onerror="${buildImageFallbackErrorHandler()}" />`;
 }
 
 export function buildModernHomeSizingStyle(layoutPrefs = {}) {
@@ -2639,7 +2640,7 @@ function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
         </div>
         <div class="home-hero-copy">
           <div class="home-hero-brand">
-            ${display.logo ? `<img class="home-hero-logo" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />` : ""}
+            ${display.logo ? `<img class="home-hero-logo" src="${escapeAttribute(tmdbImageAtSize(display.logo, "w500"))}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />` : ""}
             <h1 class="home-hero-title-text${display.logo ? " is-hidden" : ""}">${escapeHtml(display.title)}</h1>
           </div>
           <div class="home-hero-meta-primary${display.metaPrimary.length ? "" : " is-empty"}">${renderMetaTokens(display.metaPrimary)}</div>
@@ -3166,7 +3167,12 @@ export function createPosterCardMarkup(
         normalized.backdrop,
         normalized.backdropUrl
       );
-  const expandedVisualSrc = firstNonEmpty(backdropSrc, posterSrc);
+  // Medido na C9: este poster desenha 221x339 e o addon manda w500 (500x750) —
+  // 4,5x de pixel para decodificar. w342 ainda cobre o dobro da largura
+  // desenhada, que e o teto util num painel de 2x. O logo do hero era o caso
+  // extremo: 2394x425 baixados para desenhar 440x160.
+  const posterSrcAjustado = tmdbImageAtSize(posterSrc, useLandscapePoster ? "w780" : "w342");
+  const expandedVisualSrc = firstNonEmpty(backdropSrc, posterSrcAjustado);
   const expandedClass = isExpanded ? " is-expanded" : "";
   const landscapeClass = useLandscapePoster ? " is-landscape" : "";
   const focusableClass = isLoading ? "" : " focusable";
@@ -3210,7 +3216,7 @@ export function createPosterCardMarkup(
       <div class="home-poster-frame">
         ${
           !isLoading && posterSrc
-            ? `<img class="content-poster" ${buildLazyImageAttributes(posterSrc, { defer: deferImages })} alt="${escapeAttribute(normalized.name || "content")}" />`
+            ? `<img class="content-poster" ${buildLazyImageAttributes(posterSrcAjustado, { defer: deferImages })} alt="${escapeAttribute(normalized.name || "content")}" />`
             : '<div class="content-poster placeholder"></div>'
         }
         ${
@@ -10540,6 +10546,12 @@ export const HomeScreen = {
     const viewportRect = viewport.getBoundingClientRect();
     const constrained = this.isPerformanceConstrained();
     const verticalMargin = constrained ? 720 : 1200;
+    // Medido e REJEITADO: subir esta margem para 1250 (buscar ~4 cards antes da
+    // borda, em vez de menos de dois) NAO melhorou nada na C9 — tres rodadas de
+    // 19 movimentos deram quadros piores de 1101/857/1084ms contra
+    // 636/1084/76ms com 520. Baixar mais imagens de uma vez concorre entre si.
+    // O que a navegacao sente e a chegada da imagem durante o movimento; a
+    // margem maior nao tira esse custo do caminho, so o adianta.
     const horizontalMargin = constrained ? 520 : 1000;
     imageRows.forEach(({ row, images }) => {
       if (row instanceof HTMLElement && !row.isConnected) {
