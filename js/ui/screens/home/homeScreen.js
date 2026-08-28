@@ -2555,36 +2555,6 @@ function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
   `;
 }
 
-const EXPANDED_FACTS_MAX_DESCRIPTION = 220;
-
-function buildExpandedFacts(normalized = {}) {
-  const tipo = String(normalized.type || "").toLowerCase() === "series" ? "Série" : "Filme";
-  const meta = [tipo, firstNonEmpty(normalized.releaseInfo, extractYear(normalized), "")]
-    .filter(Boolean)
-    .map((value) => escapeHtml(String(value)));
-  const nota = Number(normalized.imdbRating);
-  if (Number.isFinite(nota) && nota > 0) {
-    meta.push(`IMDb ${escapeHtml(String(normalized.imdbRating))}`);
-  }
-  const generos = Array.isArray(normalized.genres)
-    ? normalized.genres.filter(Boolean).slice(0, 3).map(localizedGenreLabel)
-    : [];
-  const bruto = String(normalized.description || "").trim();
-  // Corte em palavra inteira, nunca no meio do glifo: cortar glifo e o erro
-  // classico de app de TV, e foi exatamente o defeito do hero corrigido antes.
-  let descricao = bruto;
-  if (bruto.length > EXPANDED_FACTS_MAX_DESCRIPTION) {
-    const fatia = bruto.slice(0, EXPANDED_FACTS_MAX_DESCRIPTION);
-    const ultimoEspaco = fatia.lastIndexOf(" ");
-    descricao = `${(ultimoEspaco > 40 ? fatia.slice(0, ultimoEspaco) : fatia).trim()}…`;
-  }
-  return {
-    meta: meta.join(" • "),
-    genres: generos.map((g) => String(g)).join(" • "),
-    desc: descricao
-  };
-}
-
 function buildPosterSubtitle(item, layoutMode) {
   if (isCollectionFolderItem(item)) {
     return firstNonEmpty(item.collectionTitle, item.subtitle, "");
@@ -3142,25 +3112,6 @@ export function createPosterCardMarkup(
              data-item-id="${escapeAttribute(normalized.id)}"
              data-item-type="${escapeAttribute(normalized.type || itemType || "movie")}"
              data-item-title="${escapeAttribute(normalized.name || "Untitled")}"
-             ${
-               /* Ficha do card expandido em ATRIBUTOS, nao em nos. Atributo nao
-                  cria elemento: com ~540 posters na home, pre-renderizar tres
-                  divs por card somaria ~1600 nos num aparelho onde isso pesa.
-                  O DOM da ficha e montado por expandFocusedPoster() apenas no
-                  card focado, ou seja um de cada vez, e removido no colapso. */
-               !isLoading
-                 ? (() => {
-                     const fatos = buildExpandedFacts(normalized);
-                     return [
-                       fatos.meta ? `data-facts-meta="${escapeAttribute(fatos.meta)}"` : "",
-                       fatos.genres ? `data-facts-genres="${escapeAttribute(fatos.genres)}"` : "",
-                       fatos.desc ? `data-facts-desc="${escapeAttribute(fatos.desc)}"` : ""
-                     ]
-                       .filter(Boolean)
-                       .join(" ");
-                   })()
-                 : ""
-             }
              data-poster-src="${escapeAttribute(posterSrc || "")}"
              data-backdrop-src="${escapeAttribute(backdropSrc || "")}"
              data-logo-src="${escapeAttribute(normalized.logo || "")}"
@@ -6891,7 +6842,6 @@ export const HomeScreen = {
         targets.add(card);
       }
     });
-    targets.forEach((card) => this.unmountExpandedFacts(card));
     targets.forEach((target) => {
       const frame = target?.querySelector?.(".home-poster-frame") || null;
       const previousCardTransition =
@@ -6933,50 +6883,6 @@ export const HomeScreen = {
     }
   },
 
-  mountExpandedFacts(node) {
-    if (!(node instanceof HTMLElement) || node.querySelector(".home-poster-expanded-facts")) {
-      return;
-    }
-    const meta = node.dataset.factsMeta || "";
-    const genres = node.dataset.factsGenres || "";
-    const desc = node.dataset.factsDesc || "";
-    if (!meta && !genres && !desc) {
-      return;
-    }
-    const frame = node.querySelector(".home-poster-frame") || node;
-    const box = document.createElement("div");
-    box.className = "home-poster-expanded-facts";
-    // aria-hidden porque nada aqui e focavel: o D-pad continua andando de
-    // poster em poster, e a ficha e informacao passiva do card ja focado.
-    box.setAttribute("aria-hidden", "true");
-    const linha = (cls, texto, dir) => {
-      if (!texto) {
-        return;
-      }
-      const el = document.createElement("div");
-      el.className = cls;
-      if (dir) {
-        el.setAttribute("dir", dir);
-      }
-      el.textContent = texto;
-      box.appendChild(el);
-    };
-    linha("home-poster-expanded-meta", meta);
-    linha("home-poster-expanded-genres", genres);
-    linha("home-poster-expanded-desc", desc, "auto");
-    frame.appendChild(box);
-  },
-
-  unmountExpandedFacts(node) {
-    if (!(node instanceof HTMLElement)) {
-      return;
-    }
-    const box = node.querySelector(".home-poster-expanded-facts");
-    if (box && box.parentNode) {
-      box.parentNode.removeChild(box);
-    }
-  },
-
   expandFocusedPoster(node) {
     if (!this.isModernPosterNode(node)) {
       return;
@@ -6990,7 +6896,6 @@ export const HomeScreen = {
       this.collapseFocusedPoster(this.expandedPosterNode, { excludeNode: node });
     }
     node.classList.add("is-expanded");
-    this.mountExpandedFacts(node);
     this.hydrateFocusedPosterAssets(node);
     this.expandedPosterNode = node;
     requestAnimationFrame(() => {

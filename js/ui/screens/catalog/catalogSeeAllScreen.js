@@ -34,8 +34,15 @@ function buildSeeAllFacts(item = {}, descriptor = {}) {
     meta.push(String(ano));
   }
   const nota = Number(item.imdbRating);
-  if (Number.isFinite(nota) && nota > 0) {
-    meta.push(`IMDb ${item.imdbRating}`);
+  const rating = Number.isFinite(nota) && nota > 0 ? `IMDb ${item.imdbRating}` : "";
+  const minutos = Number(item.runtimeMinutes ?? item.runtime ?? 0);
+  if (Number.isFinite(minutos) && minutos > 0) {
+    const h = Math.floor(minutos / 60);
+    const m = Math.round(minutos % 60);
+    meta.push(h > 0 ? `${h}h${m ? ` ${m}m` : ""}` : `${m}m`);
+  }
+  if (tipoBruto === "series" && item.status) {
+    meta.push(String(item.status));
   }
   const generos = Array.isArray(item.genres) ? item.genres.filter(Boolean).slice(0, 4) : [];
   const bruto = String(item.description || item.overview || "").trim();
@@ -45,7 +52,7 @@ function buildSeeAllFacts(item = {}, descriptor = {}) {
     const ultimo = fatia.lastIndexOf(" ");
     desc = `${(ultimo > 80 ? fatia.slice(0, ultimo) : fatia).trim()}…`;
   }
-  return { meta: meta.join(" • "), genres: generos.join(" • "), desc };
+  return { meta: meta.join(" • "), rating, genres: generos.join(" • "), desc };
 }
 
 const POSTER_HOLD_DELAY_MS = 650;
@@ -686,6 +693,7 @@ export const CatalogSeeAllScreen = {
                     data-addon-name="${escapeHtml(descriptor.addonName || item.addonName || "")}"
                     data-catalog-type="${escapeHtml(descriptor.type || item.catalogType || "")}"
                     data-facts-meta="${escapeHtml(buildSeeAllFacts(item, descriptor).meta)}"
+                    data-facts-rating="${escapeHtml(buildSeeAllFacts(item, descriptor).rating)}"
                     data-facts-genres="${escapeHtml(buildSeeAllFacts(item, descriptor).genres)}"
                     data-facts-desc="${escapeHtml(buildSeeAllFacts(item, descriptor).desc)}"
                     data-focus-key="item:${item.id || index}"
@@ -739,6 +747,7 @@ export const CatalogSeeAllScreen = {
           </section>
           <aside class="seeall-detail" aria-hidden="true">
             <div class="seeall-detail-title"></div>
+            <div class="seeall-detail-rating"></div>
             <div class="seeall-detail-meta"></div>
             <div class="seeall-detail-genres"></div>
             <div class="seeall-detail-desc"></div>
@@ -798,6 +807,7 @@ export const CatalogSeeAllScreen = {
     }
     const campos = [
       [".seeall-detail-title", node.dataset.itemTitle || ""],
+      [".seeall-detail-rating", node.dataset.factsRating || ""],
       [".seeall-detail-meta", node.dataset.factsMeta || ""],
       [".seeall-detail-genres", node.dataset.factsGenres || ""],
       [".seeall-detail-desc", node.dataset.factsDesc || ""]
