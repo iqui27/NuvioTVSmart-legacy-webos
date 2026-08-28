@@ -4,6 +4,7 @@ import { Platform } from "../../../platform/index.js";
 import { TraktAuthService } from "../../../data/repository/traktAuthService.js";
 import { SimklAuthService } from "../../../data/repository/simklAuthService.js";
 import { SimklSyncService } from "../../../data/repository/simklSyncService.js";
+import { TraktCredentialSyncService } from "../../../core/profile/traktCredentialSyncService.js";
 import {
   SimklAnimeIdPreference,
   MoreLikeThisSourcePreference,
@@ -407,18 +408,30 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
       })
     );
 
-    const providerRow = ({ id, title, connected, waiting, username }) =>
+    // Aviso quando o vínculo está ativo mas a credencial NÃO subiu para a
+    // nuvem (push rejeitado/falhou): sem backup, o próximo logout ou 401
+    // destrói o vínculo permanentemente. Medido em TV real antes do fix.
+    const traktBackupFailed = TraktCredentialSyncService.getLastPushStatus?.().state === "error";
+    const providerRow = ({ id, title, connected, waiting, username, backupFailed }) =>
       this.renderActionRow({
         focusKey: `tracking:${id}`,
         leadingIconSrc:
           id === "simkl" ? "assets/icons/simkl_tv_glyph.svg" : "assets/icons/trakt_tv_glyph.svg",
         title,
         subtitle: connected
-          ? t(
+          ? `${t(
               id === "simkl" ? "simkl_connected_as" : "trakt_connected_as",
               [username || `${title} user`],
               `Connected as ${username || `${title} user`}`
-            )
+            )}${
+              backupFailed
+                ? ` — ${t(
+                    "tracking_backup_not_synced",
+                    {},
+                    "cloud backup failed; the link will be lost on sign-out"
+                  )}`
+                : ""
+            }`
           : waiting
             ? t("tracking_status_waiting", {}, "Waiting for approval")
             : t(id === "simkl" ? "simkl_connect" : "trakt_connect", {}, `Connect ${title}`),
@@ -440,8 +453,9 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
         <div class="settings-trakt-scroll-area">
           <div class="settings-trakt-card">
             <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_accounts_title", {}, "Accounts"))}</h3>
+            <p class="settings-tracking-card-subtitle">${escapeHtml(t("tracking_accounts_subtitle", {}, "Connect and manage tracking services"))}</p>
             <div class="settings-trakt-options-stack">
-              ${providerRow({ id: "trakt", title: "Trakt", connected: traktConnected, waiting: traktWaiting, username: trakt.username })}
+              ${providerRow({ id: "trakt", title: "Trakt", connected: traktConnected, waiting: traktWaiting, username: trakt.username, backupFailed: traktBackupFailed })}
               ${providerRow({ id: "simkl", title: "Simkl", connected: simklConnected, waiting: simklWaiting, username: simkl.username })}
             </div>
           </div>
@@ -449,20 +463,40 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
           ${this.expandedProvider === "simkl" ? this.renderTrackingSimklAccount(simkl, simklConnected, simklWaiting) : ""}
           <div class="settings-trakt-card">
             <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_sources_title", {}, "Sources"))}</h3>
+            <p class="settings-tracking-card-subtitle">${escapeHtml(t("tracking_sources_subtitle", {}, "Choose where Nuvio reads your library and watch progress. Playback scrobbles to every connected service."))}</p>
             <div class="settings-trakt-options-stack">
               ${this.renderActionRow({ focusKey: "tracking:librarySource", title: t("trakt_library_source_title", {}, "Library source"), subtitle: t("tracking_library_source_dialog_subtitle", {}, "Choose the service Nuvio reads for your Library."), value: connectedLibrarySources.find((item) => item.id === settings.librarySourceMode)?.label || "Nuvio" })}
               ${this.renderActionRow({ focusKey: "tracking:progressSource", title: t("trakt_watch_progress_source_title", {}, "Watch progress source"), subtitle: t("tracking_watch_progress_dialog_subtitle", {}, "Choose the service Nuvio reads for resume and Continue Watching."), value: connectedWatchSources.find((item) => item.id === settings.watchProgressSource)?.label || "Nuvio Sync" })}
             </div>
           </div>
-          <div class="settings-trakt-card">
-            <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_trakt_features_title", {}, "Tracking behavior"))}</h3>
-            <div class="settings-trakt-options-stack">
-              ${traktConnected ? this.renderActionRow({ focusKey: "tracking:cwWindow", title: t("trakt_continue_watching_window", {}, "Continue Watching window"), subtitle: t("trakt_continue_watching_subtitle", {}, "Trakt history considered for Continue Watching"), value: settings.continueWatchingDaysCap === 0 ? t("trakt_all_history", {}, "All history") : t("trakt_days", [settings.continueWatchingDaysCap], `${settings.continueWatchingDaysCap} days`) }) : ""}
-              ${traktConnected ? this.renderToggleRow({ focusKey: "tracking:comments", title: t("trakt_comments_title", {}, "Trakt comments"), subtitle: t("trakt_comments_subtitle", {}, "Show Trakt reviews on metadata pages"), checked: Boolean(settings.showMetaComments) }) : ""}
-              ${traktConnected ? this.renderActionRow({ focusKey: "tracking:moreLikeThis", title: t("tracking_more_like_this_source", {}, "More Like This source"), subtitle: t("tracking_more_like_this_source_subtitle", {}, "Choose related titles from Trakt or TMDB"), value: settings.moreLikeThisSource === MoreLikeThisSourcePreference.TMDB ? "TMDB" : "Trakt" }) : ""}
-              ${simklConnected ? this.renderActionRow({ focusKey: "tracking:animeId", title: t("tracking_simkl_anime_id_title", {}, "Simkl anime ID"), subtitle: t("tracking_simkl_anime_id_subtitle", {}, "Preferred catalog identity for anime matching"), value: settings.simklAnimeIdPreference === "mal" ? "MyAnimeList" : settings.simklAnimeIdPreference === "kitsu" ? "Kitsu" : "IMDb / TMDB" }) : ""}
+          ${
+            traktConnected
+              ? `
+            <div class="settings-trakt-card">
+              <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_trakt_features_title", {}, "Trakt features"))}</h3>
+              <p class="settings-tracking-card-subtitle">${escapeHtml(t("tracking_trakt_features_subtitle", {}, "Trakt-specific history, reviews, and recommendations"))}</p>
+              <div class="settings-trakt-options-stack">
+                ${this.renderActionRow({ focusKey: "tracking:cwWindow", title: t("trakt_continue_watching_window", {}, "Continue Watching window"), subtitle: t("trakt_continue_watching_subtitle", {}, "Trakt history considered for Continue Watching"), value: settings.continueWatchingDaysCap === 0 ? t("trakt_all_history", {}, "All history") : t("trakt_days", [settings.continueWatchingDaysCap], `${settings.continueWatchingDaysCap} days`) })}
+                ${this.renderToggleRow({ focusKey: "tracking:comments", title: t("trakt_comments_title", {}, "Trakt comments"), subtitle: t("trakt_comments_subtitle", {}, "Show Trakt reviews on metadata pages"), checked: Boolean(settings.showMetaComments) })}
+                ${this.renderActionRow({ focusKey: "tracking:moreLikeThis", title: t("tracking_more_like_this_source", {}, "More Like This source"), subtitle: t("tracking_more_like_this_source_subtitle", {}, "Choose related titles from Trakt or TMDB"), value: settings.moreLikeThisSource === MoreLikeThisSourcePreference.TMDB ? "TMDB" : "Trakt" })}
+              </div>
             </div>
-          </div>
+          `
+              : ""
+          }
+          ${
+            simklConnected
+              ? `
+            <div class="settings-trakt-card">
+              <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_simkl_features_title", {}, "Simkl features"))}</h3>
+              <p class="settings-tracking-card-subtitle">${escapeHtml(t("tracking_simkl_features_subtitle", {}, "Simkl-specific settings"))}</p>
+              <div class="settings-trakt-options-stack">
+                ${this.renderActionRow({ focusKey: "tracking:animeId", title: t("tracking_simkl_anime_id_title", {}, "Anime ID preference"), subtitle: t("tracking_simkl_anime_id_subtitle", {}, "Controls how anime series are identified"), value: settings.simklAnimeIdPreference === "mal" ? "MyAnimeList" : settings.simklAnimeIdPreference === "kitsu" ? "Kitsu" : "IMDb / TMDB" })}
+              </div>
+            </div>
+          `
+              : ""
+          }
           ${simklConnected ? `<p class="settings-trakt-meta-copy settings-tracking-attribution">${escapeHtml(t("licenses_attributions_simkl_body", {}, "Library and tracking data provided by Simkl."))}</p>` : ""}
         </div>
       </section>

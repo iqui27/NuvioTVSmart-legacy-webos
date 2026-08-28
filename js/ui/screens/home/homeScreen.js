@@ -17,8 +17,13 @@ import {
 } from "../../../data/repository/libraryRepository.js";
 import { mapWithConcurrency } from "../../../core/network/mapWithConcurrency.js";
 import { filterReleasedItems } from "../../../core/util/releaseInfoUtils.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { showHomeRatings } from "../../../core/util/imdbRatingVisibility.js";
+import {
+  continueWatchingUsesEpisodeThumbnails,
+  continueWatchingImageSources
+} from "../../../core/util/continueWatchingImage.js";
 import { ContinueWatchingPreferences } from "../../../data/local/continueWatchingPreferences.js";
 import { HomeCatalogStore } from "../../../data/local/homeCatalogStore.js";
 import { CollectionsStore, buildCollectionHomeKey } from "../../../data/local/collectionsStore.js";
@@ -32,6 +37,7 @@ import { StartupSyncService } from "../../../core/profile/startupSyncService.js"
 import { AvatarRepository } from "../../../data/remote/supabase/avatarRepository.js";
 import { MemberAccessRepository } from "../../../data/remote/supabase/memberAccessRepository.js";
 import { Platform } from "../../../platform/index.js";
+import { WatchProgressSource } from "../../../data/local/traktSettingsStore.js";
 import {
   getTvHeroTransitionMode,
   getTvRuntimePerformanceProfile
@@ -41,6 +47,7 @@ import { LocalStore } from "../../../core/storage/localStore.js";
 import { TMDB_API_KEY, YOUTUBE_PROXY_URL } from "../../../config.js";
 import { I18n } from "../../../i18n/index.js";
 import { localizedGenreLabel } from "../../../i18n/genreLabels.js";
+import { getHomeRowKind, homeRowEyebrowKind, isRankedHomeRow } from "./homeRowKind.js";
 import {
   buildWatchedTitleIdSet,
   isTitleItemWatched,
@@ -50,6 +57,7 @@ import {
   buildModernRowKey,
   getHomeRowKey,
   renderModernRowSection,
+  rowHasSeeAllDoor,
   MODERN_HOME_CONSTANTS,
   renderModernHomeLayout
 } from "./modernHomeLayout.js";
@@ -128,6 +136,8 @@ import {
   shouldApplyLateContinueWatchingFocus
 } from "./homeFocusPolicy.js";
 import { resolveNextUpCandidates } from "./nextUpCandidateResolver.js";
+import { findAbsoluteEpisodeAnchorIndex } from "./nextUpEpisodeAnchor.js";
+import { shouldSurfaceNextUpForUntrackedSeries } from "./nextUpWatchingPolicy.js";
 import {
   getContinueWatchingRenderItems,
   shouldAppendContinueWatchingItems
@@ -161,7 +171,7 @@ function isDirectionalKeyCode(code) {
   return code >= 37 && code <= 40;
 }
 const HOME_LAZY_IMAGE_SELECTOR =
-  ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src]";
+  ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src], .home-main .content-poster[data-lazy-src], .home-main .home-poster-landscape-logo[data-lazy-src], .home-main .home-continue-bg[data-lazy-src]";
 const HOME_LAZY_IMAGE_ROW_SELECTOR =
   ".home-row, .home-modern-row, .home-grid-section, .home-row-continue";
 // The focused row used to hydrate every image it owned, unconditionally. Measured
@@ -172,6 +182,47 @@ const HOME_LAZY_IMAGE_ROW_SELECTOR =
 // cards on each side of the viewport, so a D-pad move lands on a hydrated poster,
 // while the off-screen tail waits for the user to actually scroll toward it.
 const HOME_FOCUSED_ROW_HORIZONTAL_MARGIN = 320;
+// Liberacao de imagens fora de alcance (item 3 do backlog de EXPERIMENTOS-LAYOUT).
+// Vire para `false` para desligar tudo: a hidratacao volta a ser so de mao unica e
+// nenhuma imagem e liberada. E o unico interruptor deste experimento.
+const HOME_LAZY_IMAGE_RELEASE_ENABLED = true;
+// Histerese: uma fileira so devolve suas imagens ao estado `data-src` quando esta
+// MAIS longe do que a distancia que a re-hidrataria. Sem essa folga, a fileira que
+// para exatamente na borda da margem de hidratacao entraria em ciclo
+// libera/re-hidrata a cada quadro do D-pad, que e justamente o flicker que este
+// experimento nao pode introduzir.
+const HOME_LAZY_IMAGE_RELEASE_MARGIN_FACTOR = 2.5;
+
+/**
+ * Devolve imagens ja carregadas ao estado `data-src`, liberando o bitmap decodificado.
+ *
+ * `removeAttribute("src")` e obrigatorio: `image.src = ""` faz o Chromium 53 pedir a
+ * propria URL do documento e enfileirar um erro de rede por imagem.
+ *
+ * Idempotente e barato: sem `data-lazy-src` (imagem que nunca foi hidratada) ou sem
+ * `src` (ja liberada) a imagem e ignorada, entao passar a mesma fileira varias vezes
+ * nao custa nada nem provoca recarregamento.
+ */
+function releaseHomeLazyImages(images) {
+  if (!HOME_LAZY_IMAGE_RELEASE_ENABLED || !images || !images.length) {
+    return 0;
+  }
+  let released = 0;
+  for (let i = 0; i < images.length; i += 1) {
+    const image = images[i];
+    if (!(image instanceof HTMLImageElement) || !image.isConnected) {
+      continue;
+    }
+    const stashed = String(image.dataset.lazySrc || "").trim();
+    if (!stashed || !image.getAttribute("src")) {
+      continue;
+    }
+    image.removeAttribute("src");
+    image.setAttribute("data-src", stashed);
+    released += 1;
+  }
+  return released;
+}
 
 function homePerfNow() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -380,6 +431,27 @@ function logHomeLoadStages(phase) {
   });
 }
 
+// Eyebrow labels for home rows, memoized per locale. Both the full render and
+// the keyed reconciler pass this same object into renderModernRowSection, which
+// keeps their markup byte-identical (the reconciler compares strings).
+let homeRowKindLabelsCache = null;
+let homeRowKindLabelsLocale = "";
+function getHomeRowKindLabels() {
+  const locale = String(I18n.getLocale() || "");
+  if (homeRowKindLabelsCache && homeRowKindLabelsLocale === locale) {
+    return homeRowKindLabelsCache;
+  }
+  homeRowKindLabelsLocale = locale;
+  homeRowKindLabelsCache = {
+    streaming: t("home.rowKind.streaming", {}, "Streaming"),
+    genre: t("home.rowKind.genre", {}, "Genre"),
+    curated: t("home.rowKind.curated", {}, "Curated"),
+    themed: t("home.rowKind.themed", {}, "Themed"),
+    collection: t("home.rowKind.collection", {}, "Collection")
+  };
+  return homeRowKindLabelsCache;
+}
+
 function t(key, params = {}, fallback = key) {
   return I18n.t(key, params, { fallback });
 }
@@ -442,7 +514,7 @@ function renderHeroBackdropImage(display) {
   const fallbackAttribute = fallbackQueue
     ? ` data-fallback-srcs="${escapeAttribute(fallbackQueue)}"`
     : "";
-  return `<img class="home-hero-backdrop" src="${escapeAttribute(display.backdrop)}"${fallbackAttribute} alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" onerror="${buildImageFallbackErrorHandler()}" />`;
+  return `<img class="home-hero-backdrop" src="${escapeAttribute(tmdbImageAtSize(display.backdrop, "w1280"))}"${fallbackAttribute} alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" onerror="${buildImageFallbackErrorHandler()}" />`;
 }
 
 export function buildModernHomeSizingStyle(layoutPrefs = {}) {
@@ -743,7 +815,15 @@ function animateHeroBackdropSwap(
     return;
   }
 
-  const normalizedSrc = String(nextSrc || "").trim();
+  // CAUSA MEDIDA do travamento ao percorrer a Home. Este src chega do addon em
+  // `t/p/original`: 3840x2160, 8,3 megapixels, para desenhar 1920x1062. Um trace
+  // do Chromium na C9 durante a descida de 12 fileiras mostrou
+  // ImageDecodeTaskImpl 4373ms em 47 tarefas, com uma unica decodificacao de
+  // 1125ms — e o hero troca de arte a cada movimento entre fileiras. w1280 e o
+  // que o Android TV usa e da 0,92MP: nove vezes menos bitmap para decodificar.
+  // O template do hero ja normalizava, mas quem pinta de verdade e este
+  // setAttribute, entao a normalizacao tinha que estar aqui.
+  const normalizedSrc = tmdbImageAtSize(String(nextSrc || "").trim(), "w1280");
   const normalizedAlt = String(nextAlt || "featured").trim() || "featured";
   const currentSrc = String(backdrop.getAttribute("src") || "").trim();
   const transitionMode = options?.transitionMode || "crossfade";
@@ -862,7 +942,9 @@ function animateHeroLogoSwap(
     return;
   }
 
-  const normalizedSrc = String(nextSrc || "").trim();
+  // Mesmo motivo do backdrop: o logo vinha em `t/p/original`, 4319x421 (1,8MP),
+  // para desenhar 440x160.
+  const normalizedSrc = tmdbImageAtSize(String(nextSrc || "").trim(), "w500");
   const normalizedAlt = String(nextAlt || "logo").trim() || "logo";
   const currentSrc = String(logoNode.getAttribute("src") || "").trim();
   const transitionMode = options?.transitionMode || "crossfade";
@@ -1453,6 +1535,44 @@ function normalizeEpisodeEntries(videos = []) {
     });
 }
 
+function mapAbsoluteEpisodeKey(episodes, key) {
+  const [season, episode] = String(key || "")
+    .split(":")
+    .map(Number);
+  if (season !== 1 || episode <= 0) {
+    return null;
+  }
+  const index = findAbsoluteEpisodeAnchorIndex(episodes, { season, episode });
+  const target = index >= 0 ? episodes[index] : null;
+  return target ? episodeKey(target.season, target.episode) : null;
+}
+
+function mapAbsoluteWatchedEpisodeKeys(episodes, watchedEpisodeKeys) {
+  const mapped = new Set(watchedEpisodeKeys || []);
+  Array.from(mapped).forEach((key) => {
+    const mappedKey = mapAbsoluteEpisodeKey(episodes, key);
+    if (mappedKey) {
+      mapped.add(mappedKey);
+    }
+  });
+  return mapped;
+}
+
+function mapAbsoluteEpisodeProgress(episodes, progressByEpisode) {
+  const mapped = new Map(progressByEpisode);
+  progressByEpisode.forEach((entry, key) => {
+    const mappedKey = mapAbsoluteEpisodeKey(episodes, key);
+    if (!mappedKey) {
+      return;
+    }
+    const existing = mapped.get(mappedKey);
+    if (!existing || Number(entry?.updatedAt || 0) > Number(existing?.updatedAt || 0)) {
+      mapped.set(mappedKey, entry);
+    }
+  });
+  return mapped;
+}
+
 function findEpisodeEntry(videos = [], season = null, episode = null) {
   const targetSeason = Number(season);
   const targetEpisode = Number(episode || 0);
@@ -2034,7 +2154,19 @@ function buildNextUpSeedFromWatchedItem(item = {}) {
     durationMs: 100,
     progressPercent: 100,
     updatedAt: watchedAt,
-    source: "watched_items"
+    source: "watched_items",
+    isSimklAbsoluteEpisode: item?.isSimklAbsoluteEpisode === true
+  };
+}
+
+function getContinueWatchingNextUpSeedOptions() {
+  const source =
+    watchProgressRepository.getContinueWatchingSource?.() || WatchProgressSource.NUVIO_SYNC;
+  const useLocalWatchedItemSeeds = source === WatchProgressSource.NUVIO_SYNC;
+  return {
+    applyDaysCap: source === WatchProgressSource.TRAKT,
+    includeProgressSeeds: !useLocalWatchedItemSeeds,
+    includeWatchedItemSeeds: useLocalWatchedItemSeeds
   };
 }
 
@@ -2518,7 +2650,7 @@ function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
         </div>
         <div class="home-hero-copy">
           <div class="home-hero-brand">
-            ${display.logo ? `<img class="home-hero-logo" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />` : ""}
+            ${display.logo ? `<img class="home-hero-logo" src="${escapeAttribute(tmdbImageAtSize(display.logo, "w500"))}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />` : ""}
             <h1 class="home-hero-title-text${display.logo ? " is-hidden" : ""}">${escapeHtml(display.title)}</h1>
           </div>
           <div class="home-hero-meta-primary${display.metaPrimary.length ? "" : " is-empty"}">${renderMetaTokens(display.metaPrimary)}</div>
@@ -2543,10 +2675,11 @@ function buildPosterSubtitle(item, layoutMode) {
   return firstNonEmpty(extractYear(normalized), normalized.releaseInfo, "");
 }
 
-function renderRowHeader(title, subtitle = "") {
+function renderRowHeader(title, subtitle = "", eyebrow = "") {
   return `
     <div class="home-row-head">
       <h2 class="home-row-title">${escapeHtml(title)}</h2>
+      ${eyebrow ? `<div class="home-row-eyebrow" aria-hidden="true">${escapeHtml(eyebrow)}</div>` : ""}
       ${subtitle ? `<div class="home-row-subtitle">${escapeHtml(subtitle)}</div>` : ""}
     </div>
   `;
@@ -2564,40 +2697,27 @@ function renderContinueWatchingCard(item, index, options = {}) {
   const subtitle = normalized.episodeTitle || "";
   const isNextUp = Boolean(normalized?.isNextUp);
   const hasAired = normalized?.hasAired !== false;
-  const useEpisodeThumbnails = options?.useEpisodeThumbnails !== false;
+  const cardStyle = options?.cardStyle;
+  const useEpisodeThumbnails = continueWatchingUsesEpisodeThumbnails(
+    cardStyle,
+    options?.useEpisodeThumbnails
+  );
   const blurNextUp = Boolean(options?.blurNextUp && isNextUp && useEpisodeThumbnails);
   const rowKey = String(options?.rowKey || "continue_watching").trim() || "continue_watching";
-  const cardImageSources = useEpisodeThumbnails
-    ? !isNextUp
-      ? [
-          normalized.episodeThumbnail,
-          normalized.backdrop,
-          normalized.poster,
-          normalized.thumbnail,
-          normalized.background
-        ]
-      : !hasAired
-        ? [
-            normalized.backdrop,
-            normalized.poster,
-            normalized.thumbnail,
-            normalized.background,
-            normalized.episodeThumbnail
-          ]
-        : [
-            normalized.thumbnail,
-            normalized.episodeThumbnail,
-            normalized.backdrop,
-            normalized.poster,
-            normalized.background
-          ]
-    : [
-        normalized.backdrop,
-        normalized.poster,
-        normalized.thumbnail,
-        normalized.episodeThumbnail,
-        normalized.background
-      ];
+  const cardImageSources = continueWatchingImageSources(
+    {
+      poster: normalized.poster,
+      backdrop: normalized.backdrop,
+      thumbnail: normalized.thumbnail,
+      episodeThumbnail: normalized.episodeThumbnail
+    },
+    {
+      cardStyle,
+      useEpisodeThumbnails: options?.useEpisodeThumbnails,
+      isNextUp,
+      hasAired
+    }
+  );
   const uniqueCardImageSources = uniqueNonEmptyValues(cardImageSources);
   const cardImage = uniqueCardImageSources[0] || "";
   const fallbackQueue = encodeHeroBackdropFallbacks(uniqueCardImageSources.slice(1));
@@ -2674,15 +2794,16 @@ export function renderContinueWatchingSection(items = [], options = {}) {
     1,
     Math.min(10, Number(options?.loadingCount || items.length || 3))
   );
-  const cardOptions = {
-    useEpisodeThumbnails: options?.useEpisodeThumbnails,
-    blurNextUp: options?.blurNextUp,
-    rowKey
-  };
   const itemLimit = Math.max(1, Number(options?.itemLimit || items.length || 1));
   const cardStyle = ["card", "wide", "poster"].includes(String(options?.cardStyle || "card"))
     ? String(options.cardStyle)
     : "card";
+  const cardOptions = {
+    useEpisodeThumbnails: options?.useEpisodeThumbnails,
+    blurNextUp: options?.blurNextUp,
+    cardStyle,
+    rowKey
+  };
   const renderedItems = getContinueWatchingRenderItems(items, itemLimit);
   return `
     <section class="home-row home-row-continue home-row-continue-${cardStyle}"${rowKey ? ` data-row-key="${escapeAttribute(rowKey)}"` : ""}>
@@ -2798,7 +2919,8 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
         catalogId: rowData.catalogId || "",
         catalogName: rowData.catalogName || "",
         type: rowData.type || "movie",
-        initialItems: items
+        initialItems: items,
+        initialNextSkip: Number(rowData?.result?.data?.nextSkip || 0)
       });
     }
 
@@ -2810,7 +2932,10 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
         ? `from ${rowData.addonName}`
         : "";
     const maxItems = Math.max(1, Number(rowItemLimit || HOME_MAX_ITEMS_PER_ROW_DEFAULT));
-    const hasSeeAll = !isCollectionRow && !isLoading && items.length > maxItems;
+    // Same criterion as the modern layout: a full page means "probably more".
+    // The old `items.length > maxItems` never fired on this TV, where catalogs
+    // return exactly `rowItemLimit` items on the first page (8 > 8 is false).
+    const hasSeeAll = !isCollectionRow && !isLoading && rowHasSeeAllDoor(rowData, maxItems);
     const gridLimit = Math.max(1, hasSeeAll ? maxItems - 1 : maxItems);
     const visibleItems = isCollectionRow
       ? rowItems
@@ -2855,11 +2980,15 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
       return;
     }
 
+    const rowKind = getHomeRowKind(rowData);
+    const rowRanked = !isLoading && isRankedHomeRow(rowData);
+    const eyebrowKind = homeRowEyebrowKind(rowData);
+    const eyebrowLabel = eyebrowKind ? getHomeRowKindLabels()[eyebrowKind] || "" : "";
     sectionsMarkup.push(`
       <section class="home-row"
                data-row-key="${escapeAttribute(rowKey)}"
-               data-row-index="${rowIndex}">
-        ${renderRowHeader(rowTitle, rowSubtitle)}
+               data-row-index="${rowIndex}"${rowKind ? ` data-row-kind="${escapeAttribute(rowKind)}"` : ""}${rowRanked ? ` data-row-ranked="true"` : ""}>
+        ${renderRowHeader(rowTitle, rowSubtitle, eyebrowLabel)}
         ${trackMarkup}
       </section>
     `);
@@ -2890,7 +3019,7 @@ export function createSeeAllCardMarkup(seeAllId, rowData, itemIndex = 0, rowInde
              data-catalog-type="${escapeAttribute(rowData.type || "")}">
       <div class="home-seeall-card-inner">
         <div class="home-seeall-arrow" aria-hidden="true">&#8594;</div>
-        <div class="home-seeall-label">See All</div>
+        <div class="home-seeall-label">${escapeHtml(t("action_see_all", {}, "See All"))}</div>
       </div>
     </article>
   `;
@@ -3053,7 +3182,12 @@ export function createPosterCardMarkup(
         normalized.backdrop,
         normalized.backdropUrl
       );
-  const expandedVisualSrc = firstNonEmpty(backdropSrc, posterSrc);
+  // Medido na C9: este poster desenha 221x339 e o addon manda w500 (500x750) —
+  // 4,5x de pixel para decodificar. w342 ainda cobre o dobro da largura
+  // desenhada, que e o teto util num painel de 2x. O logo do hero era o caso
+  // extremo: 2394x425 baixados para desenhar 440x160.
+  const posterSrcAjustado = tmdbImageAtSize(posterSrc, useLandscapePoster ? "w780" : "w342");
+  const expandedVisualSrc = firstNonEmpty(backdropSrc, posterSrcAjustado);
   const expandedClass = isExpanded ? " is-expanded" : "";
   const landscapeClass = useLandscapePoster ? " is-landscape" : "";
   const focusableClass = isLoading ? "" : " focusable";
@@ -3097,7 +3231,7 @@ export function createPosterCardMarkup(
       <div class="home-poster-frame">
         ${
           !isLoading && posterSrc
-            ? `<img class="content-poster" ${buildLazyImageAttributes(posterSrc, { defer: deferImages })} alt="${escapeAttribute(normalized.name || "content")}" />`
+            ? `<img class="content-poster" ${buildLazyImageAttributes(posterSrcAjustado, { defer: deferImages })} alt="${escapeAttribute(normalized.name || "content")}" />`
             : '<div class="content-poster placeholder"></div>'
         }
         ${
@@ -3115,6 +3249,7 @@ export function createPosterCardMarkup(
               : `<div class="home-poster-expanded-title" dir="auto">${escapeHtml(normalized.name || "Untitled")}</div>`
           }
         </div>
+
         ${
           !isLoading && useLandscapePoster && !suppressPosterText
             ? `
@@ -6029,6 +6164,11 @@ export const HomeScreen = {
             fallbackTitle: item.name || item.id || "Untitled",
             fallbackPoster: item.poster || "",
             fallbackBackground: item.background || item.backdrop || "",
+            // Sem esta dica o hero abre com o TITULO EM TEXTO e so troca para o
+            // logo quando o metadado chega — medido na C9: 180px de altura por
+            // ~1.7s e depois 78px. Nao e animacao, e troca de elemento, e le-se
+            // como "o titulo encolheu sozinho". A lista ja tem o logo em maos.
+            fallbackLogo: item.logo || "",
             addonBaseUrl: item.addonBaseUrl || "",
             addonId: item.addonId || "",
             addonName: item.addonName || "",
@@ -6634,8 +6774,27 @@ export const HomeScreen = {
     const shouldPreviewTrailer = trailerEnabled && (useLandscapePosters || expandSettingEnabled);
     const landscapeExpandedCardMode =
       useLandscapePosters && shouldPreviewTrailer && requestedTrailerTarget === "expanded_card";
-    const shouldExpand =
-      (expandSettingEnabled && !useLandscapePosters) || landscapeExpandedCardMode;
+    // A expansao NAO depende mais de trailer quando os posters sao paisagem.
+    // Antes: `(expandSettingEnabled && !useLandscapePosters) ||
+    // landscapeExpandedCardMode`, e landscapeExpandedCardMode exige trailer
+    // ligado com destino "expanded_card". Com posters paisagem e trailer
+    // desligado — a configuracao real desta TV — os dois termos davam falso e o
+    // card simplesmente nunca expandia, mesmo com a preferencia de expansao
+    // marcada em Ajustes. Medido na C9: `.home-poster-card.is-expanded` ficou em
+    // 0 mesmo 10s parado no poster.
+    //
+    // Informacao e trailer sao coisas diferentes: quem liga "expandir ao focar"
+    // esta pedindo a ficha do titulo, nao um video. O modo de trailer no card
+    // continua existindo, so deixou de ser a UNICA porta para a expansao.
+    // Expansao do poster ao focar DESLIGADA na home, por decisao do dono: o hero
+    // ja mostra arte, titulo e sinopse do item focado, entao crescer o card
+    // repete a mesma informacao e ainda move a fileira debaixo do cursor.
+    // A preferencia em Ajustes continua existindo e volta a valer trocando esta
+    // constante para false — o resto do fluxo (trailer no card) fica intacto.
+    const HOME_POSTER_EXPAND_DISABLED = true;
+    const shouldExpand = HOME_POSTER_EXPAND_DISABLED
+      ? false
+      : expandSettingEnabled || landscapeExpandedCardMode;
     return {
       shouldExpand,
       shouldPreviewTrailer,
@@ -7163,7 +7322,21 @@ export const HomeScreen = {
         1,
         Math.ceil(lineHeight || fontSize * 1.35 || description.offsetHeight || 1)
       );
-      description.style.maxHeight = `${lineBoxHeight * modernHeroDescriptionMaxLines}px`;
+      // Cap the line budget by the space actually left inside the copy box.
+      // The box is overflow:hidden, so a fixed 4-line cap that does not fit
+      // shaves the last line mid-glyph instead of dropping it. Measured on the
+      // legacy bench at 1920x1080: 113px remained below the description while
+      // 4 lines need 119px, so the 4th line rendered with its bottom 6px cut.
+      let lineBudget = modernHeroDescriptionMaxLines;
+      const copyBox = description.closest(".home-modern-hero-copy");
+      if (copyBox instanceof HTMLElement) {
+        const available =
+          copyBox.getBoundingClientRect().bottom - description.getBoundingClientRect().top;
+        if (available > 0) {
+          lineBudget = Math.max(1, Math.min(lineBudget, Math.floor(available / lineBoxHeight)));
+        }
+      }
+      description.style.maxHeight = `${lineBoxHeight * lineBudget}px`;
     });
   },
 
@@ -8986,8 +9159,7 @@ export const HomeScreen = {
     this.layoutPrefs = prefs;
     this.sidebarExpanded = Boolean(this.layoutPrefs?.modernSidebar && this.sidebarExpanded);
     this.layoutMode = String(prefs.homeLayout || "classic").toLowerCase();
-    const includeWatchedItemNextUpSeeds =
-      watchProgressRepository.getContinueWatchingSource?.() !== "trakt";
+    const nextUpSeedOptions = getContinueWatchingNextUpSeedOptions();
     const watchedItemsPromise = watchedItemsRepository.getAll(2000).catch(() => []);
     watchedItemsPromise.then((watchedItems) => {
       if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
@@ -9357,9 +9529,7 @@ export const HomeScreen = {
           this.continueWatching,
           this.watchedItems,
           {
-            applyDaysCap: !includeWatchedItemNextUpSeeds,
-            includeProgressSeeds: !includeWatchedItemNextUpSeeds,
-            includeWatchedItemSeeds: includeWatchedItemNextUpSeeds,
+            ...nextUpSeedOptions,
             nextUpFromFurthestEpisode: prefs.nextUpFromFurthestEpisode
           }
         ).slice(0, CW_MAX_NEXT_UP_LOOKUPS);
@@ -10068,6 +10238,7 @@ export const HomeScreen = {
         formatCatalogRowTitle,
         shouldDeferRowImages: shouldDeferHomeRowImages,
         watchedTitleIds: this.watchedTitleIds,
+        rowKindLabels: getHomeRowKindLabels(),
         escapeHtml,
         escapeAttribute
       });
@@ -10516,6 +10687,27 @@ export const HomeScreen = {
     const viewportRect = viewport.getBoundingClientRect();
     const constrained = this.isPerformanceConstrained();
     const verticalMargin = constrained ? 720 : 1200;
+    // Duas tentativas medidas e REJEITADAS aqui, para nao repetir:
+    //
+    // 1) Subir esta margem para 1250 (buscar ~4 cards antes da
+    // borda, em vez de menos de dois) NAO melhorou nada na C9 — tres rodadas de
+    // 19 movimentos deram quadros piores de 1101/857/1084ms contra
+    // 636/1084/76ms com 520. Baixar mais imagens de uma vez concorre entre si.
+    // O que a navegacao sente e a chegada da imagem durante o movimento; a
+    // margem maior nao tira esse custo do caminho, so o adianta.
+    //
+    // 2) Pre-busca de rede das proximas imagens com `new Image()` em
+    // requestIdleCallback, no maximo 2 pedidos vivos e nada anexado ao
+    // documento. Tambem sem ganho: 6261ms de jank na primeira descida contra
+    // 6367ms sem ela, e 3226/3303ms nas descidas quentes contra 3694/3500ms.
+    // O motivo de nenhuma das duas funcionar e que o custo NAO e rede: as
+    // descidas com o cache quente ainda perdem ~3300ms. Perfilando, o thread
+    // principal fica 77% ocioso e o nosso JS soma ~5%, entao o tempo tambem nao
+    // e execucao de codigo. Sobra rasterizacao/composicao, que o perfil de CPU
+    // do V8 nao ve. Desligar blur, filtro e sombra por CSS no aparelho deu
+    // 3507ms contra 4577ms, mas a faixa de ruido entre rodadas identicas e de
+    // 3500 a 6300ms, entao isso NAO e conclusivo. Fechar esse diagnostico pede
+    // o dominio Tracing (raster/paint), nao mais A/B de quadro.
     const horizontalMargin = constrained ? 520 : 1000;
     imageRows.forEach(({ row, images }) => {
       if (row instanceof HTMLElement && !row.isConnected) {
@@ -10528,6 +10720,13 @@ export const HomeScreen = {
           rowRect.bottom >= viewportRect.top - verticalMargin &&
           rowRect.top <= viewportRect.bottom + verticalMargin;
         if (!isRowNearViewport) {
+          const releaseMargin = verticalMargin * HOME_LAZY_IMAGE_RELEASE_MARGIN_FACTOR;
+          const isRowFarFromViewport =
+            rowRect.bottom < viewportRect.top - releaseMargin ||
+            rowRect.top > viewportRect.bottom + releaseMargin;
+          if (isRowFarFromViewport) {
+            releaseHomeLazyImages(images);
+          }
           return;
         }
       }
@@ -10562,6 +10761,13 @@ export const HomeScreen = {
         // loading="lazy" here delegates that decision back to old TV browsers,
         // which can miscalculate visibility inside the nested modern-home viewport.
         image.loading = "eager";
+        if (HOME_LAZY_IMAGE_RELEASE_ENABLED) {
+          // Guardado num atributo proprio porque `data-src` e removido logo abaixo
+          // (o indice e os testes leem `[data-src]` como "ainda nao carregada").
+          // `data-lazy-src` sobrevive a hidratacao e e o que permite devolver a
+          // imagem ao estado nao-carregado quando a fileira sai de alcance.
+          image.dataset.lazySrc = src;
+        }
         image.removeAttribute("data-src");
         image.src = src;
       });
@@ -10807,10 +11013,17 @@ export const HomeScreen = {
     }
     const showUnairedNextUp = options?.showUnairedNextUp !== false;
 
-    const progressByEpisode = this.buildEpisodeProgressIndex(
+    let progressByEpisode = this.buildEpisodeProgressIndex(
       allProgress,
       completedProgress?.contentId
     );
+    const isSimklAbsoluteEpisode = completedProgress?.isSimklAbsoluteEpisode === true;
+    const resolvedWatchedEpisodeKeys = isSimklAbsoluteEpisode
+      ? mapAbsoluteWatchedEpisodeKeys(episodes, watchedEpisodeKeys)
+      : watchedEpisodeKeys;
+    if (isSimklAbsoluteEpisode) {
+      progressByEpisode = mapAbsoluteEpisodeProgress(episodes, progressByEpisode);
+    }
     const anchorVideoId = String(completedProgress?.videoId || "").trim();
     let anchorIndex = anchorVideoId
       ? episodes.findIndex((entry) => String(entry?.id || "") === anchorVideoId)
@@ -10823,6 +11036,13 @@ export const HomeScreen = {
         (entry) =>
           Number(entry.season || 0) === anchorSeason && Number(entry.episode || 0) === anchorEpisode
       );
+    }
+
+    if (anchorIndex < 0 && isSimklAbsoluteEpisode) {
+      anchorIndex = findAbsoluteEpisodeAnchorIndex(episodes, {
+        season: anchorSeason,
+        episode: anchorEpisode
+      });
     }
 
     if (anchorIndex < 0) {
@@ -10855,7 +11075,7 @@ export const HomeScreen = {
       const candidate = episodes[index];
       const key = episodeKey(candidate.season, candidate.episode);
       const candidateProgress = progressByEpisode.get(key);
-      if (watchedEpisodeKeys?.has?.(key)) {
+      if (resolvedWatchedEpisodeKeys?.has?.(key)) {
         continue;
       }
       if (candidateProgress && isCompletedForContinueWatching(candidateProgress)) {
@@ -10889,10 +11109,7 @@ export const HomeScreen = {
       Array.isArray(nextUpProgressCandidates) && nextUpProgressCandidates.length
         ? nextUpProgressCandidates
         : this.selectNextUpProgressCandidates(allProgress, inProgressItems, watchedItems, {
-            applyDaysCap: watchProgressRepository.getContinueWatchingSource?.() === "trakt",
-            includeProgressSeeds: watchProgressRepository.getContinueWatchingSource?.() === "trakt",
-            includeWatchedItemSeeds:
-              watchProgressRepository.getContinueWatchingSource?.() !== "trakt",
+            ...getContinueWatchingNextUpSeedOptions(),
             nextUpFromFurthestEpisode: this.layoutPrefs?.nextUpFromFurthestEpisode
           });
 
@@ -10953,6 +11170,15 @@ export const HomeScreen = {
           }
         );
         if (!nextEpisode) {
+          return null;
+        }
+        if (
+          !watchProgressRepository.isTrackedAsWatching(contentId) &&
+          !shouldSurfaceNextUpForUntrackedSeries({
+            seedUpdatedAt: progressEntry?.updatedAt,
+            released: nextEpisode.released
+          })
+        ) {
           return null;
         }
         const hasAired = hasEpisodeAiredForContinueWatching(nextEpisode.released);
@@ -11450,6 +11676,10 @@ export const HomeScreen = {
       fallbackTitle: node.dataset.itemTitle || "Untitled",
       fallbackPoster: node.dataset.posterSrc || "",
       fallbackBackground: node.dataset.backdropSrc || "",
+      // O card ja carrega data-logo-src; passar adiante evita o hero abrir com
+      // o titulo em texto e trocar por logo depois. Ver comentario no outro
+      // ponto de navegacao.
+      fallbackLogo: node.dataset.logoSrc || "",
       addonBaseUrl: node.dataset.addonBaseUrl || "",
       addonId: node.dataset.addonId || "",
       addonName: node.dataset.addonName || "",
@@ -11774,7 +12004,15 @@ export const HomeScreen = {
 
     const focusedNode = this.getCurrentFocusedNode();
     const focusedRowKey = focusedNode ? String(focusedNode.dataset?.navRowKey || "") : "";
-    const focusedItemIndex = focusedNode ? Number(focusedNode.dataset?.navCol || 0) : -1;
+    // focusedItemIndex exists so a card the horizontal pagination appended past
+    // `rowItemLimit` survives a re-render. The see-all door sits at navCol
+    // === visibleItems.length, so reading its index here would ask the row for
+    // one MORE poster than it has, change the markup, replace the node and drop
+    // the focus that was on the door. Doors are always inside the limit.
+    const focusedItemIndex =
+      focusedNode && focusedNode.dataset?.action !== "openCatalogSeeAll"
+        ? Number(focusedNode.dataset?.navCol || 0)
+        : -1;
     const focusedRowSection = focusedNode ? focusedNode.closest(".home-modern-row") : null;
 
     const sectionOptions = {
@@ -11788,7 +12026,9 @@ export const HomeScreen = {
       shouldDeferRowImages: shouldDeferHomeRowImages,
       watchedTitleIds: this.watchedTitleIds,
       createPosterCardMarkup,
+      createSeeAllCardMarkup,
       formatCatalogRowTitle,
+      rowKindLabels: getHomeRowKindLabels(),
       escapeHtml
     };
 
@@ -12211,6 +12451,7 @@ export const HomeScreen = {
     const cardOptions = {
       useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
       blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
+      cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card",
       rowKey
     };
     const markup = nextItems
@@ -12410,6 +12651,21 @@ export const HomeScreen = {
           return;
         }
         const rowPayload = rowResult.data;
+        // A row that ends in a see-all door is a fixed shelf, not an infinite
+        // rail. Measured on the 1920x1080 bench before this guard: pressing
+        // Right past the door appended a 10th poster after it, so the door
+        // drifted to column 9, then 10, and stopped being "the end of the row".
+        // The door IS the pagination now — the full list lives behind it, where
+        // catalogSeeAllScreen already pages with skip=. This is also the part
+        // that actually reduces what the Home loads.
+        if (
+          rowHasSeeAllDoor(
+            rowData,
+            Math.max(1, Number(this.getRowItemLimit?.() || HOME_MAX_ITEMS_PER_ROW_DEFAULT))
+          )
+        ) {
+          return;
+        }
         const currentItems = Array.isArray(rowPayload.items) ? rowPayload.items : [];
         const rowIndex = (this.rows || []).indexOf(rowData);
         const layoutPrefs = this.layoutPrefs || {};
@@ -12535,7 +12791,11 @@ export const HomeScreen = {
               duplicatePageRetryCount = 0;
               return;
             }
-            const nextSkip = skip + incomingItems.length;
+            const reportedNextSkip = Number(result.data?.nextSkip);
+            const nextSkip =
+              Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
+                ? Math.trunc(reportedNextSkip)
+                : skip + incomingItems.length;
             const startIndex = latestItems.length;
             // Update in-memory row data
             if (liveRowPayload) {

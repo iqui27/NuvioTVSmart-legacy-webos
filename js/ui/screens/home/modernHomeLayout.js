@@ -1,3 +1,5 @@
+import { getHomeRowKind, homeRowEyebrowKind, isRankedHomeRow } from "./homeRowKind.js";
+
 export const MODERN_HOME_CONSTANTS = {
   heroFocusDelayMs: 450,
   heroRapidNavThresholdMs: 130,
@@ -44,10 +46,11 @@ export function renderModernHomeLayout({
   renderHeroBackdropImage,
   renderContinueWatchingSection,
   createPosterCardMarkup,
-  createSeeAllCardMarkup: _createSeeAllCardMarkup,
+  createSeeAllCardMarkup,
   formatCatalogRowTitle,
   shouldDeferRowImages,
   watchedTitleIds = null,
+  rowKindLabels = null,
   escapeHtml,
   escapeAttribute
 } = {}) {
@@ -70,7 +73,9 @@ export function renderModernHomeLayout({
       shouldDeferRowImages,
       watchedTitleIds,
       createPosterCardMarkup,
+      createSeeAllCardMarkup,
       formatCatalogRowTitle,
+      rowKindLabels,
       escapeHtml
     });
     if (!section) {
@@ -311,7 +316,9 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
     shouldDeferRowImages = null,
     watchedTitleIds = null,
     createPosterCardMarkup,
+    createSeeAllCardMarkup = null,
     formatCatalogRowTitle,
+    rowKindLabels = null,
     escapeHtml
   } = options;
 
@@ -334,7 +341,11 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
           catalogId: rowData.catalogId || "",
           catalogName: rowData.catalogName || "",
           type: rowData.type || "movie",
-          initialItems: items
+          initialItems: items,
+          // Sem isto o "ver todos" recomecava a paginacao do zero e repetia a
+          // primeira pagina. Veio do upstream (d51f350) e faltava no nosso
+          // seeAllEntry, que extraiu este objeto para ca.
+          initialNextSkip: Number(rowData?.result?.data?.nextSkip || 0)
         }
       : null;
 
@@ -371,21 +382,72 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
     )
     .join("");
 
+  // Presentational row identity: kind accents + chart numbering. Derived from
+  // rowData only, so the full render and the keyed reconciler produce the same
+  // bytes (see the byte-identical contract in this function's doc comment).
+  const rowKind = getHomeRowKind(rowData);
+  const rowRanked = !isLoading && isRankedHomeRow(rowData);
+  const eyebrowKind = homeRowEyebrowKind(rowData);
+  const eyebrowLabel =
+    eyebrowKind && rowKindLabels ? String(rowKindLabels[eyebrowKind] || "").trim() : "";
+
+  // The row's way out. Derived from rowData only (never from the DOM or from
+  // focus), so the full render and the keyed reconciler emit the same bytes.
+  const seeAllMarkup =
+    typeof createSeeAllCardMarkup === "function" && rowHasSeeAllDoor(rowData, maxItems)
+      ? createSeeAllCardMarkup(seeAllId, rowData, visibleItems.length, rowIndex)
+      : "";
+
   return {
     rowKey,
     seeAllId,
     seeAllEntry,
     markup: `
-      <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}">
+      <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}"${rowKind ? ` data-row-kind="${escapeHtml(rowKind)}"` : ""}${rowRanked ? ` data-row-ranked="true"` : ""}>
         <div class="home-row-head">
           <h2 class="home-row-title">${escapeHtml(rowTitle)}</h2>
+          ${eyebrowLabel ? `<div class="home-row-eyebrow" aria-hidden="true">${escapeHtml(eyebrowLabel)}</div>` : ""}
         </div>
         <div class="home-track" data-track-row-key="${escapeHtml(rowKey)}">
-          ${cardsMarkup}
+          ${cardsMarkup}${seeAllMarkup}
         </div>
       </section>
     `
   };
+}
+
+/**
+ * Should this row end with a "see all" door?
+ *
+ * The honest signal we have is thin. `catalogRepository` reports
+ * `hasMore: supportsSkip && items.length > 0`, i.e. "the addon takes `skip=` and
+ * this page was not empty" — it is NOT a real total, and no Stremio-shaped
+ * manifest gives us one. So a full first page is the only evidence available
+ * that more content exists behind the row.
+ *
+ * ASSUMPTION, deliberately conservative: a row whose fetched page filled the
+ * rail (`items.length >= maxItems`) probably has more. A short row (5 of 5
+ * items) gets no door, because opening a "full list" that is identical to the
+ * rail is a lie. The cost of being wrong is one extra card leading to a screen
+ * that shows the same 8 items — never a crash and never a wrong destination.
+ *
+ * Loading rows and collection rows are excluded, matching the classic layout:
+ * a skeleton has no catalog to open, and a collection is already its own list.
+ */
+export function rowHasSeeAllDoor(rowData, maxItems) {
+  if (!rowData || rowData.rowKind === "collection" || rowData.isCollection) {
+    return false;
+  }
+  if (rowData?.result?.status !== "success") {
+    return false;
+  }
+  const payload = rowData?.result?.data;
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const limit = Math.max(1, Number(maxItems) || 1);
+  if (items.length > limit) {
+    return true;
+  }
+  return items.length >= limit && Boolean(payload?.hasMore);
 }
 
 /**

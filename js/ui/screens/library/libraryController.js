@@ -733,6 +733,12 @@ export class LibraryController {
     if (this.state.sourceMode === LibrarySourceMode.TRAKT && !this.state.isTraktAuthenticated) {
       return t("library_empty_trakt_not_auth_title", {}, "Trakt not connected");
     }
+    // The "All" tab has no localizable type label: typeLabelForEmptyState
+    // returns the literal "all" and the title rendered as "Nenhum all ainda".
+    // Use the generic empty title ("Nada por aqui ainda") for that tab.
+    if (!this.state.selectedTypeKey || this.state.selectedTypeKey === ALL_KEY) {
+      return t("cloud_library_empty_title", {}, "Nothing here yet");
+    }
     if (this.state.sourceMode === LibrarySourceMode.TRAKT) {
       return t(
         "library_empty_trakt_title",

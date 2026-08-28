@@ -765,6 +765,25 @@ class WatchProgressRepository {
     );
     invalidateContinueWatchingDisplaySnapshot();
   }
+
+  /**
+   * True when the selected tracking source still lists `contentId` as being watched.
+   *
+   * Next Up is seeded from watch history, which says nothing about whether the viewer considers a
+   * show current. Only Simkl models a watchlist here; every other source answers true and behaves
+   * as before.
+   */
+  isTrackedAsWatching(contentId) {
+    if (selectedContinueWatchingSource() !== WatchProgressSource.SIMKL) {
+      return true;
+    }
+    try {
+      return SimklSyncService.isTrackedAsWatching(contentId) !== false;
+    } catch (error) {
+      console.warn("Simkl watching-state lookup failed", error);
+      return true;
+    }
+  }
 }
 
 export const watchProgressRepository = new WatchProgressRepository();

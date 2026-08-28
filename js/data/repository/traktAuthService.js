@@ -6,7 +6,6 @@ import {
 } from "../../config.js";
 import { TraktAuthStore } from "../local/traktAuthStore.js";
 import { detailWatchedEnrichmentService } from "./detailWatchedEnrichmentService.js";
-import { TraktCredentialSyncService } from "../../core/profile/traktCredentialSyncService.js";
 
 const API_VERSION = "2";
 const DEFAULT_API_URL = "https://api.trakt.tv";
@@ -165,7 +164,6 @@ export const TraktAuthService = {
     if (response.ok && payload) {
       TraktAuthStore.saveToken(payload);
       const username = await fetchUserSettings();
-      await TraktCredentialSyncService.pushCurrentToRemote();
       return { type: "approved", username };
     }
 
@@ -219,18 +217,13 @@ export const TraktAuthService = {
     });
 
     if (!response.ok || !payload) {
-      if (response.status === 401 || response.status === 403) {
-        const recovered = await TraktCredentialSyncService.pullFromRemote();
-        if (recovered && TraktAuthStore.get().refreshToken !== state.refreshToken) {
-          return this.refreshTokenIfNeeded(true);
-        }
+      if (response.status === 400 || response.status === 401 || response.status === 403) {
         TraktAuthStore.clearAuth();
       }
       return false;
     }
     TraktAuthStore.saveToken(payload);
     await fetchUserSettings();
-    await TraktCredentialSyncService.pushCurrentToRemote();
     return true;
   },
 
@@ -265,7 +258,6 @@ export const TraktAuthService = {
         console.warn("Trakt revoke failed", error);
       }
     }
-    await TraktCredentialSyncService.deleteRemote();
     detailWatchedEnrichmentService.invalidateAllCache();
     TraktAuthStore.clearAuth();
   },

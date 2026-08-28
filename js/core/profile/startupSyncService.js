@@ -10,9 +10,11 @@ import { SavedLibrarySyncService } from "./savedLibrarySyncService.js";
 import { WatchedItemsSyncService } from "./watchedItemsSyncService.js";
 import { PluginSyncService } from "./pluginSyncService.js";
 import { ProfileSettingsSyncService } from "./profileSettingsSyncService.js";
+import { ProviderCredentialSyncService } from "./providerCredentialSyncService.js";
+// Mantidos apesar de o upstream ter apagado os dois em a67cbc5 — ver a nota na
+// chamada dentro de syncProfileScopedSurfaces.
 import { TraktCredentialSyncService } from "./traktCredentialSyncService.js";
 import { SimklCredentialSyncService } from "./simklCredentialSyncService.js";
-import { ProviderCredentialSyncService } from "./providerCredentialSyncService.js";
 import { SimklSyncService } from "../../data/repository/simklSyncService.js";
 import { CollectionSyncService } from "./collectionSyncService.js";
 import { HomeCatalogSettingsSyncService } from "./homeCatalogSettingsSyncService.js";
@@ -82,6 +84,26 @@ function canUsePersistedWarmSync(key, includeProfileSettings, now = Date.now()) 
     now - lastFullPullAtMs < FULL_STARTUP_PULL_TTL_MS &&
     (!includeProfileSettings || entry.lastFullPullIncludedProfileSettings === true)
   );
+}
+
+// A reconciliacao da credencial Trakt precisa rodar em TODO boot, e nao so
+// no pull completo: o caminho "warm" (FULL_STARTUP_PULL_TTL_MS = 6h) retorna
+// cedo e pulava o bloco que a chamava, entao numa TV que reinicia dentro da
+// janela de 6h o vinculo continuava sem copia na nuvem — exatamente o estado
+// que faz qualquer signOut ou 401 destruir o Trakt em definitivo.
+//
+// Roda DESACOPLADA (sem await): e um pull pequeno mais, no pior caso, um push,
+// e o boot destas TVs e caro o suficiente para nao pagar por isso na frente do
+// primeiro paint. reconcileWithRemote() ja trata os proprios erros.
+function reconcileTraktCredentialDetached(profileId) {
+  if (isSyncBackoffActive() || !AuthManager.isAuthenticated) {
+    return;
+  }
+  Promise.resolve()
+    .then(() => TraktCredentialSyncService.reconcileWithRemote(profileId))
+    .catch((error) => {
+      console.warn("Trakt credential reconcile failed on startup", error);
+    });
 }
 
 function runSurface(label, task) {
@@ -403,6 +425,9 @@ export const StartupSyncService = {
       return true;
     }
     if (!force && !allowWarmRepeat && canUsePersistedWarmSync(key, includeProfileSettings, now)) {
+      // Boot warm: o pull completo e dispensado, mas a credencial Trakt ainda
+      // precisa de copia na nuvem. Ver reconcileTraktCredentialDetached.
+      reconcileTraktCredentialDetached(profileId);
       this.lastPullCompleted = true;
       return true;
     }
@@ -533,8 +558,18 @@ export const StartupSyncService = {
     }
 
     await Promise.all([
+      // DIVERGENCIA DELIBERADA do upstream. Em a67cbc5 eles removeram a
+      // sincronizacao da credencial do Trakt (e o traktCredentialSyncService
+      // inteiro) em vez de corrigir o backend, que rejeita o provider "trakt"
+      // com 22023 — o bug que reportamos em NuvioMedia/NuvioTVSmart#789. Sem
+      // isto o vinculo Trakt volta a viver so no localStorage e morre em
+      // qualquer signOut ou 401. O providerCredentialSyncService novo deles
+      // cobre mdblist/animeskip/debrid, NAO Trakt, entao nao substitui isto.
+      // Reconciliação bidirecional: adota a credencial da nuvem quando ela
+      // existe, e EMPURRA a local quando a nuvem não tem — sem isso o vínculo
+      // Trakt vivia só no localStorage e morria em qualquer signOut.
       runSurface("Trakt credentials", () =>
-        TraktCredentialSyncService.pullFromRemote(activeProfileId)
+        TraktCredentialSyncService.reconcileWithRemote(activeProfileId)
       ),
       runSurface("Simkl credentials", () =>
         SimklCredentialSyncService.pullFromRemote(activeProfileId)
@@ -717,14 +752,6 @@ export const StartupSyncService = {
     const surfaces = [
       ["profiles push", () => ProfileSyncService.push()],
       ["profile settings push", () => ProfileSettingsSyncService.push()],
-      [
-        "Trakt credentials push",
-        () => TraktCredentialSyncService.pushCurrentToRemote(ProfileManager.getActiveProfileId())
-      ],
-      [
-        "Simkl credentials push",
-        () => SimklCredentialSyncService.pushCurrentToRemote(ProfileManager.getActiveProfileId())
-      ],
       ["collections push", () => CollectionSyncService.push()],
       ["home catalog settings push", () => HomeCatalogSettingsSyncService.push()],
       ["plugins push", () => PluginSyncService.push()],

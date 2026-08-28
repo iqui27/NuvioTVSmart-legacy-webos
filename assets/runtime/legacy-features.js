@@ -19,7 +19,15 @@
     // ja chega com var() resolvido pelo build; esta classe existe para o JS de
     // runtime (troca de tema por folha, estilos inline) e para regras que
     // precisem divergir por engine.
-    "no-css-vars"
+    "no-css-vars",
+    // On the device these two are also always on: app.js derives them from the
+    // platform and the runtime-performance profile, and on webOS 4.x both are
+    // true. Pinning them here keeps the browser bench rendering the SAME
+    // stylesheet state as the TV — before this, all `.legacy-webos` and
+    // `.performance-constrained` rules (260+ declarations, including the hero
+    // safe-area geometry) were invisible in the bench.
+    "legacy-webos",
+    "performance-constrained"
   ];
 
   function removeClass(name) {

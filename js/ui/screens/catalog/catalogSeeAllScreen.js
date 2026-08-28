@@ -1,4 +1,5 @@
 import { Router } from "../../navigation/router.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
@@ -17,8 +18,72 @@ import {
   renderTitleWatchedBadge
 } from "../../components/watchedTitleBadge.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
+import { getHomeRowKind, isRankedHomeRow } from "../home/homeRowKind.js";
+
+const SEEALL_DESC_MAX = 460;
+
+// A grade tem espaco lateral de sobra, entao o painel mostra bem mais texto que
+// a ficha da home (que cabia em 4 linhas). Corte em palavra inteira: cortar
+// glifo no meio e o erro classico de app de TV.
+function buildSeeAllFacts(item = {}, descriptor = {}) {
+  const tipoBruto = String(
+    item.type || item.catalogType || descriptor.type || "movie"
+  ).toLowerCase();
+  const meta = [tipoBruto === "series" ? "Série" : "Filme"];
+  const ano = extractReleaseYear(item);
+  if (ano) {
+    meta.push(String(ano));
+  }
+  const nota = Number(item.imdbRating);
+  const rating = Number.isFinite(nota) && nota > 0 ? `IMDb ${item.imdbRating}` : "";
+  const minutos = Number(item.runtimeMinutes ?? item.runtime ?? 0);
+  if (Number.isFinite(minutos) && minutos > 0) {
+    const h = Math.floor(minutos / 60);
+    const m = Math.round(minutos % 60);
+    meta.push(h > 0 ? `${h}h${m ? ` ${m}m` : ""}` : `${m}m`);
+  }
+  if (tipoBruto === "series" && item.status) {
+    meta.push(String(item.status));
+  }
+  const generos = Array.isArray(item.genres) ? item.genres.filter(Boolean).slice(0, 4) : [];
+  const bruto = String(item.description || item.overview || "").trim();
+  let desc = bruto;
+  if (bruto.length > SEEALL_DESC_MAX) {
+    const fatia = bruto.slice(0, SEEALL_DESC_MAX);
+    const ultimo = fatia.lastIndexOf(" ");
+    desc = `${(ultimo > 80 ? fatia.slice(0, ultimo) : fatia).trim()}…`;
+  }
+  return { meta: meta.join(" • "), rating, genres: generos.join(" • "), desc };
+}
 
 const POSTER_HOLD_DELAY_MS = 650;
+
+/**
+ * The destination inherits the row's identity instead of inventing its own.
+ *
+ * `getHomeRowKind` reads the taxonomy straight out of the catalog id, and the
+ * descriptor the door hands over already carries `addonId` + `catalogId` — so
+ * this needs no new plumbing and no API call, and it cannot disagree with the
+ * eyebrow the user just saw on the Home row.
+ *
+ * Measured before writing this: the grid itself is already right (six columns
+ * of 291x442 at 1920x1080, flex-wrap fallback for Chromium 53, `skip=`
+ * pagination and predictable initial focus all working). So this deliberately
+ * does NOT rebuild the layout per kind — it only carries over what the row
+ * already told the user: the category label, and chart numbering where the
+ * position is real.
+ */
+function seeAllKindLabels() {
+  return {
+    streaming: t("home.rowKind.streaming", {}, "Streaming"),
+    genre: t("home.rowKind.genre", {}, "Genre"),
+    curated: t("home.rowKind.curated", {}, "Curated"),
+    themed: t("home.rowKind.themed", {}, "Themed"),
+    trending: t("home.rowKind.trending", {}, "Trending"),
+    foryou: t("home.rowKind.foryou", {}, "For You"),
+    collection: t("home.rowKind.collection", {}, "Collection")
+  };
+}
 
 function isBackEvent(event) {
   return Environment.isBackEvent(event);
@@ -189,7 +254,14 @@ export const CatalogSeeAllScreen = {
     this.items = this.layoutPrefs?.hideUnreleasedContent
       ? filterReleasedItems(initialItems)
       : [...initialItems];
-    this.nextSkip = this.items.length ? 100 : 0;
+    // Usa o deslocamento que a home ja tinha em maos quando ele veio; senao
+    // avanca pelo que REALMENTE veio, nunca por um tamanho de pagina suposto.
+    // O `100` do upstream aqui era o bug: ver o comentario em loadMore().
+    const initialNextSkip = Number(params?.initialNextSkip);
+    this.nextSkip =
+      Number.isFinite(initialNextSkip) && initialNextSkip > 0
+        ? Math.trunc(initialNextSkip)
+        : this.items.length;
     this.loading = false;
     this.hasMore = true;
     this.lastFocusedKey = this.items[0]?.id ? `item:${this.items[0].id}` : null;
@@ -272,7 +344,19 @@ export const CatalogSeeAllScreen = {
         this.items.push(item);
         addedCount += 1;
       });
-      this.nextSkip = skip + 100;
+      // `skip + 100` assumia que toda pagina do addon tem 100 itens. Quando ela
+      // vem menor — o "IMDb Top 250" devolveu 50 — a proxima requisicao parte de
+      // um deslocamento maior do que o que foi lido e os itens do meio somem sem
+      // aviso: a lista fica com buraco e ninguem percebe. Manifesto Stremio nao
+      // declara tamanho de pagina, entao o unico numero confiavel e quanto veio.
+      // A home ja fazia assim (homeScreen.js: `skip + incomingItems.length`).
+      // O upstream (d51f350) passou a preferir o nextSkip que o addon reporta,
+      // quando ele vem coerente; o calculo por quantidade lida fica de reserva.
+      const reportedNextSkip = Number(result?.data?.nextSkip);
+      this.nextSkip =
+        Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
+          ? Math.trunc(reportedNextSkip)
+          : skip + rawIncoming.length;
     }
     this.hasMore = rawIncoming.length > 0;
     this.loading = false;
@@ -540,6 +624,7 @@ export const CatalogSeeAllScreen = {
             fallbackTitle: target.title || "Untitled",
             fallbackPoster: target.poster || "",
             fallbackBackground: target.background || "",
+            fallbackLogo: target.logo || "",
             addonBaseUrl: target.addonBaseUrl || "",
             addonId: target.addonId || "",
             addonName: target.addonName || "",
@@ -593,6 +678,7 @@ export const CatalogSeeAllScreen = {
       fallbackTitle: node.dataset.itemTitle || "Untitled",
       fallbackPoster: node.dataset.posterSrc || "",
       fallbackBackground: node.dataset.backdropSrc || "",
+      fallbackLogo: node.dataset.logoSrc || "",
       addonBaseUrl: node.dataset.addonBaseUrl || "",
       addonId: node.dataset.addonId || "",
       addonName: node.dataset.addonName || "",
@@ -606,25 +692,34 @@ export const CatalogSeeAllScreen = {
     const title = descriptor.catalogName || "Catalog";
     const cards = this.items.length
       ? this.items
-          .map(
-            (item, index) => `
+          .map((item, index) => {
+            // Uma vez por card. Estava sendo chamado quatro vezes — uma por
+            // atributo — o que da 200 execucoes numa lista de 50 itens, toda
+            // vez que a grade e remontada.
+            const fatos = buildSeeAllFacts(item, descriptor);
+            return `
           <article class="seeall-card focusable"
                    data-action="openDetail"
                    data-item-id="${item.id || ""}"
                     data-item-type="${item.type || item.catalogType || descriptor.type || "movie"}"
                    data-item-title="${escapeHtml(item.name || "Untitled")}"
-                    data-poster-src="${escapeHtml(item.poster || "")}"
-                    data-backdrop-src="${escapeHtml(item.background || item.backdrop || "")}"
+                    data-poster-src="${escapeHtml(tmdbImageAtSize(item.poster || "", "w500"))}"
+                    data-backdrop-src="${escapeHtml(tmdbImageAtSize(item.background || item.backdrop || "", "w780"))}"
+                    data-logo-src="${escapeHtml(tmdbImageAtSize(item.logo || "", "w500"))}"
                     data-addon-base-url="${escapeHtml(descriptor.addonBaseUrl || item.addonBaseUrl || "")}"
                     data-addon-id="${escapeHtml(descriptor.addonId || item.addonId || "")}"
                     data-addon-name="${escapeHtml(descriptor.addonName || item.addonName || "")}"
                     data-catalog-type="${escapeHtml(descriptor.type || item.catalogType || "")}"
+                    data-facts-meta="${escapeHtml(fatos.meta)}"
+                    data-facts-rating="${escapeHtml(fatos.rating)}"
+                    data-facts-genres="${escapeHtml(fatos.genres)}"
+                    data-facts-desc="${escapeHtml(fatos.desc)}"
                     data-focus-key="item:${item.id || index}"
                     data-item-index="${index}">
             <div class="seeall-card-poster-wrap">
               ${
                 item.poster
-                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
                   : `<div class="seeall-card-poster placeholder"></div>`
               }
               ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -638,14 +733,25 @@ export const CatalogSeeAllScreen = {
                 : ""
             }
           </article>
-        `
-          )
+        `;
+          })
           .join("")
       : `<div class="seeall-empty">${escapeHtml(t("catalog_see_all_empty_title", {}, "No items available"))}</div>`;
 
+    const catalogKind = getHomeRowKind({
+      addonId: descriptor.addonId || "",
+      catalogId: descriptor.catalogId || ""
+    });
+    const catalogRanked = isRankedHomeRow({
+      addonId: descriptor.addonId || "",
+      catalogId: descriptor.catalogId || ""
+    });
+    const kindLabel = catalogKind ? String(seeAllKindLabels()[catalogKind] || "").trim() : "";
+
     this.container.innerHTML = `
-      <div class="seeall-shell">
+      <div class="seeall-shell"${catalogKind ? ` data-catalog-kind="${escapeHtml(catalogKind)}"` : ""}${catalogRanked ? ` data-catalog-ranked="true"` : ""}>
         <header class="seeall-header">
+          ${kindLabel ? `<div class="seeall-eyebrow" aria-hidden="true">${escapeHtml(kindLabel)}</div>` : ""}
           <h2 class="seeall-title">${escapeHtml(title)}</h2>
           ${
             this.layoutPrefs?.catalogAddonNameEnabled !== false && descriptor.addonName
@@ -653,9 +759,24 @@ export const CatalogSeeAllScreen = {
               : ""
           }
         </header>
-        <section class="seeall-grid">
-          ${cards}
-        </section>
+        <div class="seeall-body">
+          <section class="seeall-grid">
+            ${cards}
+          </section>
+          <aside class="seeall-detail" aria-hidden="true">
+            <div class="seeall-detail-art">
+              <img class="seeall-detail-backdrop" alt="" aria-hidden="true" decoding="async" />
+              <div class="seeall-detail-art-scrim" aria-hidden="true"></div>
+            </div>
+            <img class="seeall-detail-logo" alt="" aria-hidden="true" decoding="async" />
+            <div class="seeall-detail-title"></div>
+            <div class="seeall-detail-rating"></div>
+            <div class="seeall-detail-meta"></div>
+            <div class="seeall-detail-genres"></div>
+            <div class="seeall-detail-desc"></div>
+            <div class="seeall-detail-source"></div>
+          </aside>
+        </div>
         ${
           this.loading
             ? `
@@ -690,11 +811,68 @@ export const CatalogSeeAllScreen = {
       node.addEventListener("focus", () => {
         this.lastFocusedKey = node.dataset.focusKey || this.lastFocusedKey;
         this.savedScrollTop = this.container?.querySelector(".seeall-shell")?.scrollTop || 0;
+        this.updateDetailPanel(node);
       });
       node.addEventListener("mouseenter", () => {
         this.lastFocusedKey = node.dataset.focusKey || this.lastFocusedKey;
+        this.updateDetailPanel(node);
       });
     });
+  },
+
+  // Painel lateral em vez de expandir a celula: numa GRADE, crescer um card
+  // reflui as linhas de baixo a cada movimento do D-pad — layout completo e
+  // caro nesta TV. O painel e um bloco fixo que so troca de texto, entao a
+  // grade nunca se mexe e o modelo de foco fica intacto.
+  updateDetailPanel(node) {
+    const painel = this.container?.querySelector(".seeall-detail");
+    if (!painel || !(node instanceof HTMLElement)) {
+      return;
+    }
+    // A arte de fundo e o logo saem do proprio card (data-backdrop-src /
+    // data-logo-src): nenhuma requisicao nova, e e o que preenche a coluna, que
+    // antes ficava com um bloco de texto pequeno perdido no meio do vazio.
+    // O catalogo NAO traz imdbRating, entao a nota fica vazia na maioria dos
+    // itens — buscar meta a cada movimento do D-pad custaria rede e travaria a
+    // navegacao, que ja esta lenta.
+    const arte = painel.querySelector(".seeall-detail-backdrop");
+    const backdrop = node.dataset.backdropSrc || "";
+    if (arte) {
+      if (arte.getAttribute("src") !== backdrop) {
+        arte.setAttribute("src", backdrop);
+      }
+      arte.style.display = backdrop ? "" : "none";
+    }
+    const logo = painel.querySelector(".seeall-detail-logo");
+    const logoSrc = node.dataset.logoSrc || "";
+    if (logo) {
+      if (logo.getAttribute("src") !== logoSrc) {
+        logo.setAttribute("src", logoSrc);
+      }
+      logo.style.display = logoSrc ? "" : "none";
+    }
+    const campos = [
+      // Com logo, o titulo em texto vira repeticao.
+      [".seeall-detail-title", logoSrc ? "" : node.dataset.itemTitle || ""],
+      [".seeall-detail-rating", node.dataset.factsRating || ""],
+      [".seeall-detail-meta", node.dataset.factsMeta || ""],
+      [".seeall-detail-genres", node.dataset.factsGenres || ""],
+      [".seeall-detail-desc", node.dataset.factsDesc || ""],
+      [".seeall-detail-source", node.dataset.addonName || ""]
+    ];
+    let algum = false;
+    campos.forEach(([sel, texto]) => {
+      const el = painel.querySelector(sel);
+      if (!el) {
+        return;
+      }
+      el.textContent = texto;
+      el.style.display = texto ? "" : "none";
+      if (texto) {
+        algum = true;
+      }
+    });
+    painel.classList.toggle("is-visible", algum || Boolean(backdrop) || Boolean(logoSrc));
   },
 
   bindShellEvents() {

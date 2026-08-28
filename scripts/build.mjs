@@ -391,6 +391,27 @@ function legacyDeclarationFallbackPlugin() {
 
       const legacyValue = toLegacyColorValue(toLegacyLengthValue(decl.value));
       if (legacyValue && legacyValue !== decl.value) {
+        // Custom property: SUBSTITUIR, nunca clonar antes.
+        //
+        // A tecnica de fallback (declaracao estatica antes da moderna) so
+        // funciona em propriedade normal, onde o motor REJEITA o valor que nao
+        // entende e a declaracao anterior prevalece. Custom property nao valida
+        // conteudo: `--x: clamp(...)` e guardado como texto mesmo num motor sem
+        // clamp(), entao a declaracao moderna sempre vence a estatica, e a
+        // falha so aparece la na frente, no `var()`, onde vira valor invalido e
+        // a propriedade cai para o inicial.
+        //
+        // MEDIDO na OLED65C9 (Chromium 53, CSS.supports('width','clamp(...)')
+        // === false): 13 de 15 tokens devolviam a string do clamp em
+        // getComputedStyle — --tv-safe-gutter, --tv-title-text, --tv-body-text,
+        // --tv-button-height, --tv-card-gap e companhia. Ou seja a escala de
+        // tipografia, os espacamentos e as margens de seguranca inteiras
+        // estavam sem valor nessa TV. O sintoma visivel foi o overlay de pausa
+        // colado na borda, sem margem.
+        if (decl.prop.startsWith("--")) {
+          decl.value = legacyValue;
+          return;
+        }
         const previous = decl.prev();
         if (
           !previous ||
@@ -555,6 +576,22 @@ function flexGapFallbackPlugin() {
 
       rowGap ||= "0";
       columnGap ||= "0";
+
+      // gap: 0 nao precisa de emulacao — e emitir o fallback mesmo assim faz
+      // dano. A regra gerada (`html.no-flex-gap <sel> > * + *`) tem
+      // especificidade maior que a de qualquer filho por classe, entao um
+      // `margin-left: 0` vindo daqui APAGA margem que o autor definiu no filho.
+      //
+      // Caso real: `.series-insight-tabs { gap: 0 }` (o container zera o gap de
+      // proposito porque `.series-insight-divider` traz `margin: 0 10px`). No
+      // legado o fallback zerava a margem ESQUERDA do separador e deixava a
+      // direita, entao o "|" colava na palavra anterior e o vao inteiro ia para
+      // depois dele. Medido no bench a 1920px: vaos 0, 20, 0, 20, 0, 20.
+      const rowGapZero = /^0(?:[a-z%]*)?$/i.test(rowGap.trim());
+      const columnGapZero = /^0(?:[a-z%]*)?$/i.test(columnGap.trim());
+      if (rowGapZero && columnGapZero) {
+        return;
+      }
 
       const scopedSelectors = rule.selectors.map((selector) => `html.no-flex-gap ${selector}`);
       const isColumnDirection = flexDirection.includes("column");
@@ -847,16 +884,33 @@ function gridFallbackPlugin() {
         }
       });
 
-      // justify-self has no flexbox equivalent; auto margins reproduce the two
-      // values this stylesheet actually uses.
+      // justify-self nao tem equivalente direto em flexbox.
+      //
+      // `end` continua virando `margin-left: auto`, que e o truque padrao para
+      // empurrar o item para o fim da linha.
+      //
+      // `start` NAO pode virar `margin-right: auto`. Item de flex ja e alinhado
+      // ao inicio por padrao (justify-content: flex-start), entao a margem auto
+      // nao acrescenta nada — e ATROPELA a margem lateral que o fallback de
+      // flex-gap gera para emular `column-gap`, porque as duas regras miram a
+      // mesma propriedade e a de `auto` vem depois.
+      //
+      // Sintoma real na TV: a grade de "ver tudo" (`.seeall-card`, que usa
+      // justify-self: start) renderizava com os cards ENCOSTADOS — vaos
+      // horizontais medidos em 0, 0, 0, 0, enquanto o vertical vinha correto em
+      // 20px, porque `margin-bottom` ninguem sobrescrevia.
+      //
+      // O que `start` realmente significa no grid e "nao estique para preencher
+      // a celula". Em flex isso e `flex-grow: 0`, que nao toca em margem.
       if (justifySelf === "end" || justifySelf === "start") {
         const selfFallback = postcss.rule({
           selectors: rule.selectors.map((selector) => `html.no-css-grid ${selector}`)
         });
-        selfFallback.append({
-          prop: justifySelf === "end" ? "margin-left" : "margin-right",
-          value: "auto"
-        });
+        if (justifySelf === "end") {
+          selfFallback.append({ prop: "margin-left", value: "auto" });
+        } else {
+          selfFallback.append({ prop: "flex-grow", value: "0" });
+        }
         rule.after(selfFallback);
       }
 

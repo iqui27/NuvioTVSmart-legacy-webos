@@ -3426,7 +3426,7 @@ button:focus-visible {
   gap: 24px;
   align-items: center;
   margin-bottom: 16px;
-  padding: 0 48px;
+  padding: 0 104px; /* alinhado ao --home-content-start (104px) do resto do app */
   scroll-margin-top: 22px;
 }
 
@@ -3904,7 +3904,7 @@ button:focus-visible {
 
 .search-results-title {
   margin: 0;
-  padding: 0 48px;
+  padding: 0 104px;
   font-size: 48px;
   font-weight: 600;
   line-height: 1.08;
@@ -3913,7 +3913,7 @@ button:focus-visible {
 
 .search-results-subtitle {
   margin-top: 4px;
-  padding: 0 48px;
+  padding: 0 104px;
   font-size: 20px;
   color: var(--text-secondary);
 }
@@ -3924,7 +3924,7 @@ button:focus-visible {
   gap: 16px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 4px 64px 14px 48px;
+  padding: 4px 104px 14px 104px;
   scrollbar-width: none;
 }
 
@@ -3939,7 +3939,7 @@ button:focus-visible {
   background: transparent;
   border: none;
   overflow: visible;
-  scroll-margin-inline: 48px;
+  scroll-margin-inline: 104px;
   transform-origin: center center;
   transition: transform 160ms ease;
 }
@@ -4346,17 +4346,16 @@ button:focus-visible {
 
 .library-grid {
   display: grid;
-  grid-template-columns: repeat(
-    auto-fill,
-    minmax(var(--library-poster-width, 252px), var(--library-poster-width, 252px))
-  );
+  /* Android TV uses GridCells.Adaptive(minSize = 126.dp): keep the poster
+     minimum, then distribute the remaining row width across the columns. */
+  grid-template-columns: repeat(auto-fill, minmax(var(--library-poster-width, 252px), 1fr));
   grid-gap: 32px 24px; /* Legacy Chromium/Tizen 5 fallback; Android spacing is 16/12dp. */
   gap: 32px 24px;
   align-content: start;
 }
 
 .library-grid-card {
-  width: var(--library-poster-width, 252px);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -4380,8 +4379,9 @@ button:focus-visible {
 .library-grid-poster {
   position: relative;
   box-sizing: border-box;
-  width: var(--library-poster-width, 252px);
-  height: var(--library-poster-height, 378px);
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
   border-radius: var(--library-poster-radius, 24px);
   border: 4px solid transparent;
   background: var(--card-bg) center center / cover no-repeat;
@@ -4397,7 +4397,7 @@ button:focus-visible {
 }
 
 .library-grid-title {
-  width: var(--library-poster-width, 252px);
+  width: 100%;
   padding: 0 4px;
   box-sizing: border-box;
   font-size: 32px;
@@ -5512,6 +5512,75 @@ button:focus-visible {
   color: rgba(255, 255, 255, 0.52);
   font-size: 13px;
   line-height: 1.33;
+}
+
+/* ---- Row identity: eyebrow + kind accents + chart numbering -----------------
+   The row's kind (streaming / genre / curated / themed / collection) comes from
+   data-row-kind, stamped by the render from the catalog identifier. Static
+   values only: no grid, no gap, no clamp — legacy webOS (Chromium 53) renders
+   these rules as-is. */
+.home-screen-shell .home-row-eyebrow {
+  /* .home-row-head is a flex row (gap 14px, align center), so the eyebrow sits
+     inline after the title — row height does not change, so the vertical D-pad
+     travel across 43 rows stays exactly what it was (measured: head 31.2px with
+     and without eyebrow). */
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.home-screen-shell .home-row[data-row-kind="streaming"] .home-row-eyebrow {
+  color: rgba(125, 195, 255, 0.78);
+}
+
+.home-screen-shell .home-row[data-row-kind="genre"] .home-row-eyebrow {
+  color: rgba(126, 226, 186, 0.78);
+}
+
+.home-screen-shell .home-row[data-row-kind="curated"] .home-row-eyebrow {
+  color: rgba(240, 200, 110, 0.82);
+}
+
+.home-screen-shell .home-row[data-row-kind="themed"] .home-row-eyebrow {
+  color: rgba(232, 148, 170, 0.78);
+}
+
+.home-screen-shell .home-row[data-row-kind="collection"] .home-row-eyebrow {
+  color: rgba(186, 156, 255, 0.78);
+}
+
+/* Chart rows (data-row-ranked): position number on each poster via CSS
+   counters — zero extra DOM nodes, so the 539-img budget is untouched. The
+   counter resets per track and increments only on poster cards, so the
+   see-all card (home-seeall-card, not a poster card) never gets a number. */
+.home-screen-shell .home-row[data-row-ranked="true"] .home-track {
+  counter-reset: home-rank;
+}
+
+.home-screen-shell .home-row[data-row-ranked="true"] .home-poster-card {
+  counter-increment: home-rank;
+}
+
+.home-screen-shell .home-row[data-row-ranked="true"] .home-poster-card .home-poster-frame::after {
+  content: counter(home-rank);
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(10, 10, 14, 0.78);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 30px;
+  text-align: center;
 }
 
 .home-screen-shell .home-track {
@@ -6939,6 +7008,18 @@ button:focus-visible {
   height: var(--home-modern-portrait-poster-height);
 }
 
+/* The see-all door has no .home-poster-frame, so nothing gave it the poster
+   height and it collapsed to its own content (measured 132px against a 347px
+   poster on the 1920x1080 bench). Match the frame explicitly. */
+.home-screen-shell.home-layout-modern .home-seeall-card .home-seeall-card-inner {
+  height: var(--home-modern-portrait-poster-height);
+}
+
+/* Chromium 53 ignores flex `gap`; the arrow/label pair needs a margin instead. */
+.no-flex-gap .home-seeall-card-inner > * + * {
+  margin-top: 14px;
+}
+
 .home-screen-shell.home-layout-modern .home-poster-card.is-landscape {
   flex-basis: var(--home-landscape-poster-width);
   min-width: var(--home-landscape-poster-width);
@@ -7463,7 +7544,17 @@ button:focus-visible {
   font-size: clamp(26px, 1.7vw, 32px); /* ATV titleMedium 16sp -> 32px */
   font-weight: 400;
   line-height: min(2.5vw, 48px); /* ATV titleMedium lineHeight 24sp -> 48px */
-  white-space: nowrap;
+  /* Duas linhas em vez de reticencias. Medido no aparelho: "Conteudo e
+     descoberta" precisa de 356px e a caixa tem 274, entao virava
+     "Conteudo e de…". O item tem min-height 112px para UMA linha de 48px — ou
+     seja 64px de folga vertical — e duas linhas somam 96px, que ainda cabem sem
+     o item crescer. Alargar a coluna deslocaria a tela inteira e reduzir a fonte
+     custaria legibilidade a 3 metros; empilhar nao custa nenhum dos dois.
+     `-webkit-line-clamp` verificado funcionando neste Chromium 53. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
   will-change: transform;
@@ -7629,11 +7720,32 @@ button:focus-visible {
 }
 
 .trakt-route-shell .settings-tracking-panel {
-  width: min(78vw, 1180px);
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: min(1.46vw, 28px); /* ATV 14dp */
 }
 
 .trakt-route-shell .settings-tracking-hero {
-  min-height: 132px;
+  height: auto;
+  min-height: 0;
+  justify-content: flex-start;
+}
+
+.trakt-route-shell .settings-tracking-hero > div {
+  width: 100%;
+}
+
+.trakt-route-shell .settings-tracking-hero .settings-trakt-title {
+  margin-top: 0;
+}
+
+.trakt-route-shell .settings-tracking-panel > .settings-trakt-scroll-area {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: min(1.46vw, 28px); /* ATV LazyColumn spacedBy 14dp */
+  padding-bottom: min(1.25vw, 24px); /* ATV 12dp content padding */
 }
 
 .trakt-route-shell .settings-tracking-account-card {
@@ -7644,6 +7756,24 @@ button:focus-visible {
   height: auto;
   max-height: none;
   flex: 0 0 auto;
+  padding: min(1.46vw, 28px); /* ATV SettingsGroupCard 14dp */
+  border-radius: min(1.875vw, 36px); /* ATV 18dp */
+  background: var(--card-bg);
+}
+
+.trakt-route-shell .settings-tracking-panel .settings-trakt-card-title {
+  margin: 0;
+}
+
+.trakt-route-shell .settings-tracking-card-subtitle {
+  margin: min(0.625vw, 12px) 0 0;
+  color: var(--text-secondary);
+  font-size: min(1.04vw, 20px);
+  line-height: min(1.25vw, 24px);
+}
+
+.trakt-route-shell .settings-tracking-panel .settings-trakt-options-stack {
+  margin-top: min(1.04vw, 20px);
 }
 
 .settings-row-leading-image {
@@ -15511,9 +15641,9 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 
 .series-episode-card {
   position: relative;
-  flex: 0 0 286px;
-  border-radius: 22px;
-  padding: 10px 10px 12px;
+  flex: 0 0 240px;
+  border-radius: 18px;
+  padding: 8px 8px 10px;
   background: rgba(11, 15, 22, 0.68);
   border: 1px solid rgba(255, 255, 255, 0.14);
   backdrop-filter: blur(6px);
@@ -15916,7 +16046,14 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .series-insight-tabs {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* gap: 0 de proposito. O espacamento desta faixa vem da margem propria de
+     .series-insight-divider (margin: 0 10px), que precisa ficar SIMETRICA dos
+     dois lados do "|". Um gap aqui seria letra morta — a regra mais abaixo ja
+     zera o gap — mas geraria fallback de flex-gap no build legado, e esse
+     fallback (`html.no-flex-gap <sel> > * + *`) vence por especificidade a
+     margem do separador: o resultado medido na TV era 0px antes do "|" e 20px
+     depois, com o traco colado na palavra anterior. */
+  gap: 0;
   margin-bottom: 14px;
   overflow-x: auto;
   scrollbar-width: none;
@@ -16566,9 +16703,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     margin-bottom 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* O logo do hero NAO encolhe mais quando o trailer entra. Antes ele caia de
+   180px para 120px de altura numa transicao de 600ms, e do lado do usuario a
+   leitura era "abre grande e diminui sozinho" — parece defeito, nao intencao.
+   A margem inferior maior do estado com trailer fica, porque so afasta o logo
+   dos controles; o que sai e a reducao de tamanho. */
 .detail-trailer-autoplay .series-detail-logo {
-  max-width: min(28vw, 380px);
-  max-height: clamp(72px, 6vh, 96px);
   margin-bottom: 24px;
 }
 
@@ -16584,11 +16724,16 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     opacity 400ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* O titulo NAO some mais quando o trailer comeca.
+   Antes ele colapsava (max-height 0 + opacity 0, transicao de 600ms) assim que
+   `isTrailerPlaying` ligava, e do lado do usuario a leitura era "o titulo
+   aparece grande e encolhe sozinho" logo ao abrir o filme — comportamento que
+   parece defeito, nao intencao. O trailer continua tocando atras; o titulo e a
+   identificacao da pagina e fica. */
 .detail-trailer-autoplay .series-detail-title,
 .detail-trailer-manual .series-detail-title {
-  max-height: 0;
-  margin-bottom: 0;
-  opacity: 0;
+  max-height: none;
+  opacity: 1;
 }
 
 .detail-trailer-hint {
@@ -16860,6 +17005,15 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* A meta fica sobre a arte de fundo sem scrim algum. Medido no aparelho: os
+     itens secundarios (ano, nota, duracao, pais) renderizam em rgb(179,179,179)
+     a ~21px, sem text-shadow — sobre um backdrop claro o contraste cai perto de
+     1.9:1, muito abaixo dos 4.5:1 que texto pede, e a linha some.
+     A sombra e o remedio mais barato: nao muda layout, nao adiciona no, nao
+     escurece a arte como um scrim faria, e funciona no Chromium 53. */
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.85),
+    0 2px 10px rgba(0, 0, 0, 0.6);
   transition:
     opacity 400ms ease,
     transform 400ms ease;
@@ -18276,10 +18430,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-logo {
+  /* 160px em vez de 200px: com top-safe de 40px a caixa de copy tem 460px e
+     logo(160) + meta + sinopse de 4 linhas somam ~390px; com 200px a sinopse
+     estourava a caixa e era guilhotinada no meio da linha. */
   width: 440px;
   max-width: 440px;
-  height: 200px;
-  max-height: 200px;
+  height: 160px;
+  max-height: 160px;
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-title-text {
@@ -18290,8 +18447,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-meta-line,
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-secondary,
 .legacy-webos .home-screen-shell.home-layout-modern .home-hero-description {
-  width: 560px;
-  max-width: 560px;
+  /* 640px = largura da propria caixa de copy. Com 560px a linha de meta
+     ("S1 E1 - titulo do episodio - genero - ano") quebrava em 2-3 linhas e o
+     bloco de meta sozinho chegava a 119px de altura, empurrando a sinopse
+     para fora da caixa. */
+  width: 640px;
+  max-width: 640px;
 }
 
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-meta-line {
@@ -19033,6 +19194,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
    no aspect-ratio and the continue-watching poster collapses. */
 .no-aspect-ratio .home-row-continue-poster .home-continue-media {
   height: calc(var(--poster-card-width, 126px) * 1.5);
+}
+
+.no-aspect-ratio .library-grid-poster {
+  /* Tizen 5 has no aspect-ratio; preserve the 2:3 poster box after expansion. */
+  height: 0;
+  aspect-ratio: auto;
+  padding-bottom: calc(150% - 8px);
 }
 
 .no-aspect-ratio .home-screen-shell .home-poster-frame,
@@ -20622,6 +20790,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .stream-route-stream-badge {
+  /* Sem isto o chip encolhe abaixo do proprio texto e o texto vaza por cima do
+     vizinho: a fileira -lazy e `nowrap`, o chip herda `flex-shrink: 1` e o
+     computado de `min-width` e 0px (medido na C9), entao nada segura a largura
+     minima. Com `flex: 0 0 auto` a fileira transborda e o `overflow: hidden`
+     dela corta limpo na borda, que e degradacao legivel em vez de sobreposicao. */
+  flex: 0 0 auto;
   min-height: 30px;
   padding: 0 9px;
   border-radius: 7px;
@@ -20893,6 +21067,8 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   height: 100vh;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background:
     radial-gradient(140% 90% at 78% 0%, rgb(var(--secondary-color-rgb) / 0.22), transparent 40%),
     var(--bg-color);
@@ -20900,6 +21076,15 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   padding: 26px var(--tv-safe-gutter-wide, 96px) 38px;
   box-sizing: border-box;
   position: relative;
+}
+
+/* The legacy Tizen build cannot resolve clamp() through this custom property. */
+html.tizen-tv.no-css-math .cast-detail-shell {
+  padding: 26px 69.12px 38px;
+}
+
+.cast-detail-shell::-webkit-scrollbar {
+  display: none;
 }
 
 .cast-detail-loading,
@@ -21126,7 +21311,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   overflow-x: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  padding: 24px 48px 32px;
+  /* 104px matches the Home rail's --home-content-start and the gutter the
+     rest of the app settled on (see the search fix, a195662). Measured here at
+     1920x1080: first card sat at x=48 while every Home poster starts at 104. */
+  padding: 24px 104px 32px;
   box-sizing: border-box;
   background: var(--bg-color);
   color: var(--text-color);
@@ -21142,6 +21330,65 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   margin-bottom: 24px;
 }
 
+/* Catalog identity carried over from the Home row's eyebrow. Same palette as
+   .home-row-eyebrow so the door and its destination read as one thing. */
+.seeall-eyebrow {
+  margin-bottom: 6px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.seeall-shell[data-catalog-kind="streaming"] .seeall-eyebrow {
+  color: rgba(126, 186, 255, 0.82);
+}
+
+.seeall-shell[data-catalog-kind="genre"] .seeall-eyebrow {
+  color: rgba(126, 226, 186, 0.78);
+}
+
+.seeall-shell[data-catalog-kind="curated"] .seeall-eyebrow {
+  color: rgba(240, 200, 110, 0.82);
+}
+
+.seeall-shell[data-catalog-kind="themed"] .seeall-eyebrow {
+  color: rgba(232, 148, 170, 0.78);
+}
+
+.seeall-shell[data-catalog-kind="collection"] .seeall-eyebrow {
+  color: rgba(186, 156, 255, 0.78);
+}
+
+/* Chart catalogs keep their positions on the destination, exactly as on the
+   Home rail: a CSS counter, so no extra DOM node and no extra image. */
+.seeall-shell[data-catalog-ranked="true"] .seeall-grid {
+  counter-reset: seeall-rank;
+}
+
+.seeall-shell[data-catalog-ranked="true"] .seeall-card {
+  counter-increment: seeall-rank;
+}
+
+.seeall-shell[data-catalog-ranked="true"] .seeall-card-poster-wrap::after {
+  content: counter(seeall-rank);
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(10, 10, 14, 0.78);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 30px;
+  text-align: center;
+}
+
 .seeall-title {
   margin: 0;
   font-size: 56px;
@@ -21154,6 +21401,137 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   font-size: 20px;
   line-height: 1.25;
   color: var(--text-secondary);
+}
+
+/* Corpo da tela: grade a esquerda, painel do item focado a direita.
+   O plugin de fallback do build gera a versao sem CSS Grid para o Chromium 53
+   a partir destas mesmas regras; nada aqui depende de recurso que a TV nao tem
+   (sem clamp, sem aspect-ratio, sem :is). */
+.seeall-body {
+  display: flex;
+  align-items: flex-start;
+  /* 336 do painel + 32 de respiro: reserva a coluna que o painel fixo ocupa.
+     Era 412 (painel de 380) e isso custava DUAS colunas de posteres — medido a
+     1920x1080: grade de 1300px, 4 colunas de 248. Com 368 a grade vai a 1344 e
+     cabem 5. O painel encolheu na largura, nao no tamanho da letra. */
+  padding-right: 368px;
+}
+
+.seeall-body > .seeall-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.seeall-detail {
+  /* FIXO, nao sticky: `position: sticky` e Chrome 56 e esta TV e Chromium 53 —
+     medido no aparelho, CSS.supports devolve false inclusive para
+     `-webkit-sticky`. Sem isto o painel rola junto com a grade e some assim que
+     o usuario desce, que foi exatamente o relato.
+     Como `fixed` tira do fluxo, a coluna e reservada pelo padding-right de
+     .seeall-body — senao a grade se espalharia por baixo do painel.
+     Ancoras medidas na tela real a 1920x1080: top 170, right 104. */
+  position: fixed;
+  top: 170px;
+  right: 104px;
+  width: 336px;
+  max-height: calc(100% - 210px);
+  overflow: hidden;
+  padding: 4px 0 0;
+  /* Comeca invisivel mas OCUPANDO o espaco: se ele aparecesse do nada ao focar
+     o primeiro card, a grade inteira reflui e o card focado sai debaixo do
+     cursor. Reservar a coluna desde o inicio mantem a geometria estavel. */
+  opacity: 0;
+  transition: opacity 160ms linear;
+}
+
+.seeall-detail.is-visible {
+  opacity: 1;
+}
+
+/* Arte de fundo do painel. Vem do data-backdrop-src do card, entao nao custa
+   requisicao nenhuma, e e o que da corpo a coluna: antes eram cinco linhas de
+   texto pequeno sozinhas num retangulo de 380x870. */
+.seeall-detail-art {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 190px;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.seeall-detail-backdrop {
+  display: block;
+  width: 100%;
+  height: 190px;
+  object-fit: cover;
+}
+
+.seeall-detail-art-scrim {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(rgba(8, 10, 16, 0), rgba(8, 10, 16, 0.85));
+}
+
+.seeall-detail-logo {
+  display: block;
+  max-width: 264px;
+  max-height: 82px;
+  margin-bottom: 4px;
+}
+
+/* Tipografia a 10 pes: o piso legivel no sofa e 20px neste viewport, e o texto
+   deste painel estava em 17-19px. Medido na tela real a 1920x1080. */
+.seeall-detail-title {
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1.16;
+}
+
+.seeall-detail-rating {
+  display: inline-block;
+  margin-top: 14px;
+  padding: 4px 13px;
+  border-radius: 8px;
+  background: rgba(245, 197, 24, 0.92);
+  color: #17130a;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 30px;
+}
+
+.seeall-detail-meta {
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.seeall-detail-genres {
+  margin-top: 6px;
+  color: rgba(220, 231, 244, 0.72);
+  font-size: 22px;
+}
+
+.seeall-detail-desc {
+  margin-top: 16px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 24px;
+  line-height: 34px;
+}
+
+.seeall-detail-source {
+  margin-top: 18px;
+  color: rgba(220, 231, 244, 0.6);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
 }
 
 .seeall-grid {
@@ -21488,8 +21866,6 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .detail-trailer-autoplay .series-detail-logo {
-  max-width: 25vw;
-  max-height: 120px;
   margin-bottom: 48px;
 }
 
@@ -21614,9 +21990,11 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .series-season-row {
-  gap: 24px;
-  padding-top: 48px;
-  padding-bottom: 48px;
+  /* Densidade: era 48/48 de padding para 80px de conteudo — mais da metade do
+     bloco era ar. Medido na C9: bloco de 176px de altura. */
+  gap: 16px;
+  padding-top: 20px;
+  padding-bottom: 14px;
 }
 
 .series-season-btn {
@@ -21979,7 +22357,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .series-insight-tabs {
-  padding-top: 40px;
+  padding-top: 18px;
 }
 
 .series-insight-tab,
@@ -21995,28 +22373,31 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .movie-cast-track,
 .series-cast-track {
   gap: 16px;
-  padding-top: 12px;
-  padding-bottom: 16px;
+  padding-top: 8px;
+  padding-bottom: 10px;
 }
 
 .movie-cast-card,
 .series-cast-card {
-  flex-basis: 300px;
-  width: 300px;
+  /* Avatar de 200px num card de 300px consumia 332px de altura por linha de
+     elenco. A 3 metros o rosto segue identificavel bem menor; o nome e que
+     precisa continuar legivel, entao encolhe menos que o circulo. */
+  flex-basis: 220px;
+  width: 220px;
 }
 
 .movie-cast-avatar {
-  width: 200px;
-  height: 200px;
-  margin-bottom: 20px;
+  width: 140px;
+  height: 140px;
+  margin-bottom: 10px;
 }
 
 .movie-cast-name {
-  font-size: 30px;
+  font-size: 26px;
 }
 
 .movie-cast-role {
-  font-size: 24px;
+  font-size: 21px;
 }
 
 .detail-company-title {
@@ -22295,7 +22676,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
    resolved; that also discards earlier declarations from the same cascade. */
 .legacy-tizen .home-screen-shell.home-layout-modern .home-modern-hero-copy,
 .legacy-webos .home-screen-shell.home-layout-modern .home-modern-hero-copy {
-  top: 0;
+  /* 40px preserva a zona segura superior (mesmo top-safe do motor moderno);
+     o conteudo cabe porque o logo caiu para 160px e a sinopse fecha em linhas
+     inteiras logo abaixo. */
+  top: 40px;
   bottom: 52vh;
 }
 
@@ -23077,6 +23461,13 @@ html.no-flex-gap .stream-route-card-badges-lazy > * {
   line-clamp: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Keep entity and cast card titles deterministic across Tizen engines. */
+.cast-credit-title,
+.tmdb-entity-card-title {
+  display: block;
+  white-space: nowrap;
 }
 
 .tmdb-entity-card-year {

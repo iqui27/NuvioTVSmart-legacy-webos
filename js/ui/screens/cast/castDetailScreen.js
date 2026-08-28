@@ -55,6 +55,15 @@ function isBackEvent(event) {
   return Environment.isBackEvent(event);
 }
 
+function getDirection(event) {
+  const code = Number(event?.keyCode || 0);
+  if (code === 37) return "left";
+  if (code === 39) return "right";
+  if (code === 38) return "up";
+  if (code === 40) return "down";
+  return null;
+}
+
 function toType(mediaType) {
   const value = String(mediaType || "").toLowerCase();
   if (value === "tv" || value === "series" || value === "show") {
@@ -87,6 +96,7 @@ export const CastDetailScreen = {
     this.loadToken = (this.loadToken || 0) + 1;
     this.person = null;
     this.credits = [];
+    this.sectionFocusIndexByKey = {};
     this.posterOptionsController = null;
     this.posterOptionsFocusRestore = null;
     this.pendingPosterHoldTarget = null;
@@ -226,8 +236,10 @@ export const CastDetailScreen = {
   renderError(message) {
     this.container.innerHTML = `
       <div class="cast-detail-shell">
+        <button class="cast-detail-back focusable" data-action="back" aria-label="${escapeAttribute(t("common.back", {}, "Back"))}">
+          <span class="material-icons" aria-hidden="true">arrow_back</span>
+        </button>
         <div class="cast-detail-error">${message}</div>
-        <button class="cast-detail-back focusable" data-action="back">Back</button>
       </div>
     `;
     ScreenUtils.indexFocusables(this.container);
@@ -321,7 +333,100 @@ export const CastDetailScreen = {
 
     ScreenUtils.indexFocusables(this.container);
     ScreenUtils.setInitialFocus(this.container, ".cast-credit-card.focusable");
+    const initial = this.container.querySelector(".cast-credit-card.focusable.focused");
+    if (initial) {
+      this.rememberFocusedCard(initial);
+    }
     this.syncFocusedCardScroll({ instant: true });
+  },
+
+  getCreditCardNodes(section = null) {
+    if (section instanceof HTMLElement) {
+      return Array.from(section.querySelectorAll(".cast-credit-card.focusable"));
+    }
+    return Array.from(this.container?.querySelectorAll(".cast-credit-card.focusable") || []);
+  },
+
+  rememberFocusedCard(node) {
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+    const section = node.closest(".cast-credit-section");
+    const sectionKey = String(section?.dataset?.creditSection || "");
+    if (!sectionKey) {
+      return;
+    }
+    const index = this.getCreditCardNodes(section).indexOf(node);
+    if (index >= 0) {
+      this.sectionFocusIndexByKey[sectionKey] = index;
+    }
+  },
+
+  focusNode(node, { instant = false } = {}) {
+    if (!(node instanceof HTMLElement)) {
+      return false;
+    }
+    this.container?.querySelectorAll(".cast-credit-card.focusable.focused").forEach((current) => {
+      if (current !== node) {
+        current.classList.remove("focused");
+      }
+    });
+    node.classList.add("focused");
+    try {
+      node.focus({ preventScroll: true });
+    } catch (_) {
+      node.focus();
+    }
+    this.rememberFocusedCard(node);
+    this.syncFocusedCardScroll({ instant });
+    return true;
+  },
+
+  handleDpad(event) {
+    const direction = getDirection(event);
+    if (!direction) {
+      return false;
+    }
+    const current = this.container?.querySelector(".cast-credit-card.focusable.focused");
+    if (!(current instanceof HTMLElement)) {
+      return false;
+    }
+
+    const currentSection = current.closest(".cast-credit-section");
+    const currentCards = this.getCreditCardNodes(currentSection);
+    const currentIndex = currentCards.indexOf(current);
+    if (!(currentSection instanceof HTMLElement) || currentIndex < 0) {
+      return false;
+    }
+
+    if (direction === "left" || direction === "right") {
+      const nextIndex = currentIndex + (direction === "left" ? -1 : 1);
+      if (currentCards[nextIndex]) {
+        event?.preventDefault?.();
+        this.focusNode(currentCards[nextIndex]);
+      }
+      return Boolean(currentCards[nextIndex]);
+    }
+
+    const sections = Array.from(this.container?.querySelectorAll(".cast-credit-section") || []);
+    const sectionIndex = sections.indexOf(currentSection);
+    const targetSection = sections[sectionIndex + (direction === "up" ? -1 : 1)];
+    if (!(targetSection instanceof HTMLElement)) {
+      return false;
+    }
+    const targetCards = this.getCreditCardNodes(targetSection);
+    if (!targetCards.length) {
+      return false;
+    }
+    event?.preventDefault?.();
+    const targetKey = String(targetSection.dataset.creditSection || "");
+    const rememberedIndex = Number(this.sectionFocusIndexByKey?.[targetKey]);
+    // Keep focus local to each filmography section. This prevents the
+    // scroll position of Popular from selecting a later card in Latest.
+    const targetIndex =
+      Number.isInteger(rememberedIndex) && rememberedIndex >= 0 ? rememberedIndex : 0;
+    this.focusNode(targetCards[Math.min(targetIndex, targetCards.length - 1)]);
+    return true;
   },
 
   syncFocusedCardScroll({ instant = false } = {}) {
@@ -481,6 +586,7 @@ export const CastDetailScreen = {
           });
           target.classList.add("focused");
           focusWithoutScroll(target);
+          this.rememberFocusedCard(target);
           this.syncFocusedCardScroll({ instant: true });
         }
       });
@@ -518,8 +624,10 @@ export const CastDetailScreen = {
       Router.back();
       return;
     }
+    if (this.handleDpad(event)) {
+      return;
+    }
     if (ScreenUtils.handleDpadNavigation(event, this.container)) {
-      this.syncFocusedCardScroll();
       return;
     }
     if (code !== 13) {
@@ -552,6 +660,12 @@ export const CastDetailScreen = {
     const current = this.container?.querySelector(".cast-credit-card.focusable.focused") || null;
     if (this.completePendingPosterHold(current, event)) {
       event?.preventDefault?.();
+    }
+  },
+
+  onPointerFocus(target) {
+    if (this.isPosterHoldTarget(target)) {
+      this.rememberFocusedCard(target);
     }
   },
 

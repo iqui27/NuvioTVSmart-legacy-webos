@@ -73,22 +73,17 @@
 >
 > ### Installing on an older LG
 >
-> This is the real barrier, and it has nothing to do with the app: LG requires
-> Developer Mode to side-load an IPK.
+> Full step by step, including the graphical tool that avoids the command line
+> entirely: **[INSTALL.md](./INSTALL.md)**.
 >
-> 1. Install **Developer Mode** from the LG Content Store, sign in with an LG
->    developer account, and turn Dev Mode **on**. The TV reboots.
-> 2. Note the **passphrase** the Developer Mode app shows — it rotates when the
->    session is renewed.
-> 3. On your computer: `npm i -g @webos-tools/cli`, then
->    `ares-setup-device` to add the TV (`prisoner@<tv-ip>:9922`) and
->    `ares-novacom --device <name> --getkey` to fetch the key.
-> 4. `ares-install -d <name> NuvioTV-webOS-<version>.ipk`
-> 5. `ares-launch -d <name> space.nuvio.webos`
+> Short version: turn on Developer Mode from the LG Content Store, install
+> [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), add the TV
+> (port `9922`, user `prisoner`, plus the passphrase the Dev Mode app shows), and
+> install the `.ipk` from the Apps page.
 >
-> **The dev session expires** (about 50 hours, extendable in the Developer Mode
-> app). When it lapses the app stops launching until you renew it — that is LG's
-> restriction, not a bug in this build.
+> **The dev session expires** and the app stops launching until you extend it in
+> the Developer Mode app. That is LG's restriction, and it is the most common
+> reason a sideloaded app looks broken.
 >
 > ### Known state
 >
