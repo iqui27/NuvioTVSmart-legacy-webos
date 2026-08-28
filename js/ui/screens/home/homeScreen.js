@@ -10546,12 +10546,27 @@ export const HomeScreen = {
     const viewportRect = viewport.getBoundingClientRect();
     const constrained = this.isPerformanceConstrained();
     const verticalMargin = constrained ? 720 : 1200;
-    // Medido e REJEITADO: subir esta margem para 1250 (buscar ~4 cards antes da
+    // Duas tentativas medidas e REJEITADAS aqui, para nao repetir:
+    //
+    // 1) Subir esta margem para 1250 (buscar ~4 cards antes da
     // borda, em vez de menos de dois) NAO melhorou nada na C9 — tres rodadas de
     // 19 movimentos deram quadros piores de 1101/857/1084ms contra
     // 636/1084/76ms com 520. Baixar mais imagens de uma vez concorre entre si.
     // O que a navegacao sente e a chegada da imagem durante o movimento; a
     // margem maior nao tira esse custo do caminho, so o adianta.
+    //
+    // 2) Pre-busca de rede das proximas imagens com `new Image()` em
+    // requestIdleCallback, no maximo 2 pedidos vivos e nada anexado ao
+    // documento. Tambem sem ganho: 6261ms de jank na primeira descida contra
+    // 6367ms sem ela, e 3226/3303ms nas descidas quentes contra 3694/3500ms.
+    // O motivo de nenhuma das duas funcionar e que o custo NAO e rede: as
+    // descidas com o cache quente ainda perdem ~3300ms. Perfilando, o thread
+    // principal fica 77% ocioso e o nosso JS soma ~5%, entao o tempo tambem nao
+    // e execucao de codigo. Sobra rasterizacao/composicao, que o perfil de CPU
+    // do V8 nao ve. Desligar blur, filtro e sombra por CSS no aparelho deu
+    // 3507ms contra 4577ms, mas a faixa de ruido entre rodadas identicas e de
+    // 3500 a 6300ms, entao isso NAO e conclusivo. Fechar esse diagnostico pede
+    // o dominio Tracing (raster/paint), nao mais A/B de quadro.
     const horizontalMargin = constrained ? 520 : 1000;
     imageRows.forEach(({ row, images }) => {
       if (row instanceof HTMLElement && !row.isConnected) {
