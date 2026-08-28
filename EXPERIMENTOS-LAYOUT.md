@@ -247,3 +247,115 @@ fileira o ganho marginal é pequeno. Recomendo esperar a reação dele ao eyebro
 - O layout clássico recebeu o mesmo eyebrow por paridade de código, mas só o
   modern foi verificado visualmente na bancada.
 - Cores do eyebrow em painel de TV real (gama/contraste) não conferidas.
+
+## 9. A porta de saída da fileira (2026-08-27, tarde)
+
+Pedido do dono: _"cada fileira mostrar alguns com o botão de abrir a lista
+toda, porque aí teríamos como categorizar, mostrar a lista com diferentes
+estilos de formato não só pôster, e diminuir o quanto é carregado na home."_
+
+### 9.1 Duas premissas caíram na medição
+
+**"Reduzir os itens por fileira"** — já estava feito.
+`HOME_MAX_ITEMS_PER_ROW_LEGACY_TV = 8`. Não mexi nesse número.
+
+**"O card See All não aparece porque `items.length > maxItems` é `8 > 8`"** —
+o diagnóstico estava na função errada. Aquela linha (homeScreen.js ~2831) é do
+caminho `classic`/`grid`, que a TV **não usa**. No layout `modern`, que é o da
+TV, `renderModernRowSection` recebia `createSeeAllCardMarkup` como
+`_createSeeAllCardMarkup` e **nunca o chamava**: o card não existia em lugar
+nenhum do markup moderno. Corrigir só a comparação não teria mudado nada.
+
+### 9.2 Como se sabe que "há mais" (suposição documentada)
+
+Não há total. `catalogRepository` só reporta
+`hasMore = supportsSkip && items.length > 0` — isto é, "o addon aceita `skip=` e
+esta página não veio vazia". Nenhum manifesto no formato Stremio entrega um
+total.
+
+Critério adotado em `rowHasSeeAllDoor()` (modernHomeLayout.js), e reusado
+também pelo caminho clássico para não haver dois critérios:
+
+> **página cheia (`items.length >= maxItems`) = provavelmente há mais.**
+
+Fileira curta (5 de 5 itens) **não** ganha porta: abrir uma "lista completa"
+idêntica à fileira seria mentira. Custo de errar: um card a mais levando a uma
+tela com os mesmos 8 itens. Nunca um destino errado, nunca um crash.
+
+### 9.3 A fileira com porta virou prateleira fixa
+
+Medido **antes** de travar: com a porta no fim do trilho, apertar Direita além
+dela fazia a paginação horizontal anexar um 10º pôster **depois** da porta —
+ela migrava para a coluna 9, 10, ... e deixava de ser "o fim da fileira".
+Sequência medida de navCol: `1,2,3,4,5,6,7,8*,9` (`*` = porta).
+
+Então `runPagination` agora sai cedo em fileira que tem porta. A porta **é** a
+paginação; a lista inteira vive atrás dela, onde `catalogSeeAllScreen` já pagina
+com `skip=`. É também a parte que de fato reduz o que a home carrega.
+Depois da trava: `1,2,3,4,5,6,7,8*,8*,8*,8*`.
+
+### 9.4 Medições (bancada 1920×1080, home carregada, 24 fileiras)
+
+|                  | antes   | depois                              |
+| ---------------- | ------- | ----------------------------------- |
+| cards            | 220     | 237 (+17 portas)                    |
+| `<img>`          | 540     | **540** (a porta não tem imagem)    |
+| portas           | 0       | 17 (as 7 sem porta são as coleções) |
+| tamanho da porta | 229×132 | 229×347 (= pôster)                  |
+
+D-pad: colunas 0..8 contíguas, mesmo `data-nav-row`; Enter abre `catalogSeeAll`;
+Voltar retorna à Home **com o foco de volta na porta** (col 8).
+
+Armadilha resolvida no reconciliador: `focusedItemIndex` é lido do `navCol` do
+nó focado para que um card anexado pela paginação sobreviva ao re-render. A
+porta fica em `navCol === visibleItems.length`, então ler o índice dela pediria
+à fileira **um pôster a mais** do que ela tem → markup diferente → nó
+substituído → foco perdido. `reconcileHomeCatalogRows` agora ignora o índice
+quando o foco está na porta.
+
+### 9.5 A tela de destino: quase não mexer
+
+Medi antes de propor. `catalogSeeAll` **já** é uma grade densa de pôsteres (6
+colunas de 291×442 a 1920×1080), **já** tem fallback `no-css-grid` gerado pelo
+build para o Chromium 53, **já** pagina e **já** tem foco inicial previsível.
+Reconstruí-la em três layouts por tipo (grade para gênero, lista numerada com
+sinopse para chart, agrupamento por serviço para streaming) seria muito layout
+e muito modelo de foco novos para um ganho especulativo. **Recomendação: não
+reconstruir** até haver reação do dono ao que existe.
+
+O que mudou é só o que a fileira já tinha dito ao usuário e o destino jogava
+fora, tudo derivado de `getHomeRowKind` a partir do `addonId`/`catalogId` que o
+descriptor já carrega (zero plumbing novo, impossível discordar do eyebrow):
+
+- eyebrow de categoria no cabeçalho (`data-catalog-kind`);
+- numeração de posição em catálogo de ranking, via contador CSS;
+- **gutter 48px → 104px**: o primeiro card estava em x=48 enquanto todo pôster
+  da Home começa em 104. Mesmo bug já corrigido na busca em `a195662`.
+
+### 9.6 Paginar no destino: já existe, e é sã no D-pad
+
+`shouldAutoLoadMore(index)` dispara quando o card focado está a ≤10 do fim da
+lista — isto é, **guiado pelo foco, não pelo scroll**. É exatamente o que a
+tarefa 3 pedia, e já estava implementado. Nada a fazer.
+
+### 9.7 Não verificado / suspeitas
+
+- **Nada foi instalado na TV nesta sessão.** Tudo aqui é bancada 1920×1080 com
+  `legacy-webos`/`performance-constrained`. `homeCatalogPrefs` não foi tocado.
+- **Suspeita não confirmada, não corrigida:** `catalogSeeAllScreen` avança
+  `this.nextSkip = skip + 100` e inicializa `nextSkip = items.length ? 100 : 0`,
+  ambos assumindo página de 100. O catálogo "IMDb Top 250" devolveu 50 itens na
+  bancada. Se o tamanho de página do addon for menor que 100, a segunda página
+  **pula** os itens do meio. A paginação da home faz o certo
+  (`nextSkip = skip + incomingItems.length`). Não corrigi porque não medi o
+  tamanho de página real de cada addon, e chutar aqui troca um bug por outro.
+- Catálogo de ranking (`snoak_top100`) não apareceu nesta sessão da bancada; a
+  numeração do destino foi verificada forçando `data-catalog-ranked` (caixa do
+  `::after` 30×30 absolute). **Cuidado:** `getComputedStyle(...).content`
+  devolve a string `counter(seeall-rank)` mesmo funcionando — não é sinal de
+  quebra.
+- Cores do eyebrow do destino em painel de TV real não conferidas.
+- A fileira que perde a paginação horizontal perde também a navegação lateral
+  além de 8 itens. É a troca pedida pelo dono, mas é uma **remoção de
+  funcionalidade** — se ele não gostar, o ponto exato de reversão é o
+  early-return de `rowHasSeeAllDoor` dentro de `runPagination`.
