@@ -6233,6 +6233,38 @@ export const PlayerScreen = {
     pushPlaybackDiagnosticLine(lines, "Source", sourceLabel);
     pushPlaybackDiagnosticLine(lines, "Source type", sourceType);
     pushPlaybackDiagnosticLine(lines, "URL", activeUrl, 420);
+    // "0 bytes chegaram" tem duas causas que se parecem na tela e pedem correcoes
+    // opostas: o motor RECUSOU o codec, ou a conexao nem se estabeleceu (TLS/CA
+    // antiga em aparelhos de 2016-2017, host fora do ar, URL assinada expirada).
+    // Sem estas duas linhas quem testa so consegue chutar. canPlayType e sincrono
+    // e barato; o probe de rede vai numa linha separada logo abaixo.
+    const capacidades = PlayerController.getPlaybackCapabilities
+      ? PlayerController.getPlaybackCapabilities()
+      : null;
+    if (capacidades) {
+      pushPlaybackDiagnosticLine(
+        lines,
+        "Codecs",
+        [
+          "h264:" + (capacidades.mp4H264 ? "sim" : "nao"),
+          "hevc:" + (capacidades.mp4Hevc ? "sim" : "nao"),
+          "av1:" + (capacidades.mp4Av1 ? "sim" : "nao"),
+          "mkv:" + (capacidades.mkvH264 ? "sim" : "nao"),
+          "hls:" + (capacidades.hls ? "sim" : "nao")
+        ].join(" ")
+      );
+    }
+    if (sourceType) {
+      const veredito =
+        typeof PlayerController.canPlayNatively === "function"
+          ? PlayerController.canPlayNatively(sourceType)
+          : null;
+      pushPlaybackDiagnosticLine(
+        lines,
+        "Motor aceita este tipo",
+        veredito === null ? "" : veredito ? "sim" : "NAO"
+      );
+    }
     pushPlaybackDiagnosticLine(lines, "Proxy header names", headerNames);
     pushPlaybackDiagnosticLine(lines, "Resolver status", resolverStatus);
     pushPlaybackDiagnosticLine(lines, "Resolver detail", resolverDetail);
@@ -6466,6 +6498,65 @@ export const PlayerScreen = {
       ...(this.uiRefs || {}),
       startupErrorButton: overlay.querySelector(".player-startup-error-button")
     };
+    this.sondarUrlDoErro(overlay);
+  },
+
+  // Repete a requisicao da URL que falhou pedindo so o primeiro byte. O <video>
+  // nao conta por que desistiu — "networkState=3, 0 bytes" cobre tanto codec
+  // recusado quanto conexao que nunca subiu. Se este probe traz um status HTTP,
+  // a rede e o certificado estao bons e sobra o codec; se ele tambem morre em
+  // status 0, o problema e a conexao. So roda quando ha um erro na tela.
+  sondarUrlDoErro(overlay) {
+    if (!overlay) {
+      return;
+    }
+    const caixa = overlay.querySelector(".player-startup-error-details");
+    const url = String(this.activePlaybackUrl || "").trim();
+    if (!caixa || !url || url.indexOf("http") !== 0) {
+      return;
+    }
+    const linha = document.createElement("div");
+    linha.textContent = "Probe de rede: consultando...";
+    caixa.appendChild(linha);
+    let respondeu = false;
+    const encerrar = (texto) => {
+      if (respondeu) {
+        return;
+      }
+      respondeu = true;
+      linha.textContent = "Probe de rede: " + texto;
+    };
+    try {
+      const pedido = new XMLHttpRequest();
+      pedido.open("GET", url, true);
+      if (typeof pedido.setRequestHeader === "function") {
+        try {
+          pedido.setRequestHeader("Range", "bytes=0-1");
+        } catch (_) {
+          // Alguns motores antigos recusam Range em requisicoes cross-origin.
+        }
+      }
+      pedido.onreadystatechange = () => {
+        if (pedido.readyState === 2 || pedido.readyState === 4) {
+          encerrar(
+            pedido.status
+              ? "HTTP " + pedido.status + " (conexao ok, suspeitar do codec)"
+              : "status 0 (conexao/TLS falhou, nao e o codec)"
+          );
+          if (typeof pedido.abort === "function" && pedido.readyState === 2) {
+            pedido.abort();
+          }
+        }
+      };
+      pedido.onerror = () => encerrar("erro de rede (conexao/TLS falhou, nao e o codec)");
+      pedido.ontimeout = () => encerrar("tempo esgotado");
+      pedido.timeout = 8000;
+      pedido.send(null);
+    } catch (erro) {
+      encerrar(
+        "nao foi possivel testar (" + String(erro && erro.message ? erro.message : erro) + ")"
+      );
+    }
   },
 
   shouldUseLoadingLogoFill() {
