@@ -20636,6 +20636,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .stream-route-stream-badge {
+  /* Sem isto o chip encolhe abaixo do proprio texto e o texto vaza por cima do
+     vizinho: a fileira -lazy e `nowrap`, o chip herda `flex-shrink: 1` e o
+     computado de `min-width` e 0px (medido na C9), entao nada segura a largura
+     minima. Com `flex: 0 0 auto` a fileira transborda e o `overflow: hidden`
+     dela corta limpo na borda, que e degradacao legivel em vez de sobreposicao. */
+  flex: 0 0 auto;
   min-height: 30px;
   padding: 0 9px;
   border-radius: 7px;
