@@ -100,6 +100,68 @@ x=48 antes, x=104 depois. Valores estáticos, sem risco no Chromium 53.
 
 ### 3.4 `144e3b3` — fidelidade da bancada (ver §0)
 
+### 3.5 liberação de imagens fora de alcance (item 3 do §4)
+
+**Interruptor: `HOME_LAZY_IMAGE_RELEASE_ENABLED` em `js/ui/screens/home/homeScreen.js`
+(logo abaixo de `HOME_FOCUSED_ROW_HORIZONTAL_MARGIN`). `false` desliga tudo.**
+
+`hydrateHomeLazyImages` já era de mão única: punha `src` e nunca tirava. Agora, no
+mesmo laço, a fileira que está mais longe que `2.5 ×` a margem de hidratação devolve
+suas imagens ao estado não-carregado (`removeAttribute("src")` + `data-src` de volta).
+O URL sobrevive num atributo próprio, `data-lazy-src`, gravado na hidratação — sem ele
+a imagem liberada não teria como voltar. O fator 2.5 é histerese: sem folga entre
+"solta" e "recarrega", a fileira parada na borda entraria em ciclo a cada quadro.
+
+`src = ""` **não** serve no Chromium 53 (pede a URL do próprio documento e gera um erro
+de rede por imagem); só `removeAttribute("src")`.
+
+Não afeta o reconciliador: `reconcileHomeCatalogRows` compara a **string de markup
+gerada** com a do `WeakMap`, nunca o DOM vivo. Mexer em atributos das imagens não
+muda essa comparação, então nenhuma fileira é substituída e nenhum foco pula.
+
+#### Medição no aparelho (LG C9, 1920×1080, 7 travessias frias)
+
+Protocolo: relaunch → 26s → `.click()` no perfil → 25s → sonda de quadros → 45 teclas
+de seta a 170ms (20 ↓, 5 →, 15 ↓, 5 →) → leitura. A/B com os **mesmos bits**, só a
+constante virando. RSS lido por SSH em `/proc/<pid>/status` do renderer e do processo
+browser (`--in-process-gpu`, é lá que moram as texturas).
+
+| métrica (após a travessia)              | desligado (4 execuções)          | ligado (3 execuções)     | delta                                      |
+| --------------------------------------- | -------------------------------- | ------------------------ | ------------------------------------------ |
+| `<img>` com `src` vivo                  | 137 / 137 / 139 / 137            | 77 / 77 / 77             | **−44%**                                   |
+| pixels decodificados (naturalW×H×4)     | 220 / 225 / 263 / 225 MB         | 143 / 143 / 143 MB       | **−38%**                                   |
+| RSS do processo browser (GPU)           | 251,9 / 277,4 / 286,2 / 259,6 MB | 238,3 / 239,3 / 247,0 MB | **−27 MB (−10%)**, faixas não se sobrepõem |
+| RSS do renderer                         | 228–249 MB                       | 229–243 MB               | sem separação                              |
+| pico do renderer (`VmHWM`, crescimento) | +69,3 / +38,4 MB                 | +45,3 MB                 | sem separação                              |
+| soma dos quadros >120 ms                | 5050 / 4182 / 5182 / 4350 ms     | 4334 / 4481 / 4466 ms    | **sem mudança**                            |
+| nós de DOM                              | inalterado                       | inalterado               | —                                          |
+
+**O jank não melhorou, e isso era esperado.** Confirma a conclusão da sessão anterior:
+o congelamento pior da home é pré-DOM, no caminho de dados, não em decodificação. Quem
+esperar ganho de fluidez daqui vai se decepcionar; o ganho é de memória.
+
+**O que ficou provado e o que não.** Determinístico e repetível a cada execução:
+44% menos imagem viva e 38% menos bitmap decodificado. Do lado do processo, só o RSS
+do browser separa (faixas disjuntas em 7 execuções); renderer e pico ficam dentro do
+ruído, que nesta TV é de ±10% em RSS e ±20% em jank. Não meça isto com uma execução
+de cada lado: `VmHWM` sozinho chegou a inverter o sinal entre duas execuções desligadas
+(+69 MB e +38 MB).
+
+#### Regressão
+
+- Travessia de volta (35 ↑, 6 →, 6 ←): foco chegou de volta em `navRow 0 / navCol 0`,
+  dentro da viewport, sem pulo.
+- Imagens visíveis sem `src` ao voltar: 7 — **todas** `home-poster-expanded-backdrop`
+  com `opacity: 0`, que nunca passaram por esta hidratação (`data-lazy-src` ausente) e
+  são carregadas por outro caminho. Buraco visível: zero.
+- Sem flicker: a liberação só acontece a 1800px da viewport (2,5 × 720), ou seja umas
+  duas fileiras além da borda, e a re-hidratação acontece muito antes de a fileira
+  aparecer.
+
+**Não verificado:** comportamento sob memória realmente apertada (não consegui provocar
+pressão de memória de propósito na TV do dono); a home no modo `grid`/legado — só o
+`modern` foi percorrido; e o efeito depois de horas de uso, não só numa travessia.
+
 ## 4. Backlog priorizado (valor/esforço) — ainda não prototipado
 
 1. **Contraste da meta na tela de detalhe.** Ano/nota renderizam em
@@ -109,11 +171,11 @@ x=48 antes, x=104 depois. Valores estáticos, sem risco no Chromium 53.
 2. **Rótulos truncados no menu de Ajustes** ("Conteúdo e de..."). Proposta: coluna
    um pouco mais larga ou duas linhas. Custo: baixo. Risco: nenhum. Antes de mexer,
    medir com o bench fiel (a coluna é afetada por regras `performance-constrained`).
-3. **Imagens vivas na home.** 539 `<img>` e ~2.081 nós de DOM com 25 fileiras
-   montadas. Em Chrome desktop é nada; numa LG 2018 é memória de GPU e decodificação.
-   Vale investigar se as fileiras fora da viewport mantêm `src` e, se sim, liberar
-   (`src=""` fora de alcance, repor ao aproximar). Custo: médio. Risco: médio
-   (regressão de navegação/flicker) — só com medição no aparelho.
+3. ~~**Imagens vivas na home.**~~ **Feito — ver §3.5.** A suspeita estava meio certa:
+   as fileiras fora da viewport de fato mantinham `src` para sempre, e liberá-las tirou
+   44% das imagens vivas e 38% dos pixels decodificados. Mas o jank **não** mudou, e no
+   nível de processo só o RSS do browser separou (−27 MB). Sobra do item, ainda aberto:
+   os ~2.100 nós de DOM continuam todos montados — isto aqui não descarta nó nenhum.
 4. **Padronizar o corte de texto em linhas inteiras fora do hero.** O mesmo padrão
    de guilhotina pode existir em outros clamps (há 60 usos de `-webkit-line-clamp`
    com alturas fixas). Auditar os que convivem com `max-height` fixo. Custo: médio.
