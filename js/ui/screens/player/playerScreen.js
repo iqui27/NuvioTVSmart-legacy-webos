@@ -6329,6 +6329,22 @@ export const PlayerScreen = {
       );
     }
     pushPlaybackDiagnosticLine(lines, "Proxy header names", headerNames);
+    // Quem exige cabecalho so toca pelo proxy do servico local. Se o servico nao
+    // subiu, a fonte NAO tem como funcionar, e isso e diferente de codec.
+    const proxyLocal = PlayerController.lastPlaybackProxyResult || null;
+    if (proxyLocal && proxyLocal.status) {
+      pushPlaybackDiagnosticLine(
+        lines,
+        "Proxy local",
+        proxyLocal.proxied
+          ? "aplicado (cabecalhos enviados pelo servico)"
+          : proxyLocal.status === "not-required"
+            ? "nao era necessario"
+            : "INDISPONIVEL — " +
+              (proxyLocal.detail || "servico local nao respondeu") +
+              " (fonte que exige cabecalho nao vai tocar)"
+      );
+    }
     pushPlaybackDiagnosticLine(lines, "Resolver status", resolverStatus);
     pushPlaybackDiagnosticLine(lines, "Resolver detail", resolverDetail);
     if (engineFs) {
@@ -6596,6 +6612,37 @@ export const PlayerScreen = {
       respondeu = true;
       linha.textContent = "Probe de rede: " + texto;
     };
+    // Nem todo status com conexao viva aponta para o codec, e dizer que aponta
+    // manda quem testa para o lado errado. Reporte real do baneadopolitico
+    // (webOS 3.9, PenguPlay): o probe respondeu 428 e a linha dizia "suspeitar
+    // do codec", quando 428 (Precondition Required) e o servidor exigindo
+    // cabecalho — exatamente o que a outra fonte da mesma origem ja acusava
+    // como "requer cabecalhos especiais", com User-Agent, Referer e Origin
+    // listados. 401/403 tem a mesma leitura, e 404/410 sao link morto, nao
+    // codec.
+    const descreverStatusDoProbe = (status) => {
+      const codigo = Number(status || 0);
+      if (!codigo) {
+        return "status 0 (conexao/TLS falhou, nao e o codec)";
+      }
+      if (codigo === 428 || codigo === 401 || codigo === 403) {
+        return (
+          "HTTP " +
+          codigo +
+          " (o servidor exige cabecalho/credencial — NAO e o codec; esta fonte precisa de proxy)"
+        );
+      }
+      if (codigo === 404 || codigo === 410) {
+        return "HTTP " + codigo + " (link expirado ou removido, nao e o codec)";
+      }
+      if (codigo === 429) {
+        return "HTTP 429 (limite de requisicoes do servidor, nao e o codec)";
+      }
+      if (codigo >= 500) {
+        return "HTTP " + codigo + " (falha no servidor da fonte, nao e o codec)";
+      }
+      return "HTTP " + codigo + " (conexao ok, suspeitar do codec)";
+    };
     try {
       const pedido = new XMLHttpRequest();
       pedido.open("GET", url, true);
@@ -6608,11 +6655,7 @@ export const PlayerScreen = {
       }
       pedido.onreadystatechange = () => {
         if (pedido.readyState === 2 || pedido.readyState === 4) {
-          encerrar(
-            pedido.status
-              ? "HTTP " + pedido.status + " (conexao ok, suspeitar do codec)"
-              : "status 0 (conexao/TLS falhou, nao e o codec)"
-          );
+          encerrar(descreverStatusDoProbe(pedido.status));
           if (typeof pedido.abort === "function" && pedido.readyState === 2) {
             pedido.abort();
           }

@@ -4733,6 +4733,15 @@ export const PlayerController = {
           : null;
     if (playbackProxy) {
       const proxyResult = await playbackProxy.resolve(requestedUrl, requestHeaders);
+      // Guardado para o painel de erro. Sem isto nao da para distinguir, olhando
+      // a tela, "a fonte exige cabecalho e nos nao mandamos" de "mandamos e o
+      // servidor recusou" — foi exatamente a duvida no reporte do webOS 3.9 com
+      // o PenguPlay, em que o HdHub (que nao exige cabecalho) tocava normal.
+      this.lastPlaybackProxyResult = {
+        status: String(proxyResult?.status || ""),
+        proxied: Boolean(proxyResult?.proxied),
+        detail: String(proxyResult?.detail || "")
+      };
       if (!this.isPlaybackRequestActive(playToken, requestedUrl)) {
         return;
       }
