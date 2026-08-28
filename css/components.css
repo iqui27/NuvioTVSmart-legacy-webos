@@ -21382,6 +21382,8 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .seeall-body {
   display: flex;
   align-items: flex-start;
+  /* 380 do painel + 32 de respiro: reserva a coluna que o painel fixo ocupa. */
+  padding-right: 412px;
 }
 
 .seeall-body > .seeall-grid {
@@ -21390,9 +21392,19 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .seeall-detail {
-  flex: 0 0 380px;
+  /* FIXO, nao sticky: `position: sticky` e Chrome 56 e esta TV e Chromium 53 —
+     medido no aparelho, CSS.supports devolve false inclusive para
+     `-webkit-sticky`. Sem isto o painel rola junto com a grade e some assim que
+     o usuario desce, que foi exatamente o relato.
+     Como `fixed` tira do fluxo, a coluna e reservada pelo padding-right de
+     .seeall-body — senao a grade se espalharia por baixo do painel.
+     Ancoras medidas na tela real a 1920x1080: top 170, right 104. */
+  position: fixed;
+  top: 170px;
+  right: 104px;
   width: 380px;
-  margin-left: 32px;
+  max-height: calc(100% - 210px);
+  overflow: hidden;
   padding: 4px 0 0;
   /* Comeca invisivel mas OCUPANDO o espaco: se ele aparecesse do nada ao focar
      o primeiro card, a grade inteira reflui e o card focado sai debaixo do
