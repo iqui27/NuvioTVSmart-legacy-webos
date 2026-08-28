@@ -217,7 +217,10 @@ export const CatalogSeeAllScreen = {
     this.items = this.layoutPrefs?.hideUnreleasedContent
       ? filterReleasedItems(initialItems)
       : [...initialItems];
-    this.nextSkip = this.items.length ? 100 : 0;
+    // Avanca pelo que REALMENTE veio, nunca por um tamanho de pagina suposto.
+    // Ver o comentario em loadMore(): assumir 100 pula itens quando o addon
+    // devolve menos.
+    this.nextSkip = this.items.length;
     this.loading = false;
     this.hasMore = true;
     this.lastFocusedKey = this.items[0]?.id ? `item:${this.items[0].id}` : null;
@@ -300,7 +303,13 @@ export const CatalogSeeAllScreen = {
         this.items.push(item);
         addedCount += 1;
       });
-      this.nextSkip = skip + 100;
+      // `skip + 100` assumia que toda pagina do addon tem 100 itens. Quando ela
+      // vem menor — o "IMDb Top 250" devolveu 50 — a proxima requisicao parte de
+      // um deslocamento maior do que o que foi lido e os itens do meio somem sem
+      // aviso: a lista fica com buraco e ninguem percebe. Manifesto Stremio nao
+      // declara tamanho de pagina, entao o unico numero confiavel e quanto veio.
+      // A home ja fazia assim (homeScreen.js: `skip + incomingItems.length`).
+      this.nextSkip = skip + rawIncoming.length;
     }
     this.hasMore = rawIncoming.length > 0;
     this.loading = false;
