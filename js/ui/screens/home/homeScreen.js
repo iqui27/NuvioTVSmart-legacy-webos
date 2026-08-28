@@ -2555,6 +2555,41 @@ function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
   `;
 }
 
+const EXPANDED_FACTS_MAX_DESCRIPTION = 220;
+
+function buildExpandedFactsMarkup(normalized = {}) {
+  const tipo = String(normalized.type || "").toLowerCase() === "series" ? "Série" : "Filme";
+  const meta = [tipo, firstNonEmpty(normalized.releaseInfo, extractYear(normalized), "")]
+    .filter(Boolean)
+    .map((value) => escapeHtml(String(value)));
+  const nota = Number(normalized.imdbRating);
+  if (Number.isFinite(nota) && nota > 0) {
+    meta.push(`IMDb ${escapeHtml(String(normalized.imdbRating))}`);
+  }
+  const generos = Array.isArray(normalized.genres)
+    ? normalized.genres.filter(Boolean).slice(0, 3).map(localizedGenreLabel)
+    : [];
+  const bruto = String(normalized.description || "").trim();
+  // Corte em palavra inteira, nunca no meio do glifo: cortar glifo e o erro
+  // classico de app de TV, e foi exatamente o defeito do hero corrigido antes.
+  let descricao = bruto;
+  if (bruto.length > EXPANDED_FACTS_MAX_DESCRIPTION) {
+    const fatia = bruto.slice(0, EXPANDED_FACTS_MAX_DESCRIPTION);
+    const ultimoEspaco = fatia.lastIndexOf(" ");
+    descricao = `${(ultimoEspaco > 40 ? fatia.slice(0, ultimoEspaco) : fatia).trim()}…`;
+  }
+  if (!meta.length && !generos.length && !descricao) {
+    return "";
+  }
+  return `
+    <div class="home-poster-expanded-facts" aria-hidden="true">
+      ${meta.length ? `<div class="home-poster-expanded-meta">${meta.join(" • ")}</div>` : ""}
+      ${generos.length ? `<div class="home-poster-expanded-genres">${generos.map((g) => escapeHtml(String(g))).join(" • ")}</div>` : ""}
+      ${descricao ? `<div class="home-poster-expanded-desc" dir="auto">${escapeHtml(descricao)}</div>` : ""}
+    </div>
+  `;
+}
+
 function buildPosterSubtitle(item, layoutMode) {
   if (isCollectionFolderItem(item)) {
     return firstNonEmpty(item.collectionTitle, item.subtitle, "");
@@ -3141,6 +3176,15 @@ export function createPosterCardMarkup(
               : `<div class="home-poster-expanded-title" dir="auto">${escapeHtml(normalized.name || "Untitled")}</div>`
           }
         </div>
+        ${
+          /* Ficha do card expandido: so TEXTO, sem controle focavel. Todos os
+             campos ja vem de normalizeCatalogItem — nenhuma busca nova, nenhuma
+             imagem nova (a home ja tem 540 <img> vivas e esse era o limite que
+             eu nao queria estourar). Botoes ficaram de fora de proposito: eles
+             criariam uma segunda dimensao de foco dentro da fileira, e o D-pad
+             hoje anda so de poster em poster. */
+          !isLoading && isExpanded ? buildExpandedFactsMarkup(normalized) : ""
+        }
         ${
           !isLoading && useLandscapePoster && !suppressPosterText
             ? `
