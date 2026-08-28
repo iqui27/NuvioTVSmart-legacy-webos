@@ -878,16 +878,33 @@ function gridFallbackPlugin() {
         }
       });
 
-      // justify-self has no flexbox equivalent; auto margins reproduce the two
-      // values this stylesheet actually uses.
+      // justify-self nao tem equivalente direto em flexbox.
+      //
+      // `end` continua virando `margin-left: auto`, que e o truque padrao para
+      // empurrar o item para o fim da linha.
+      //
+      // `start` NAO pode virar `margin-right: auto`. Item de flex ja e alinhado
+      // ao inicio por padrao (justify-content: flex-start), entao a margem auto
+      // nao acrescenta nada — e ATROPELA a margem lateral que o fallback de
+      // flex-gap gera para emular `column-gap`, porque as duas regras miram a
+      // mesma propriedade e a de `auto` vem depois.
+      //
+      // Sintoma real na TV: a grade de "ver tudo" (`.seeall-card`, que usa
+      // justify-self: start) renderizava com os cards ENCOSTADOS — vaos
+      // horizontais medidos em 0, 0, 0, 0, enquanto o vertical vinha correto em
+      // 20px, porque `margin-bottom` ninguem sobrescrevia.
+      //
+      // O que `start` realmente significa no grid e "nao estique para preencher
+      // a celula". Em flex isso e `flex-grow: 0`, que nao toca em margem.
       if (justifySelf === "end" || justifySelf === "start") {
         const selfFallback = postcss.rule({
           selectors: rule.selectors.map((selector) => `html.no-css-grid ${selector}`)
         });
-        selfFallback.append({
-          prop: justifySelf === "end" ? "margin-left" : "margin-right",
-          value: "auto"
-        });
+        if (justifySelf === "end") {
+          selfFallback.append({ prop: "margin-left", value: "auto" });
+        } else {
+          selfFallback.append({ prop: "flex-grow", value: "0" });
+        }
         rule.after(selfFallback);
       }
 

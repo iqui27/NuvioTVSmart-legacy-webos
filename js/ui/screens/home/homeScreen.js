@@ -6090,6 +6090,11 @@ export const HomeScreen = {
             fallbackTitle: item.name || item.id || "Untitled",
             fallbackPoster: item.poster || "",
             fallbackBackground: item.background || item.backdrop || "",
+            // Sem esta dica o hero abre com o TITULO EM TEXTO e so troca para o
+            // logo quando o metadado chega — medido na C9: 180px de altura por
+            // ~1.7s e depois 78px. Nao e animacao, e troca de elemento, e le-se
+            // como "o titulo encolheu sozinho". A lista ja tem o logo em maos.
+            fallbackLogo: item.logo || "",
             addonBaseUrl: item.addonBaseUrl || "",
             addonId: item.addonId || "",
             addonName: item.addonName || "",
@@ -6707,7 +6712,15 @@ export const HomeScreen = {
     // Informacao e trailer sao coisas diferentes: quem liga "expandir ao focar"
     // esta pedindo a ficha do titulo, nao um video. O modo de trailer no card
     // continua existindo, so deixou de ser a UNICA porta para a expansao.
-    const shouldExpand = expandSettingEnabled || landscapeExpandedCardMode;
+    // Expansao do poster ao focar DESLIGADA na home, por decisao do dono: o hero
+    // ja mostra arte, titulo e sinopse do item focado, entao crescer o card
+    // repete a mesma informacao e ainda move a fileira debaixo do cursor.
+    // A preferencia em Ajustes continua existindo e volta a valer trocando esta
+    // constante para false — o resto do fluxo (trailer no card) fica intacto.
+    const HOME_POSTER_EXPAND_DISABLED = true;
+    const shouldExpand = HOME_POSTER_EXPAND_DISABLED
+      ? false
+      : expandSettingEnabled || landscapeExpandedCardMode;
     return {
       shouldExpand,
       shouldPreviewTrailer,
@@ -11432,6 +11445,10 @@ export const HomeScreen = {
       fallbackTitle: node.dataset.itemTitle || "Untitled",
       fallbackPoster: node.dataset.posterSrc || "",
       fallbackBackground: node.dataset.backdropSrc || "",
+      // O card ja carrega data-logo-src; passar adiante evita o hero abrir com
+      // o titulo em texto e trocar por logo depois. Ver comentario no outro
+      // ponto de navegacao.
+      fallbackLogo: node.dataset.logoSrc || "",
       addonBaseUrl: node.dataset.addonBaseUrl || "",
       addonId: node.dataset.addonId || "",
       addonName: node.dataset.addonName || "",

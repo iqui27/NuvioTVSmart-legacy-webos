@@ -613,6 +613,7 @@ export const CatalogSeeAllScreen = {
             fallbackTitle: target.title || "Untitled",
             fallbackPoster: target.poster || "",
             fallbackBackground: target.background || "",
+            fallbackLogo: target.logo || "",
             addonBaseUrl: target.addonBaseUrl || "",
             addonId: target.addonId || "",
             addonName: target.addonName || "",
@@ -666,6 +667,7 @@ export const CatalogSeeAllScreen = {
       fallbackTitle: node.dataset.itemTitle || "Untitled",
       fallbackPoster: node.dataset.posterSrc || "",
       fallbackBackground: node.dataset.backdropSrc || "",
+      fallbackLogo: node.dataset.logoSrc || "",
       addonBaseUrl: node.dataset.addonBaseUrl || "",
       addonId: node.dataset.addonId || "",
       addonName: node.dataset.addonName || "",
@@ -688,6 +690,7 @@ export const CatalogSeeAllScreen = {
                    data-item-title="${escapeHtml(item.name || "Untitled")}"
                     data-poster-src="${escapeHtml(item.poster || "")}"
                     data-backdrop-src="${escapeHtml(item.background || item.backdrop || "")}"
+                    data-logo-src="${escapeHtml(item.logo || "")}"
                     data-addon-base-url="${escapeHtml(descriptor.addonBaseUrl || item.addonBaseUrl || "")}"
                     data-addon-id="${escapeHtml(descriptor.addonId || item.addonId || "")}"
                     data-addon-name="${escapeHtml(descriptor.addonName || item.addonName || "")}"

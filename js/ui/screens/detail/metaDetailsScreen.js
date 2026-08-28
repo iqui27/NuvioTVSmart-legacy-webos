@@ -1914,10 +1914,22 @@ export const MetaDetailsScreen = {
             name: fallbackTitle,
             poster: this.params?.fallbackPoster || null,
             background: this.params?.fallbackBackground || null,
+            logo: this.params?.fallbackLogo || null,
             description: ""
           };
     if (token !== this.detailLoadToken) {
       return;
+    }
+    // O meta costuma chegar com SUCESSO e ainda assim sem logo — ele so aparece
+    // num enriquecimento posterior. Como o hero mostra `logo ? <img> : <h1>`,
+    // isso faz a tela abrir com o titulo em texto ocupando os 180px e depois
+    // trocar por uma imagem de ~78px. Nao e animacao: e troca de elemento, e le-se
+    // como "o titulo encolheu sozinho" (medido na C9: 180px ate ~2,5s, depois 78).
+    // A lista de onde viemos ja tinha o logo em maos, entao usamos essa dica
+    // enquanto o enriquecimento nao traz o definitivo. Nunca sobrescreve um logo
+    // que o meta ja trouxe.
+    if (meta && !meta.logo && this.params?.fallbackLogo) {
+      meta.logo = this.params.fallbackLogo;
     }
     this.resumeContentIds = buildResumeContentIds(meta, this.params);
     let progress = initialProgress;
@@ -3213,8 +3225,15 @@ export const MetaDetailsScreen = {
     creditPrefix = "",
     showWatchedButton = false
   }) {
-    const logoOrTitle = meta.logo
-      ? `<img src="${meta.logo}" class="series-detail-logo" alt="${escapeHtml(meta.name || "logo")}" decoding="async" fetchpriority="high" />`
+    // O primeiro render do hero acontece antes do meta chegar, so com os params
+    // da navegacao — ai `meta.logo` e vazio e caimos no <h1>. Quando o meta chega
+    // com logo, o <h1> de 180px vira <img> de ~78px: nao e animacao, e troca de
+    // elemento, e o usuario le como "o titulo encolheu sozinho". A lista de onde
+    // viemos ja carrega o logo (data-logo-src), entao usamos essa dica aqui, no
+    // unico ponto por onde TODOS os renders do hero passam.
+    const heroLogo = meta.logo || this.params?.fallbackLogo || "";
+    const logoOrTitle = heroLogo
+      ? `<img src="${heroLogo}" class="series-detail-logo" alt="${escapeHtml(meta.name || "logo")}" decoding="async" fetchpriority="high" />`
       : `<h1 class="series-detail-title">${escapeHtml(meta.name || "Untitled")}</h1>`;
     const externalRatings = this.renderExternalRatingsRow(meta);
     const trailerSource = this.trailerSource || resolveTrailerSource(meta);

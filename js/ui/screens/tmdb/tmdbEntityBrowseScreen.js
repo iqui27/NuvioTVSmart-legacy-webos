@@ -591,6 +591,14 @@ export const TmdbEntityBrowseScreen = {
     } else if (cardRect.bottom > shellRect.bottom - bottomPadding) {
       nextTop += cardRect.bottom - (shellRect.bottom - bottomPadding);
     }
+    // Subir ate a primeira fileira tem que revelar o hero de novo. Sem isto o
+    // scroll para assim que o card fica a `topPadding` do topo do shell, o que
+    // deixa o cabecalho (eyebrow + logo + descricao) permanentemente fora da
+    // tela: desce uma vez e ele nunca mais volta.
+    const primeiraFileira = this.container?.querySelector(".tmdb-entity-track[data-scroll-key]");
+    if (primeiraFileira && primeiraFileira.contains(node)) {
+      nextTop = 0;
+    }
     const maxTop = Math.max(0, shell.scrollHeight - shell.clientHeight);
     nextTop = Math.max(0, Math.min(maxTop, nextTop));
     if (Math.abs(nextTop - shell.scrollTop) > 1) {
