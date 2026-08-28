@@ -253,10 +253,14 @@ export const CatalogSeeAllScreen = {
     this.items = this.layoutPrefs?.hideUnreleasedContent
       ? filterReleasedItems(initialItems)
       : [...initialItems];
-    // Avanca pelo que REALMENTE veio, nunca por um tamanho de pagina suposto.
-    // Ver o comentario em loadMore(): assumir 100 pula itens quando o addon
-    // devolve menos.
-    this.nextSkip = this.items.length;
+    // Usa o deslocamento que a home ja tinha em maos quando ele veio; senao
+    // avanca pelo que REALMENTE veio, nunca por um tamanho de pagina suposto.
+    // O `100` do upstream aqui era o bug: ver o comentario em loadMore().
+    const initialNextSkip = Number(params?.initialNextSkip);
+    this.nextSkip =
+      Number.isFinite(initialNextSkip) && initialNextSkip > 0
+        ? Math.trunc(initialNextSkip)
+        : this.items.length;
     this.loading = false;
     this.hasMore = true;
     this.lastFocusedKey = this.items[0]?.id ? `item:${this.items[0].id}` : null;
@@ -345,7 +349,13 @@ export const CatalogSeeAllScreen = {
       // aviso: a lista fica com buraco e ninguem percebe. Manifesto Stremio nao
       // declara tamanho de pagina, entao o unico numero confiavel e quanto veio.
       // A home ja fazia assim (homeScreen.js: `skip + incomingItems.length`).
-      this.nextSkip = skip + rawIncoming.length;
+      // O upstream (d51f350) passou a preferir o nextSkip que o addon reporta,
+      // quando ele vem coerente; o calculo por quantidade lida fica de reserva.
+      const reportedNextSkip = Number(result?.data?.nextSkip);
+      this.nextSkip =
+        Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
+          ? Math.trunc(reportedNextSkip)
+          : skip + rawIncoming.length;
     }
     this.hasMore = rawIncoming.length > 0;
     this.loading = false;

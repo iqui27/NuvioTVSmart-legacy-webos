@@ -4346,17 +4346,16 @@ button:focus-visible {
 
 .library-grid {
   display: grid;
-  grid-template-columns: repeat(
-    auto-fill,
-    minmax(var(--library-poster-width, 252px), var(--library-poster-width, 252px))
-  );
+  /* Android TV uses GridCells.Adaptive(minSize = 126.dp): keep the poster
+     minimum, then distribute the remaining row width across the columns. */
+  grid-template-columns: repeat(auto-fill, minmax(var(--library-poster-width, 252px), 1fr));
   grid-gap: 32px 24px; /* Legacy Chromium/Tizen 5 fallback; Android spacing is 16/12dp. */
   gap: 32px 24px;
   align-content: start;
 }
 
 .library-grid-card {
-  width: var(--library-poster-width, 252px);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -4380,8 +4379,9 @@ button:focus-visible {
 .library-grid-poster {
   position: relative;
   box-sizing: border-box;
-  width: var(--library-poster-width, 252px);
-  height: var(--library-poster-height, 378px);
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
   border-radius: var(--library-poster-radius, 24px);
   border: 4px solid transparent;
   background: var(--card-bg) center center / cover no-repeat;
@@ -4397,7 +4397,7 @@ button:focus-visible {
 }
 
 .library-grid-title {
-  width: var(--library-poster-width, 252px);
+  width: 100%;
   padding: 0 4px;
   box-sizing: border-box;
   font-size: 32px;
@@ -7720,11 +7720,32 @@ button:focus-visible {
 }
 
 .trakt-route-shell .settings-tracking-panel {
-  width: min(78vw, 1180px);
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: min(1.46vw, 28px); /* ATV 14dp */
 }
 
 .trakt-route-shell .settings-tracking-hero {
-  min-height: 132px;
+  height: auto;
+  min-height: 0;
+  justify-content: flex-start;
+}
+
+.trakt-route-shell .settings-tracking-hero > div {
+  width: 100%;
+}
+
+.trakt-route-shell .settings-tracking-hero .settings-trakt-title {
+  margin-top: 0;
+}
+
+.trakt-route-shell .settings-tracking-panel > .settings-trakt-scroll-area {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: min(1.46vw, 28px); /* ATV LazyColumn spacedBy 14dp */
+  padding-bottom: min(1.25vw, 24px); /* ATV 12dp content padding */
 }
 
 .trakt-route-shell .settings-tracking-account-card {
@@ -7735,6 +7756,24 @@ button:focus-visible {
   height: auto;
   max-height: none;
   flex: 0 0 auto;
+  padding: min(1.46vw, 28px); /* ATV SettingsGroupCard 14dp */
+  border-radius: min(1.875vw, 36px); /* ATV 18dp */
+  background: var(--card-bg);
+}
+
+.trakt-route-shell .settings-tracking-panel .settings-trakt-card-title {
+  margin: 0;
+}
+
+.trakt-route-shell .settings-tracking-card-subtitle {
+  margin: min(0.625vw, 12px) 0 0;
+  color: var(--text-secondary);
+  font-size: min(1.04vw, 20px);
+  line-height: min(1.25vw, 24px);
+}
+
+.trakt-route-shell .settings-tracking-panel .settings-trakt-options-stack {
+  margin-top: min(1.04vw, 20px);
 }
 
 .settings-row-leading-image {
@@ -19157,6 +19196,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   height: calc(var(--poster-card-width, 126px) * 1.5);
 }
 
+.no-aspect-ratio .library-grid-poster {
+  /* Tizen 5 has no aspect-ratio; preserve the 2:3 poster box after expansion. */
+  height: 0;
+  aspect-ratio: auto;
+  padding-bottom: calc(150% - 8px);
+}
+
 .no-aspect-ratio .home-screen-shell .home-poster-frame,
 .no-aspect-ratio .home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card {
   height: calc(var(--home-poster-width) * 1.5);
@@ -21021,6 +21067,8 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   height: 100vh;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background:
     radial-gradient(140% 90% at 78% 0%, rgb(var(--secondary-color-rgb) / 0.22), transparent 40%),
     var(--bg-color);
@@ -21028,6 +21076,15 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   padding: 26px var(--tv-safe-gutter-wide, 96px) 38px;
   box-sizing: border-box;
   position: relative;
+}
+
+/* The legacy Tizen build cannot resolve clamp() through this custom property. */
+html.tizen-tv.no-css-math .cast-detail-shell {
+  padding: 26px 69.12px 38px;
+}
+
+.cast-detail-shell::-webkit-scrollbar {
+  display: none;
 }
 
 .cast-detail-loading,
@@ -23354,6 +23411,13 @@ html.no-flex-gap .stream-route-card-badges-lazy > * {
   line-clamp: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Keep entity and cast card titles deterministic across Tizen engines. */
+.cast-credit-title,
+.tmdb-entity-card-title {
+  display: block;
+  white-space: nowrap;
 }
 
 .tmdb-entity-card-year {

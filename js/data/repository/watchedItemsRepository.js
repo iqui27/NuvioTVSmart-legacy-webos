@@ -80,6 +80,61 @@ function watchedKey(item = {}) {
   return `${String(item.contentId || "").toLowerCase()}:${item.season ?? ""}:${item.episode ?? ""}`;
 }
 
+function watchedEpisodeRank(item = {}) {
+  return Number(item.season || 0) * 100000 + Number(item.episode || 0);
+}
+
+function byWatchedAtDescending(left, right) {
+  return Number(right?.watchedAt || 0) - Number(left?.watchedAt || 0);
+}
+
+/**
+ * Trims a watched list to `limit` without dropping any title from it.
+ *
+ * The list is one entry per watched episode, in whatever order the tracker returned its library.
+ * A handful of long-running series can therefore spend the whole budget before the rest is even
+ * reached: a 1284-entry Simkl account projects to ~9000 episodes, and a plain slice at 2000 kept
+ * only 81 of its 539 series - chosen by Simkl's ordering, not by anything the viewer did. Next Up
+ * seeds from this list, so those series simply vanish from Continue Watching.
+ *
+ * Keeping the furthest-watched episode of every title first means each one stays represented, which
+ * is all Next Up needs from it. The remaining budget then goes to the most recent episodes, which is
+ * what the watched badges read.
+ */
+function limitWatchedItems(items, limit) {
+  const all = Array.isArray(items) ? items : [];
+  const max = Math.max(0, Number(limit || 0));
+  if (max === 0) {
+    return [];
+  }
+  if (!Number.isFinite(max) || all.length <= max) {
+    return all;
+  }
+
+  const furthestByContent = new Map();
+  all.forEach((item) => {
+    const contentId = String(item?.contentId || "")
+      .trim()
+      .toLowerCase();
+    if (!contentId) return;
+    const existing = furthestByContent.get(contentId);
+    const itemRank = watchedEpisodeRank(item);
+    const existingRank = watchedEpisodeRank(existing);
+    if (
+      !existing ||
+      itemRank > existingRank ||
+      (itemRank === existingRank && Number(item?.watchedAt || 0) > Number(existing?.watchedAt || 0))
+    ) {
+      furthestByContent.set(contentId, item);
+    }
+  });
+
+  const furthest = Array.from(furthestByContent.values()).sort(byWatchedAtDescending);
+  const kept = new Set(furthest);
+  const rest = all.filter((item) => !kept.has(item)).sort(byWatchedAtDescending);
+  return [...furthest, ...rest].slice(0, max);
+}
+
 const watchedItemsSyncTimers = new Map();
 const watchedItemsSyncInFlightByProfile = new Map();
 
@@ -160,8 +215,8 @@ class WatchedItemsRepository {
     if (!shouldUseSimkl()) return local.slice(0, limit);
     const remote = await SimklSyncService.getWatchedItems().catch(() => []);
     const remoteKeys = new Set(remote.map(watchedKey));
-    return [...remote, ...local.filter((item) => !remoteKeys.has(watchedKey(item)))].slice(
-      0,
+    return limitWatchedItems(
+      [...remote, ...local.filter((item) => !remoteKeys.has(watchedKey(item)))],
       limit
     );
   }

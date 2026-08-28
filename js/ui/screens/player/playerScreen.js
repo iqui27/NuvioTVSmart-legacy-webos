@@ -15,6 +15,7 @@ import {
 } from "../../../core/player/startupAudioGatePolicy.js";
 import {
   isRecoverableHlsFragmentTimeout,
+  isExpiredStreamUrl,
   isTerminalHlsHttpStatus
 } from "../../../core/player/hlsNetworkErrorPolicy.js";
 import { deltaMsForKeyRepeat } from "../../../core/player/playerScrubRates.js";
@@ -6063,7 +6064,7 @@ export const PlayerScreen = {
       return "";
     }
     const providerHint =
-      status === 403
+      status === 400 || status === 403
         ? t(
             "player_error_stream_blocked",
             {},
@@ -6075,7 +6076,7 @@ export const PlayerScreen = {
               {},
               "\n\nThe stream link has expired or been removed. Try a different source."
             )
-          : status === 410
+          : status === 401 || status === 410
             ? t(
                 "player_error_stream_expired",
                 {},
@@ -6087,7 +6088,7 @@ export const PlayerScreen = {
                   {},
                   "\n\nToo many requests to the stream source. Wait a moment and try again."
                 )
-              : [500, 502, 503].includes(status)
+              : [500, 502, 503, 504].includes(status)
                 ? t(
                     "player_error_stream_unavailable",
                     {},
@@ -6095,6 +6096,69 @@ export const PlayerScreen = {
                   )
                 : "";
     return `HTTP ${status}${normalizePlaybackDisplayLineBreaks(providerHint)}`;
+  },
+
+  showExpiredStreamError(
+    playbackUrl = this.activePlaybackUrl,
+    { sourceCandidate: explicitSourceCandidate = null, reason = "stream-url-expired" } = {}
+  ) {
+    const normalizedUrl = String(playbackUrl || "").trim();
+    const sourceCandidate =
+      explicitSourceCandidate ||
+      this.getStreamCandidateByUrl(normalizedUrl) ||
+      this.getCurrentStreamCandidate();
+    const message = t(
+      "player_error_stream_expired",
+      {},
+      "The stream link has expired. Try a different source."
+    );
+    this.markPlaybackSourceFailed(normalizedUrl, sourceCandidate);
+    const currentPlaybackUrl = String(this.activePlaybackUrl || "").trim();
+    const hasDifferentActivePlayback =
+      this.hasPresentedPlaybackFrame && normalizedUrl && currentPlaybackUrl !== normalizedUrl;
+    if (!hasDifferentActivePlayback) {
+      this.clearPlaybackStallGuard();
+      this.releaseStartupAudioGate({ resume: false });
+    }
+    if (!this.hasPresentedPlaybackFrame || !hasDifferentActivePlayback) {
+      if (!this.hasPresentedPlaybackFrame) {
+        this.showStartupError(message, {
+          streamCandidate: sourceCandidate,
+          playbackUrl: normalizedUrl,
+          reason
+        });
+      } else {
+        this.loadingVisible = false;
+        this.bufferingActive = false;
+        this.paused = true;
+        this.dismissPauseOverlay();
+        this.updateLoadingVisibility();
+        this.updateMediaSessionPlaybackState();
+        this.setControlsVisible(true, { focus: false });
+        this.sourcesError = this.formatPlaybackErrorForSources(message, {
+          streamCandidate: sourceCandidate,
+          playbackUrl: normalizedUrl,
+          reason
+        });
+        this.renderSourcesPanel();
+        this.updateUiTick();
+      }
+    } else {
+      // A user can select an already expired source while another source is
+      // still playing. Keep the active playback untouched and only report the
+      // rejected candidate in the source panel.
+      this.sourcesError = this.formatPlaybackErrorForSources(message, {
+        streamCandidate: sourceCandidate,
+        playbackUrl: normalizedUrl,
+        reason
+      });
+      this.renderSourcesPanel();
+    }
+
+    console.warn("Playback source URL has expired; refusing to retry it", {
+      url: normalizedUrl,
+      reason
+    });
   },
 
   getWebHeaderRestrictedStreamMessage(streamCandidate = this.getCurrentStreamCandidate()) {
@@ -6369,6 +6433,13 @@ export const PlayerScreen = {
         reason: "missing-url"
       });
       return;
+    }
+    if (isExpiredStreamUrl(playbackUrl)) {
+      this.showExpiredStreamError(playbackUrl, {
+        sourceCandidate,
+        reason: "stream-url-expired-before-start"
+      });
+      return Promise.resolve();
     }
     PlayerController.setStartupPresentationAudioMuted?.(true);
     return Promise.resolve(PlayerController.play(playbackUrl, context)).catch((error) => {
@@ -9637,6 +9708,7 @@ export const PlayerScreen = {
       const normalizedPlaybackErrorDetail = String(playbackErrorDetail || "").toLowerCase();
       const currentSourceCandidate =
         this.getStreamCandidateByUrl(this.activePlaybackUrl) || this.getCurrentStreamCandidate();
+      const expiredPlaybackUrl = isExpiredStreamUrl(this.activePlaybackUrl);
       const currentEngineFsState = this.currentEngineFsStream || null;
       const publicEngineFsUrl = String(currentEngineFsState?.publicPlaybackUrl || "").trim();
       const isLocalEngineFsNetworkFailure =
@@ -9647,6 +9719,13 @@ export const PlayerScreen = {
           avplayError.includes("connection refused") ||
           normalizedPlaybackErrorDetail.includes("network") ||
           normalizedPlaybackErrorDetail.includes("failed"));
+      if (expiredPlaybackUrl) {
+        this.showExpiredStreamError(this.activePlaybackUrl, {
+          sourceCandidate: currentSourceCandidate,
+          reason: "stream-url-expired-during-playback"
+        });
+        return;
+      }
       if (!this.hasPresentedPlaybackFrame && isLocalEngineFsNetworkFailure) {
         const sourceCandidate =
           this.getStreamCandidateByUrl(this.activePlaybackUrl) || this.getCurrentStreamCandidate();
@@ -11625,14 +11704,25 @@ export const PlayerScreen = {
       return;
     }
 
-    const selectedIndex = this.streamCandidates.findIndex((entry) => entry.url === streamUrl);
+    const normalizedStreamUrl = String(streamUrl || "").trim();
+    const sourceCandidate =
+      explicitSourceCandidate ||
+      this.getStreamCandidateByUrl(normalizedStreamUrl) ||
+      this.getCurrentStreamCandidate();
+    if (isExpiredStreamUrl(normalizedStreamUrl)) {
+      this.showExpiredStreamError(normalizedStreamUrl, {
+        sourceCandidate,
+        reason: "stream-url-expired"
+      });
+      return;
+    }
+
+    const selectedIndex = this.streamCandidates.findIndex(
+      (entry) => entry.url === normalizedStreamUrl
+    );
     if (selectedIndex >= 0) {
       this.currentStreamIndex = selectedIndex;
     }
-    const sourceCandidate =
-      explicitSourceCandidate ||
-      this.getStreamCandidateByUrl(streamUrl) ||
-      this.getCurrentStreamCandidate();
     const sourceContext = this.getPlaybackSourceContext(sourceCandidate);
     if (sourceContext) {
       this.activePlaybackSourceContext = sourceContext;
@@ -12075,12 +12165,15 @@ export const PlayerScreen = {
     await this.playStreamCandidate(selected, { preservePlaybackState: true });
   },
 
-  markPlaybackSourceFailed(url = this.activePlaybackUrl) {
+  markPlaybackSourceFailed(
+    url = this.activePlaybackUrl,
+    streamCandidate = this.getCurrentStreamCandidate()
+  ) {
     const normalizedUrl = String(url || "").trim();
     if (normalizedUrl) {
       (this.failedPlaybackUrls || (this.failedPlaybackUrls = new Set())).add(normalizedUrl);
     }
-    const currentCandidate = this.getCurrentStreamCandidate?.();
+    const currentCandidate = streamCandidate || this.getCurrentStreamCandidate?.();
     const currentId = String(currentCandidate?.id || "").trim();
     if (currentId) {
       (this.failedPlaybackStreamIds || (this.failedPlaybackStreamIds = new Set())).add(currentId);
@@ -12728,6 +12821,18 @@ export const PlayerScreen = {
         typeof PlayerController.getLastHlsErrorDiagnostic === "function"
           ? PlayerController.getLastHlsErrorDiagnostic()
           : null;
+      const terminalHlsHttpStatus = Number(lastHlsErrorDiagnostic?.responseCode || 0);
+      const terminalHlsHttpFailure = isTerminalHlsHttpStatus(terminalHlsHttpStatus);
+      const terminalHlsErrorDetail = terminalHlsHttpFailure ? "HTTP " + terminalHlsHttpStatus : "";
+      if (isExpiredStreamUrl(this.activePlaybackUrl)) {
+        this.showExpiredStreamError(this.activePlaybackUrl, {
+          sourceCandidate:
+            this.getStreamCandidateByUrl(this.activePlaybackUrl) ||
+            this.getCurrentStreamCandidate(),
+          reason: "stream-url-expired-during-stall"
+        });
+        return;
+      }
       if (startup) {
         console.warn("[Nuvio playback] startup stall", {
           engine: String(PlayerController.playbackEngine || "unknown"),
@@ -12818,6 +12923,7 @@ export const PlayerScreen = {
 
       const targetEngine =
         !playbackEngineValidated &&
+        !terminalHlsHttpFailure &&
         typeof PlayerController.getAlternativePlaybackEngine === "function"
           ? PlayerController.getAlternativePlaybackEngine(this.activePlaybackUrl)
           : null;
@@ -12876,11 +12982,12 @@ export const PlayerScreen = {
           this.getStreamCandidateByUrl(this.activePlaybackUrl) || this.getCurrentStreamCandidate();
         const startupErrorMessage = this.getStartupErrorMessage(
           mediaErrorCode,
-          "",
+          terminalHlsErrorDetail,
           sourceCandidate
         );
         this.showStartupError(startupErrorMessage, {
           mediaErrorCode,
+          detail: terminalHlsErrorDetail,
           streamCandidate: sourceCandidate,
           playbackUrl: this.activePlaybackUrl,
           reason: "startup-stall"
@@ -12925,9 +13032,10 @@ export const PlayerScreen = {
           this.getStreamCandidateByUrl(this.activePlaybackUrl) || this.getCurrentStreamCandidate();
         const mediaErrorCode = Number(PlayerController.getLastPlaybackErrorCode?.() || 0);
         this.sourcesError = this.formatPlaybackErrorForSources(
-          `${this.mediaErrorMessage(mediaErrorCode, "", sourceCandidate)}. Choose another source manually.`,
+          `${this.mediaErrorMessage(mediaErrorCode, terminalHlsErrorDetail, sourceCandidate)}. Choose another source manually.`,
           {
             mediaErrorCode,
+            detail: terminalHlsErrorDetail,
             streamCandidate: sourceCandidate,
             playbackUrl: this.activePlaybackUrl,
             reason: "playback-stall"
