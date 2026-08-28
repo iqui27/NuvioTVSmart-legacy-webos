@@ -292,10 +292,13 @@ class AddonRepository {
       return envelope.profiles[normalizedProfileId];
     }
 
-    const seed = Object.prototype.hasOwnProperty.call(envelope.profiles, "1")
-      ? this.cloneValue(envelope.profiles["1"])
-      : this.cloneValue(defaultValue);
-    envelope.profiles[normalizedProfileId] = normalizeValue(seed);
+    // Perfil ainda sem entrada comeca VAZIO, nunca copiando o perfil "1".
+    // Semear com o perfil 1 fazia um perfil novo nascer com os addons do perfil
+    // original (relato: perfil novo com PenguPlay+HdHub mostrava tambem Torrentio
+    // e o PenguPlay do outro perfil). O app Android nao faz isso. A migracao de
+    // instalacao antiga de perfil unico continua coberta pelo bloco legado em
+    // readProfileScopedEnvelope, que e outro caminho.
+    envelope.profiles[normalizedProfileId] = normalizeValue(this.cloneValue(defaultValue));
     LocalStore.set(key, envelope);
     return envelope.profiles[normalizedProfileId];
   }
