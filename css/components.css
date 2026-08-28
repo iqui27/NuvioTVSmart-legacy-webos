@@ -16702,9 +16702,12 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     margin-bottom 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* O logo do hero NAO encolhe mais quando o trailer entra. Antes ele caia de
+   180px para 120px de altura numa transicao de 600ms, e do lado do usuario a
+   leitura era "abre grande e diminui sozinho" — parece defeito, nao intencao.
+   A margem inferior maior do estado com trailer fica, porque so afasta o logo
+   dos controles; o que sai e a reducao de tamanho. */
 .detail-trailer-autoplay .series-detail-logo {
-  max-width: min(28vw, 380px);
-  max-height: clamp(72px, 6vh, 96px);
   margin-bottom: 24px;
 }
 
@@ -16720,11 +16723,16 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
     opacity 400ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* O titulo NAO some mais quando o trailer comeca.
+   Antes ele colapsava (max-height 0 + opacity 0, transicao de 600ms) assim que
+   `isTrailerPlaying` ligava, e do lado do usuario a leitura era "o titulo
+   aparece grande e encolhe sozinho" logo ao abrir o filme — comportamento que
+   parece defeito, nao intencao. O trailer continua tocando atras; o titulo e a
+   identificacao da pagina e fica. */
 .detail-trailer-autoplay .series-detail-title,
 .detail-trailer-manual .series-detail-title {
-  max-height: 0;
-  margin-bottom: 0;
-  opacity: 0;
+  max-height: none;
+  opacity: 1;
 }
 
 .detail-trailer-hint {
@@ -21367,6 +21375,63 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   color: var(--text-secondary);
 }
 
+/* Corpo da tela: grade a esquerda, painel do item focado a direita.
+   O plugin de fallback do build gera a versao sem CSS Grid para o Chromium 53
+   a partir destas mesmas regras; nada aqui depende de recurso que a TV nao tem
+   (sem clamp, sem aspect-ratio, sem :is). */
+.seeall-body {
+  display: flex;
+  align-items: flex-start;
+}
+
+.seeall-body > .seeall-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.seeall-detail {
+  flex: 0 0 380px;
+  width: 380px;
+  margin-left: 32px;
+  padding: 4px 0 0;
+  /* Comeca invisivel mas OCUPANDO o espaco: se ele aparecesse do nada ao focar
+     o primeiro card, a grade inteira reflui e o card focado sai debaixo do
+     cursor. Reservar a coluna desde o inicio mantem a geometria estavel. */
+  opacity: 0;
+  transition: opacity 160ms linear;
+}
+
+.seeall-detail.is-visible {
+  opacity: 1;
+}
+
+.seeall-detail-title {
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.seeall-detail-meta {
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.seeall-detail-genres {
+  margin-top: 4px;
+  color: rgba(220, 231, 244, 0.7);
+  font-size: 17px;
+}
+
+.seeall-detail-desc {
+  margin-top: 14px;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 18px;
+  line-height: 26px;
+}
+
 .seeall-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
@@ -21699,8 +21764,6 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .detail-trailer-autoplay .series-detail-logo {
-  max-width: 25vw;
-  max-height: 120px;
   margin-bottom: 48px;
 }
 

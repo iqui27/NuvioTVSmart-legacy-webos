@@ -19,6 +19,35 @@ import {
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { getHomeRowKind, isRankedHomeRow } from "../home/homeRowKind.js";
 
+const SEEALL_DESC_MAX = 460;
+
+// A grade tem espaco lateral de sobra, entao o painel mostra bem mais texto que
+// a ficha da home (que cabia em 4 linhas). Corte em palavra inteira: cortar
+// glifo no meio e o erro classico de app de TV.
+function buildSeeAllFacts(item = {}, descriptor = {}) {
+  const tipoBruto = String(
+    item.type || item.catalogType || descriptor.type || "movie"
+  ).toLowerCase();
+  const meta = [tipoBruto === "series" ? "Série" : "Filme"];
+  const ano = extractReleaseYear(item);
+  if (ano) {
+    meta.push(String(ano));
+  }
+  const nota = Number(item.imdbRating);
+  if (Number.isFinite(nota) && nota > 0) {
+    meta.push(`IMDb ${item.imdbRating}`);
+  }
+  const generos = Array.isArray(item.genres) ? item.genres.filter(Boolean).slice(0, 4) : [];
+  const bruto = String(item.description || item.overview || "").trim();
+  let desc = bruto;
+  if (bruto.length > SEEALL_DESC_MAX) {
+    const fatia = bruto.slice(0, SEEALL_DESC_MAX);
+    const ultimo = fatia.lastIndexOf(" ");
+    desc = `${(ultimo > 80 ? fatia.slice(0, ultimo) : fatia).trim()}…`;
+  }
+  return { meta: meta.join(" • "), genres: generos.join(" • "), desc };
+}
+
 const POSTER_HOLD_DELAY_MS = 650;
 
 /**
@@ -656,6 +685,9 @@ export const CatalogSeeAllScreen = {
                     data-addon-id="${escapeHtml(descriptor.addonId || item.addonId || "")}"
                     data-addon-name="${escapeHtml(descriptor.addonName || item.addonName || "")}"
                     data-catalog-type="${escapeHtml(descriptor.type || item.catalogType || "")}"
+                    data-facts-meta="${escapeHtml(buildSeeAllFacts(item, descriptor).meta)}"
+                    data-facts-genres="${escapeHtml(buildSeeAllFacts(item, descriptor).genres)}"
+                    data-facts-desc="${escapeHtml(buildSeeAllFacts(item, descriptor).desc)}"
                     data-focus-key="item:${item.id || index}"
                     data-item-index="${index}">
             <div class="seeall-card-poster-wrap">
@@ -701,9 +733,17 @@ export const CatalogSeeAllScreen = {
               : ""
           }
         </header>
-        <section class="seeall-grid">
-          ${cards}
-        </section>
+        <div class="seeall-body">
+          <section class="seeall-grid">
+            ${cards}
+          </section>
+          <aside class="seeall-detail" aria-hidden="true">
+            <div class="seeall-detail-title"></div>
+            <div class="seeall-detail-meta"></div>
+            <div class="seeall-detail-genres"></div>
+            <div class="seeall-detail-desc"></div>
+          </aside>
+        </div>
         ${
           this.loading
             ? `
@@ -738,11 +778,43 @@ export const CatalogSeeAllScreen = {
       node.addEventListener("focus", () => {
         this.lastFocusedKey = node.dataset.focusKey || this.lastFocusedKey;
         this.savedScrollTop = this.container?.querySelector(".seeall-shell")?.scrollTop || 0;
+        this.updateDetailPanel(node);
       });
       node.addEventListener("mouseenter", () => {
         this.lastFocusedKey = node.dataset.focusKey || this.lastFocusedKey;
+        this.updateDetailPanel(node);
       });
     });
+  },
+
+  // Painel lateral em vez de expandir a celula: numa GRADE, crescer um card
+  // reflui as linhas de baixo a cada movimento do D-pad — layout completo e
+  // caro nesta TV. O painel e um bloco fixo que so troca de texto, entao a
+  // grade nunca se mexe e o modelo de foco fica intacto.
+  updateDetailPanel(node) {
+    const painel = this.container?.querySelector(".seeall-detail");
+    if (!painel || !(node instanceof HTMLElement)) {
+      return;
+    }
+    const campos = [
+      [".seeall-detail-title", node.dataset.itemTitle || ""],
+      [".seeall-detail-meta", node.dataset.factsMeta || ""],
+      [".seeall-detail-genres", node.dataset.factsGenres || ""],
+      [".seeall-detail-desc", node.dataset.factsDesc || ""]
+    ];
+    let algum = false;
+    campos.forEach(([sel, texto]) => {
+      const el = painel.querySelector(sel);
+      if (!el) {
+        return;
+      }
+      el.textContent = texto;
+      el.style.display = texto ? "" : "none";
+      if (texto) {
+        algum = true;
+      }
+    });
+    painel.classList.toggle("is-visible", algum);
   },
 
   bindShellEvents() {

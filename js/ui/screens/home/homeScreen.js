@@ -2557,7 +2557,7 @@ function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
 
 const EXPANDED_FACTS_MAX_DESCRIPTION = 220;
 
-function buildExpandedFactsMarkup(normalized = {}) {
+function buildExpandedFacts(normalized = {}) {
   const tipo = String(normalized.type || "").toLowerCase() === "series" ? "Série" : "Filme";
   const meta = [tipo, firstNonEmpty(normalized.releaseInfo, extractYear(normalized), "")]
     .filter(Boolean)
@@ -2578,16 +2578,11 @@ function buildExpandedFactsMarkup(normalized = {}) {
     const ultimoEspaco = fatia.lastIndexOf(" ");
     descricao = `${(ultimoEspaco > 40 ? fatia.slice(0, ultimoEspaco) : fatia).trim()}…`;
   }
-  if (!meta.length && !generos.length && !descricao) {
-    return "";
-  }
-  return `
-    <div class="home-poster-expanded-facts" aria-hidden="true">
-      ${meta.length ? `<div class="home-poster-expanded-meta">${meta.join(" • ")}</div>` : ""}
-      ${generos.length ? `<div class="home-poster-expanded-genres">${generos.map((g) => escapeHtml(String(g))).join(" • ")}</div>` : ""}
-      ${descricao ? `<div class="home-poster-expanded-desc" dir="auto">${escapeHtml(descricao)}</div>` : ""}
-    </div>
-  `;
+  return {
+    meta: meta.join(" • "),
+    genres: generos.map((g) => String(g)).join(" • "),
+    desc: descricao
+  };
 }
 
 function buildPosterSubtitle(item, layoutMode) {
@@ -3147,6 +3142,25 @@ export function createPosterCardMarkup(
              data-item-id="${escapeAttribute(normalized.id)}"
              data-item-type="${escapeAttribute(normalized.type || itemType || "movie")}"
              data-item-title="${escapeAttribute(normalized.name || "Untitled")}"
+             ${
+               /* Ficha do card expandido em ATRIBUTOS, nao em nos. Atributo nao
+                  cria elemento: com ~540 posters na home, pre-renderizar tres
+                  divs por card somaria ~1600 nos num aparelho onde isso pesa.
+                  O DOM da ficha e montado por expandFocusedPoster() apenas no
+                  card focado, ou seja um de cada vez, e removido no colapso. */
+               !isLoading
+                 ? (() => {
+                     const fatos = buildExpandedFacts(normalized);
+                     return [
+                       fatos.meta ? `data-facts-meta="${escapeAttribute(fatos.meta)}"` : "",
+                       fatos.genres ? `data-facts-genres="${escapeAttribute(fatos.genres)}"` : "",
+                       fatos.desc ? `data-facts-desc="${escapeAttribute(fatos.desc)}"` : ""
+                     ]
+                       .filter(Boolean)
+                       .join(" ");
+                   })()
+                 : ""
+             }
              data-poster-src="${escapeAttribute(posterSrc || "")}"
              data-backdrop-src="${escapeAttribute(backdropSrc || "")}"
              data-logo-src="${escapeAttribute(normalized.logo || "")}"
@@ -3176,15 +3190,7 @@ export function createPosterCardMarkup(
               : `<div class="home-poster-expanded-title" dir="auto">${escapeHtml(normalized.name || "Untitled")}</div>`
           }
         </div>
-        ${
-          /* Ficha do card expandido: so TEXTO, sem controle focavel. Todos os
-             campos ja vem de normalizeCatalogItem — nenhuma busca nova, nenhuma
-             imagem nova (a home ja tem 540 <img> vivas e esse era o limite que
-             eu nao queria estourar). Botoes ficaram de fora de proposito: eles
-             criariam uma segunda dimensao de foco dentro da fileira, e o D-pad
-             hoje anda so de poster em poster. */
-          !isLoading && isExpanded ? buildExpandedFactsMarkup(normalized) : ""
-        }
+
         ${
           !isLoading && useLandscapePoster && !suppressPosterText
             ? `
@@ -6697,8 +6703,19 @@ export const HomeScreen = {
     const shouldPreviewTrailer = trailerEnabled && (useLandscapePosters || expandSettingEnabled);
     const landscapeExpandedCardMode =
       useLandscapePosters && shouldPreviewTrailer && requestedTrailerTarget === "expanded_card";
-    const shouldExpand =
-      (expandSettingEnabled && !useLandscapePosters) || landscapeExpandedCardMode;
+    // A expansao NAO depende mais de trailer quando os posters sao paisagem.
+    // Antes: `(expandSettingEnabled && !useLandscapePosters) ||
+    // landscapeExpandedCardMode`, e landscapeExpandedCardMode exige trailer
+    // ligado com destino "expanded_card". Com posters paisagem e trailer
+    // desligado — a configuracao real desta TV — os dois termos davam falso e o
+    // card simplesmente nunca expandia, mesmo com a preferencia de expansao
+    // marcada em Ajustes. Medido na C9: `.home-poster-card.is-expanded` ficou em
+    // 0 mesmo 10s parado no poster.
+    //
+    // Informacao e trailer sao coisas diferentes: quem liga "expandir ao focar"
+    // esta pedindo a ficha do titulo, nao um video. O modo de trailer no card
+    // continua existindo, so deixou de ser a UNICA porta para a expansao.
+    const shouldExpand = expandSettingEnabled || landscapeExpandedCardMode;
     return {
       shouldExpand,
       shouldPreviewTrailer,
@@ -6874,6 +6891,7 @@ export const HomeScreen = {
         targets.add(card);
       }
     });
+    targets.forEach((card) => this.unmountExpandedFacts(card));
     targets.forEach((target) => {
       const frame = target?.querySelector?.(".home-poster-frame") || null;
       const previousCardTransition =
@@ -6915,6 +6933,50 @@ export const HomeScreen = {
     }
   },
 
+  mountExpandedFacts(node) {
+    if (!(node instanceof HTMLElement) || node.querySelector(".home-poster-expanded-facts")) {
+      return;
+    }
+    const meta = node.dataset.factsMeta || "";
+    const genres = node.dataset.factsGenres || "";
+    const desc = node.dataset.factsDesc || "";
+    if (!meta && !genres && !desc) {
+      return;
+    }
+    const frame = node.querySelector(".home-poster-frame") || node;
+    const box = document.createElement("div");
+    box.className = "home-poster-expanded-facts";
+    // aria-hidden porque nada aqui e focavel: o D-pad continua andando de
+    // poster em poster, e a ficha e informacao passiva do card ja focado.
+    box.setAttribute("aria-hidden", "true");
+    const linha = (cls, texto, dir) => {
+      if (!texto) {
+        return;
+      }
+      const el = document.createElement("div");
+      el.className = cls;
+      if (dir) {
+        el.setAttribute("dir", dir);
+      }
+      el.textContent = texto;
+      box.appendChild(el);
+    };
+    linha("home-poster-expanded-meta", meta);
+    linha("home-poster-expanded-genres", genres);
+    linha("home-poster-expanded-desc", desc, "auto");
+    frame.appendChild(box);
+  },
+
+  unmountExpandedFacts(node) {
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+    const box = node.querySelector(".home-poster-expanded-facts");
+    if (box && box.parentNode) {
+      box.parentNode.removeChild(box);
+    }
+  },
+
   expandFocusedPoster(node) {
     if (!this.isModernPosterNode(node)) {
       return;
@@ -6928,6 +6990,7 @@ export const HomeScreen = {
       this.collapseFocusedPoster(this.expandedPosterNode, { excludeNode: node });
     }
     node.classList.add("is-expanded");
+    this.mountExpandedFacts(node);
     this.hydrateFocusedPosterAssets(node);
     this.expandedPosterNode = node;
     requestAnimationFrame(() => {
