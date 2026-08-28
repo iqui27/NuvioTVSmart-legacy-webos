@@ -108,6 +108,19 @@ export const WebOsPlaybackProxy = {
 
     const payload = service?.payload || {};
     const baseUrl = String(payload.url || "").trim();
+    // Em "proxy-only" o servico ATENDE na porta, entao `settingsReachable` e a
+    // URL vem certos — mas a rota /proxy/ nao existe nesse modo e devolve 404
+    // para qualquer caminho. Montar a URL aqui daria um endereco que so serve
+    // 404 ao <video>, e a tela ainda diria "proxy aplicado".
+    if (payload.proxyOnly === true || String(payload.mode || "") === "proxy-only") {
+      return {
+        status: "unavailable",
+        url: originalUrl,
+        proxied: false,
+        detail:
+          "servico local em modo proxy-only (runtime de midia nao carregou), a rota /proxy/ nao existe"
+      };
+    }
     if (payload.returnValue === false || !payload.settingsReachable || !baseUrl) {
       return {
         status: "unavailable",
