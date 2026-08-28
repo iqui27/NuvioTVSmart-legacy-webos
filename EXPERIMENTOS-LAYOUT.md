@@ -148,3 +148,102 @@ npm run serve   # http://127.0.0.1:4173/  (bench legado fiel, após 144e3b3)
 
 Janela a 1920×1080; medir com `getBoundingClientRect` (os tokens são estáticos na
 TV — fora dessa largura o `clamp()` do navegador mente).
+
+## 8. Composição de conteúdo da home (2026-08-27)
+
+O pedido real do dono: "separar por streaming, gênero, lista curadoria (...)
+melhorar como mostrar os filmes, do que só um monte de pôster solto com várias
+fileiras iguais". Ou seja: composição e identidade das fileiras, não espaçamento.
+
+### 8.1 Inventário medido do addon Xperience (manifesto real, 229KB)
+
+605 catálogos declarados; a home dele usa 43 fileiras (17 do Xperience + 22
+coleções + 4 do Cinemeta). Por bucket do identificador:
+
+| bucket                                      | catálogos |          usados na home | observação                                                                                                                                           |
+| ------------------------------------------- | --------: | ----------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| genre                                       |       111 |      2 (action, horror) | 25 gêneros distintos                                                                                                                                 |
+| recs/ai                                     |        64 |                       4 | "For You"                                                                                                                                            |
+| streaming                                   |        60 |          2 (só Netflix) | **16 serviços**: netflix, prime, disney, hbo, apple, hulu, paramount, peacock, crunchyroll, mgm, shudder, britbox, discovery, itvx, channel4, hidive |
+| world                                       |        60 |                       0 | 10 idiomas (ja, ko, pt, fr...)                                                                                                                       |
+| studio                                      |        51 |                       0 | 14 estúdios (a24, ghibli, pixar, marvel...)                                                                                                          |
+| decade                                      |        32 |                       0 | anos 50→2020s                                                                                                                                        |
+| snoak                                       |        28 | 2 (top100 movie/series) | curadoria                                                                                                                                            |
+| collection (do addon)                       |        25 |                       0 | ≠ das coleções do app                                                                                                                                |
+| actor / franchise / network                 |  21/20/18 |                       0 |                                                                                                                                                      |
+| themed                                      |        15 |            1 (mindfuck) | time_loop, heists, zombies, whodunnit...                                                                                                             |
+| anime / awards / director / tv              |   12 cada |                       0 |                                                                                                                                                      |
+| trending/now/on_the_air/new                 |        11 |                       4 |                                                                                                                                                      |
+| trakt                                       |         6 |         2 (anticipated) |                                                                                                                                                      |
+| kids 7, fp 6, uk 5, runtime 4, kb 3, outros |       ~40 |                       0 |                                                                                                                                                      |
+
+### 8.2 O mecanismo — e onde está o ganho de configuração
+
+**Os 43 não são escolha dentro do app; são exatamente o que o addon expõe como
+"home".** O app só aceita na home catálogo sem extra obrigatório
+(`catalogRequiresExtras`, js/core/addons/homeCatalogs.js). No manifesto real,
+só 17 catálogos vêm com `genre.isRequired=false` — precisamente os 17 que ele
+usa. Os outros 586 vêm com `genre` obrigatório (opção "None" disponível) e por
+isso ficam confinados à busca/discover.
+
+Quem decide quais catálogos viram "home" é o **configurador do Xperience**
+(xperience-app.com, mesma conta que gerou a URL com JWT). Ganho grande, custo
+zero de código: ele entra lá, liga os catálogos de streaming/gênero/curadoria
+que quer (Prime, Disney, HBO, comédia, sci-fi, awards...), reinstala/atualiza o
+addon e o app adota as fileiras novas sozinho (`ensureOrderKeys` anexa chaves
+novas à ordem). `disabled` dele está vazio — não há nada para "reativar" no app.
+
+Alternativa por código (não implementada): tratar catálogo com `genre`
+obrigatório que aceite "None" como elegível, buscando com `genre=None`. Viável,
+mas despeja 586 candidatos na lista de ajustes e na ordem persistida; exigiria
+default-disabled e UI de opt-in. Só vale se o configurador não atender.
+
+### 8.3 Identidade visual por tipo de fileira — implementado (`c4cd6b7`)
+
+A taxonomia já está no id do catálogo, então cada fileira agora ganha:
+
+- `data-row-kind` (foryou/trending/streaming/genre/curated/themed/collection),
+  derivado em js/ui/screens/home/homeRowKind.js; buckets validados contra o
+  manifesto (todos os 33 prefixos cobertos).
+- **Eyebrow** ao lado do título com cor por tipo ("Top 100 Today · CURADORIA"
+  dourado, "Netflix - Filme · STREAMING" azul). foryou/trending ficam sem — o
+  título já diz o que são.
+- **Numeração de posição** nas fileiras de chart (snoak_top100, cinemeta
+  imdbRating) via CSS counters — badge 30×30 no canto do pôster, **zero nós de
+  DOM extras**.
+
+Medido na bancada (1920×1080, home real de perfil sincronizado, 24 fileiras):
+eyebrow em 16 fileiras; head com e sem eyebrow tem a mesma altura (31.2px,
+`.home-row-head` é flex row) → travessia vertical do D-pad inalterada; nós DOM
+2081→2097 (+1 div/eyebrow); `<img>` inalteradas. Reconciliação por chave e paint
+progressivo preservados (markup derivado só de rowData, byte-idêntico entre
+render completo e reconcile).
+
+### 8.4 Proposta de composição por seções (decisão de produto, não codificada)
+
+Agrupar por kind reordenaria a ordem que ele mesmo salvou — não fiz isso por
+código. A proposta, se ele quiser, é só reordenar em Ajustes → fileiras (ou eu
+reordeno o `order` com backup):
+
+1. Continuar assistindo / Em breve
+2. Para você (recs + ai, 4 fileiras)
+3. Em alta (trending, in theaters, on the air)
+4. Curadoria (Top 100 numerado, Trakt Anticipated; + awards se ativar no addon)
+5. Streaming (Netflix hoje; um bloco por serviço que ele assina, via addon)
+6. Gêneros (action, horror; + os que ativar)
+7. Coleções (23 fileiras — mais da metade da home; vale rebatizar as sem nome
+   legível via título custom, que o app já suporta, `customTitles`)
+8. Temáticos (mindfuck etc.)
+
+Cabeçalhos de seção interstitiais (não-focáveis) são viáveis sem armadilha de
+foco — são só rótulos —, mas adicionam altura de travessia; com o eyebrow por
+fileira o ganho marginal é pequeno. Recomendo esperar a reação dele ao eyebrow.
+
+### 8.5 Não verificado / ressalvas
+
+- Nada foi instalado na TV nesta sessão; a leitura da TV foi só diagnóstico
+  (CDP): 43 fileiras, layout modern, 421 img / 2880 nós no momento da leitura.
+  `homeCatalogPrefs` dele foi salvo em backup e **não** foi alterado.
+- O layout clássico recebeu o mesmo eyebrow por paridade de código, mas só o
+  modern foi verificado visualmente na bancada.
+- Cores do eyebrow em painel de TV real (gama/contraste) não conferidas.
