@@ -163,7 +163,7 @@ function isDirectionalKeyCode(code) {
   return code >= 37 && code <= 40;
 }
 const HOME_LAZY_IMAGE_SELECTOR =
-  ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src]";
+  ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src], .home-main .content-poster[data-lazy-src], .home-main .home-poster-landscape-logo[data-lazy-src], .home-main .home-continue-bg[data-lazy-src]";
 const HOME_LAZY_IMAGE_ROW_SELECTOR =
   ".home-row, .home-modern-row, .home-grid-section, .home-row-continue";
 // The focused row used to hydrate every image it owned, unconditionally. Measured
@@ -174,6 +174,47 @@ const HOME_LAZY_IMAGE_ROW_SELECTOR =
 // cards on each side of the viewport, so a D-pad move lands on a hydrated poster,
 // while the off-screen tail waits for the user to actually scroll toward it.
 const HOME_FOCUSED_ROW_HORIZONTAL_MARGIN = 320;
+// Liberacao de imagens fora de alcance (item 3 do backlog de EXPERIMENTOS-LAYOUT).
+// Vire para `false` para desligar tudo: a hidratacao volta a ser so de mao unica e
+// nenhuma imagem e liberada. E o unico interruptor deste experimento.
+const HOME_LAZY_IMAGE_RELEASE_ENABLED = true;
+// Histerese: uma fileira so devolve suas imagens ao estado `data-src` quando esta
+// MAIS longe do que a distancia que a re-hidrataria. Sem essa folga, a fileira que
+// para exatamente na borda da margem de hidratacao entraria em ciclo
+// libera/re-hidrata a cada quadro do D-pad, que e justamente o flicker que este
+// experimento nao pode introduzir.
+const HOME_LAZY_IMAGE_RELEASE_MARGIN_FACTOR = 2.5;
+
+/**
+ * Devolve imagens ja carregadas ao estado `data-src`, liberando o bitmap decodificado.
+ *
+ * `removeAttribute("src")` e obrigatorio: `image.src = ""` faz o Chromium 53 pedir a
+ * propria URL do documento e enfileirar um erro de rede por imagem.
+ *
+ * Idempotente e barato: sem `data-lazy-src` (imagem que nunca foi hidratada) ou sem
+ * `src` (ja liberada) a imagem e ignorada, entao passar a mesma fileira varias vezes
+ * nao custa nada nem provoca recarregamento.
+ */
+function releaseHomeLazyImages(images) {
+  if (!HOME_LAZY_IMAGE_RELEASE_ENABLED || !images || !images.length) {
+    return 0;
+  }
+  let released = 0;
+  for (let i = 0; i < images.length; i += 1) {
+    const image = images[i];
+    if (!(image instanceof HTMLImageElement) || !image.isConnected) {
+      continue;
+    }
+    const stashed = String(image.dataset.lazySrc || "").trim();
+    if (!stashed || !image.getAttribute("src")) {
+      continue;
+    }
+    image.removeAttribute("src");
+    image.setAttribute("data-src", stashed);
+    released += 1;
+  }
+  return released;
+}
 
 function homePerfNow() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -10455,6 +10496,13 @@ export const HomeScreen = {
           rowRect.bottom >= viewportRect.top - verticalMargin &&
           rowRect.top <= viewportRect.bottom + verticalMargin;
         if (!isRowNearViewport) {
+          const releaseMargin = verticalMargin * HOME_LAZY_IMAGE_RELEASE_MARGIN_FACTOR;
+          const isRowFarFromViewport =
+            rowRect.bottom < viewportRect.top - releaseMargin ||
+            rowRect.top > viewportRect.bottom + releaseMargin;
+          if (isRowFarFromViewport) {
+            releaseHomeLazyImages(images);
+          }
           return;
         }
       }
@@ -10489,6 +10537,13 @@ export const HomeScreen = {
         // loading="lazy" here delegates that decision back to old TV browsers,
         // which can miscalculate visibility inside the nested modern-home viewport.
         image.loading = "eager";
+        if (HOME_LAZY_IMAGE_RELEASE_ENABLED) {
+          // Guardado num atributo proprio porque `data-src` e removido logo abaixo
+          // (o indice e os testes leem `[data-src]` como "ainda nao carregada").
+          // `data-lazy-src` sobrevive a hidratacao e e o que permite devolver a
+          // imagem ao estado nao-carregado quando a fileira sai de alcance.
+          image.dataset.lazySrc = src;
+        }
         image.removeAttribute("data-src");
         image.src = src;
       });
