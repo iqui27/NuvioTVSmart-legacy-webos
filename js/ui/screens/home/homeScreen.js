@@ -815,7 +815,15 @@ function animateHeroBackdropSwap(
     return;
   }
 
-  const normalizedSrc = String(nextSrc || "").trim();
+  // CAUSA MEDIDA do travamento ao percorrer a Home. Este src chega do addon em
+  // `t/p/original`: 3840x2160, 8,3 megapixels, para desenhar 1920x1062. Um trace
+  // do Chromium na C9 durante a descida de 12 fileiras mostrou
+  // ImageDecodeTaskImpl 4373ms em 47 tarefas, com uma unica decodificacao de
+  // 1125ms — e o hero troca de arte a cada movimento entre fileiras. w1280 e o
+  // que o Android TV usa e da 0,92MP: nove vezes menos bitmap para decodificar.
+  // O template do hero ja normalizava, mas quem pinta de verdade e este
+  // setAttribute, entao a normalizacao tinha que estar aqui.
+  const normalizedSrc = tmdbImageAtSize(String(nextSrc || "").trim(), "w1280");
   const normalizedAlt = String(nextAlt || "featured").trim() || "featured";
   const currentSrc = String(backdrop.getAttribute("src") || "").trim();
   const transitionMode = options?.transitionMode || "crossfade";
@@ -934,7 +942,9 @@ function animateHeroLogoSwap(
     return;
   }
 
-  const normalizedSrc = String(nextSrc || "").trim();
+  // Mesmo motivo do backdrop: o logo vinha em `t/p/original`, 4319x421 (1,8MP),
+  // para desenhar 440x160.
+  const normalizedSrc = tmdbImageAtSize(String(nextSrc || "").trim(), "w500");
   const normalizedAlt = String(nextAlt || "logo").trim() || "logo";
   const currentSrc = String(logoNode.getAttribute("src") || "").trim();
   const transitionMode = options?.transitionMode || "crossfade";
