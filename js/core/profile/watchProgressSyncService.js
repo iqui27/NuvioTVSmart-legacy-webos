@@ -213,19 +213,28 @@ function mapProgressRow(row = {}) {
     }
     return Math.trunc(n);
   };
-  const normalizeAmbiguousRemoteTime = (value) => {
+  const normalizeAmbiguousRemoteTime = (value, useMilliseconds = false) => {
     const n = Number(value || 0);
     if (!Number.isFinite(n) || n <= 0) {
       return 0;
     }
-    return Math.trunc(n > MAX_AMBIGUOUS_SECONDS_PROGRESS_VALUE ? n : n * 1000);
+    return Math.trunc(useMilliseconds || n > MAX_AMBIGUOUS_SECONDS_PROGRESS_VALUE ? n : n * 1000);
   };
+  // The legacy RPC fields have no unit suffix. Infer one unit for the pair
+  // from its duration so a small millisecond position is not mistaken for
+  // seconds while historical second-based rows remain compatible.
+  const hasLegacyTimePair = !hasPositionMs && !hasDurationMs;
+  const legacyDuration = Number(durationMsRaw);
+  const legacyPairUsesMilliseconds =
+    hasLegacyTimePair &&
+    Number.isFinite(legacyDuration) &&
+    legacyDuration > MAX_AMBIGUOUS_SECONDS_PROGRESS_VALUE;
   const positionMs = hasPositionMs
     ? toMilliseconds(positionMsRaw)
-    : normalizeAmbiguousRemoteTime(positionMsRaw);
+    : normalizeAmbiguousRemoteTime(positionMsRaw, legacyPairUsesMilliseconds);
   const durationMs = hasDurationMs
     ? toMilliseconds(durationMsRaw)
-    : normalizeAmbiguousRemoteTime(durationMsRaw);
+    : normalizeAmbiguousRemoteTime(durationMsRaw, legacyPairUsesMilliseconds);
   const normalizedTimes = normalizeInflatedProgressTimes(positionMs, durationMs);
   const normalizedProgressPercent = Number.isFinite(progressPercent)
     ? Math.max(0, Math.min(100, progressPercent))

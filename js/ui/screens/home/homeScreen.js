@@ -29,6 +29,7 @@ import { HomeCatalogStore } from "../../../data/local/homeCatalogStore.js";
 import { CollectionsStore, buildCollectionHomeKey } from "../../../data/local/collectionsStore.js";
 import { TmdbService } from "../../../core/tmdb/tmdbService.js";
 import { TmdbMetadataService } from "../../../core/tmdb/tmdbMetadataService.js";
+import { supportsMembershipFor } from "../../../core/tracking/trackingLibraryMembership.js";
 import { TmdbSettingsStore } from "../../../data/local/tmdbSettingsStore.js";
 import { metaRepository } from "../../../data/repository/metaRepository.js";
 import { mdbListRepository } from "../../../data/repository/mdbListRepository.js";
@@ -5361,9 +5362,10 @@ export const HomeScreen = {
       return false;
     }
     const tabs = await libraryRepository.getListTabs().catch(() => []);
+    const contentType = item.type || "movie";
     const resolvedTabs =
       Array.isArray(tabs) && tabs.length
-        ? tabs.filter((tab) => tab.isMembershipDestination !== false)
+        ? tabs.filter((tab) => supportsMembershipFor(tab, contentType))
         : [{ key: "local", title: t("detail.library", {}, "Library"), type: "local" }];
     const libraryItem = {
       itemId: item.id,

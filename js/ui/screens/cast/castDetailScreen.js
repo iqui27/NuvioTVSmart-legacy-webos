@@ -476,11 +476,15 @@ export const CastDetailScreen = {
 
     const shellRect = shell.getBoundingClientRect();
     const focusRect = focused.getBoundingClientRect();
+    const focusedSectionRect =
+      focusedSection instanceof HTMLElement ? focusedSection.getBoundingClientRect() : focusRect;
     const padTop = 40;
     const padBottom = 58;
     let nextScrollTop = shell.scrollTop;
-    if (focusRect.top < shellRect.top + padTop) {
-      nextScrollTop -= shellRect.top + padTop - focusRect.top;
+    // Keep the section heading visible with the focused card. This matches
+    // Android's rail-level bring-into-view behavior when moving upward.
+    if (focusedSectionRect.top < shellRect.top + padTop) {
+      nextScrollTop -= shellRect.top + padTop - focusedSectionRect.top;
     } else if (focusRect.bottom > shellRect.bottom - padBottom) {
       nextScrollTop += focusRect.bottom - (shellRect.bottom - padBottom);
     }

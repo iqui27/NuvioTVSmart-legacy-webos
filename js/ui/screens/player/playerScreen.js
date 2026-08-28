@@ -115,6 +115,7 @@ import { isAssSubtitle, convertAssBodyToVtt } from "../../../core/player/assSubt
 import { createAssRenderer } from "../../../core/player/assRenderer.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
 import { decodeSubtitleResponseBody } from "../../../core/player/subtitleCharsetDetector.js";
+import { sanitizeSubtitleMojibake } from "../../../core/player/subtitleMojibakeSanitizer.js";
 import {
   SUBTITLE_VIRTUALIZATION_DEFAULT_ROW_EXTENT,
   SUBTITLE_VIRTUALIZATION_MIN_WINDOW,
@@ -14214,14 +14215,14 @@ export const PlayerScreen = {
         typeof TextDecoder === "function"
           ? await decodeSubtitleResponseBody(response, { languageHint, contentType })
           : null;
-      const body = decodedBody ?? (await response.text());
+      const body = sanitizeSubtitleMojibake(decodedBody ?? (await response.text()));
       return { body, sourceUrl: original, contentType, resolvedUrl: response.url || original };
     } catch (directError) {
       if (Environment.isWebOS()) {
         try {
           const resolved = await localMediaSubtitleRepository.getExternalSubtitleText(original);
           return {
-            body: resolved.body,
+            body: sanitizeSubtitleMojibake(resolved.body),
             sourceUrl: original,
             contentType: resolved.contentType,
             resolvedUrl: resolved.resolvedUrl || original
@@ -15391,7 +15392,7 @@ export const PlayerScreen = {
             languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
           })
         : null;
-    const text = decodedText ?? (await response.text());
+    const text = sanitizeSubtitleMojibake(decodedText ?? (await response.text()));
     if (!isCurrentSelection()) {
       return false;
     }

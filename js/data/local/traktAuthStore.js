@@ -1,8 +1,9 @@
 import { LocalStore } from "../../core/storage/localStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
+import { normalizeTraktTokenLifetimeSeconds } from "./traktTokenLifetime.js";
 
 const STORE_KEY = "traktAuthState";
-const TOKEN_MAX_LIFETIME_SECONDS = 86400;
+const TOKEN_FALLBACK_LIFETIME_SECONDS = 86400;
 
 function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
@@ -15,21 +16,13 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function normalizeLifetimeSeconds(value) {
-  const seconds = Number(value || 0);
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    return TOKEN_MAX_LIFETIME_SECONDS;
-  }
-  return Math.min(TOKEN_MAX_LIFETIME_SECONDS, Math.trunc(seconds));
-}
-
 function normalizeState(value = {}) {
   return {
     accessToken: String(value.accessToken || "") || null,
     refreshToken: String(value.refreshToken || "") || null,
     tokenType: String(value.tokenType || "") || null,
     createdAt: Number(value.createdAt || 0) || null,
-    expiresIn: value.expiresIn == null ? null : normalizeLifetimeSeconds(value.expiresIn),
+    expiresIn: value.expiresIn == null ? null : normalizeTraktTokenLifetimeSeconds(value.expiresIn),
     username: String(value.username || "") || null,
     userSlug: String(value.userSlug || "") || null,
     deviceCode: String(value.deviceCode || "") || null,
@@ -111,8 +104,8 @@ export const TraktAuthStore = {
       refreshToken: data.refresh_token || data.refreshToken || null,
       tokenType: data.token_type || data.tokenType || "bearer",
       createdAt: Number(data.created_at || data.createdAt || Math.floor(Date.now() / 1000)),
-      expiresIn: normalizeLifetimeSeconds(
-        data.expires_in || data.expiresIn || TOKEN_MAX_LIFETIME_SECONDS
+      expiresIn: normalizeTraktTokenLifetimeSeconds(
+        data.expires_in ?? data.expiresIn ?? TOKEN_FALLBACK_LIFETIME_SECONDS
       ),
       deviceCode: null,
       userCode: null,

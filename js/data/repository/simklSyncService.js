@@ -3,6 +3,7 @@ import { ProfileManager } from "../../core/profile/profileManager.js";
 import { SimklAnimeIdPreference, TraktSettingsStore } from "../local/traktSettingsStore.js";
 import { SimklAuthService } from "./simklAuthService.js";
 import { simklRequest } from "./simklAuthService.js";
+import { shouldMarkCompletedSeriesWatched } from "./simklCompletedSeries.js";
 
 const STORE_KEY = "simklSyncState";
 const SNAPSHOT_SCHEMA_VERSION = 3;
@@ -274,6 +275,30 @@ function parseDate(value, fallback = 0) {
 
 function statusDefinitionForEntry(entry) {
   return STATUS_DEFINITIONS.find((definition) => definition.status === entry?.status) || null;
+}
+
+// Mirrors Android SimklLibraryEntry.destructiveRemovalImpacts: removing a Simkl
+// entry clears watched history when it is in any status other than plan to
+// watch, or carries watch data, and clears a rating when a rating value or
+// rating timestamp is present.
+export function destructiveRemovalImpacts(entry) {
+  const impacts = [];
+  if (!entry) return impacts;
+  if (
+    entry.status !== "plantowatch" ||
+    entry.last_watched_at != null ||
+    entry.last_watched != null ||
+    Number(entry.watched_episodes_count) > 0 ||
+    (entry.seasons || []).some((season) =>
+      (season.episodes || []).some((episode) => episode.watched_at != null)
+    )
+  ) {
+    impacts.push("watched_history");
+  }
+  if (entry.user_rating != null || entry.user_rated_at != null) {
+    impacts.push("rating");
+  }
+  return impacts;
 }
 
 function toLibraryEntry(entry, snapshot) {
@@ -554,6 +579,7 @@ function watchedProjection(snapshot) {
       return;
     }
     if (["hold", "dropped"].includes(entry.status)) return;
+    let hasEpisodeHistory = false;
     (entry.seasons || []).forEach((season) => {
       (season?.episodes || []).forEach((episode) => {
         if (!episode?.watched_at) return;
@@ -563,6 +589,7 @@ function watchedProjection(snapshot) {
         const seasonNumber = hasTvdbCoordinates ? mappedSeason : Number(season.number || 0);
         const episodeNumber = hasTvdbCoordinates ? mappedEpisode : Number(episode.number || 0);
         if (episodeNumber <= 0) return;
+        hasEpisodeHistory = true;
         const watchedAt = parseDate(episode.watched_at, snapshot.lastSyncedAt);
         const isSimklAbsoluteEpisode = entry.mediaType === "anime" && !hasTvdbCoordinates;
         const watched = {
@@ -590,6 +617,13 @@ function watchedProjection(snapshot) {
         });
       });
     });
+    if (shouldMarkCompletedSeriesWatched(entry.status, hasEpisodeHistory)) {
+      const lastWatchedAt = parseDate(entry.last_watched_at, NaN);
+      const watchedAt = Number.isFinite(lastWatchedAt)
+        ? lastWatchedAt
+        : parseDate(entry.added_to_watchlist_at, 0);
+      items.push({ ...base, watchedAt });
+    }
   });
   return { items, historyItems, watchedShowSeedItems };
 }
@@ -708,14 +742,7 @@ export const SimklSyncService = {
       throw new Error("Completed is managed by watched history");
     }
     if (!destination) {
-      const hasHistory = Boolean(
-        entry &&
-        (entry.last_watched_at ||
-          entry.user_rating != null ||
-          (entry.seasons || []).some((season) =>
-            (season.episodes || []).some((episode) => episode.watched_at)
-          ))
-      );
+      const hasHistory = destructiveRemovalImpacts(entry).length > 0;
       if (hasHistory && !destructiveRemovalConfirmed) {
         const error = new Error(
           "Removing this Simkl status would also clear watched history or a rating"

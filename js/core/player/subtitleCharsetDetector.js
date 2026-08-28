@@ -188,8 +188,22 @@ function isFastValidUtf8(bytes) {
   return true;
 }
 
+function decodeCleanly(bytes, charset) {
+  if (typeof TextDecoder !== "function") {
+    return null;
+  }
+  try {
+    // The detector only passes a bounded sample, which may end halfway through
+    // a multibyte character. Keep malformed-byte rejection while preserving a
+    // valid prefix when the sample boundary cuts only the final character.
+    return new TextDecoder(charset, { fatal: true }).decode(bytes, { stream: true });
+  } catch (_) {
+    return null;
+  }
+}
+
 function decodeByteRange(bytes, charset, predicate) {
-  const text = decodeWithCharset(bytes, charset);
+  const text = decodeCleanly(bytes, charset);
   if (!text) {
     return 0;
   }

@@ -2,6 +2,7 @@ import { DebridSettingsStore } from "../../data/local/debridSettingsStore.js";
 import { DebridProviders } from "./debridProviders.js";
 import { DebridStreamTemplateEngine } from "./debridStreamTemplateEngine.js";
 import { sizeBytesFromStreamText } from "./streamTextSizeParser.js";
+import { resolutionFromFields } from "./streamResolution.js";
 
 const RESOLUTION_LABELS = {
   P2160: "2160p",
@@ -220,17 +221,6 @@ function searchText(stream = {}) {
     .toLowerCase();
 }
 
-function resolutionFromText(text = "") {
-  if (/\b(2160p?|4k|uhd)\b/i.test(text)) return "P2160";
-  if (/\b(1440p?|2k)\b/i.test(text)) return "P1440";
-  if (/\b(1080p?|fhd)\b/i.test(text)) return "P1080";
-  if (/\b(720p?|hd)\b/i.test(text)) return "P720";
-  if (/\b576p?\b/i.test(text)) return "P576";
-  if (/\b(480p?|sd)\b/i.test(text)) return "P480";
-  if (/\b360p?\b/i.test(text)) return "P360";
-  return "UNKNOWN";
-}
-
 function qualityFromText(text = "") {
   const value = String(text || "").toLowerCase();
   if (value.includes("remux")) return "BLURAY_REMUX";
@@ -403,9 +393,12 @@ function facts(stream = {}) {
   const resolve = stream.clientResolve || stream.raw?.clientResolve || {};
   const parsed = resolve.stream?.raw?.parsed || {};
   const text = searchText(stream);
-  const resolution = resolutionFromText(
-    [parsed.resolution, parsed.quality, stream.quality, text].filter(Boolean).join(" ")
-  );
+  const resolution = resolutionFromFields([
+    parsed.resolution,
+    parsed.quality,
+    stream.quality,
+    text
+  ]);
   const quality = qualityFromText([parsed.quality, text].filter(Boolean).join(" "));
   const visualTags = visualTagsFromText(parsed.hdr || [], text);
   const audioTags = audioTagsFromText(parsed.audio || [], text);
