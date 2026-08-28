@@ -21227,7 +21227,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   overflow-x: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  padding: 24px 48px 32px;
+  /* 104px matches the Home rail's --home-content-start and the gutter the
+     rest of the app settled on (see the search fix, a195662). Measured here at
+     1920x1080: first card sat at x=48 while every Home poster starts at 104. */
+  padding: 24px 104px 32px;
   box-sizing: border-box;
   background: var(--bg-color);
   color: var(--text-color);
@@ -21241,6 +21244,65 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 
 .seeall-header {
   margin-bottom: 24px;
+}
+
+/* Catalog identity carried over from the Home row's eyebrow. Same palette as
+   .home-row-eyebrow so the door and its destination read as one thing. */
+.seeall-eyebrow {
+  margin-bottom: 6px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.seeall-shell[data-catalog-kind="streaming"] .seeall-eyebrow {
+  color: rgba(126, 186, 255, 0.82);
+}
+
+.seeall-shell[data-catalog-kind="genre"] .seeall-eyebrow {
+  color: rgba(126, 226, 186, 0.78);
+}
+
+.seeall-shell[data-catalog-kind="curated"] .seeall-eyebrow {
+  color: rgba(240, 200, 110, 0.82);
+}
+
+.seeall-shell[data-catalog-kind="themed"] .seeall-eyebrow {
+  color: rgba(232, 148, 170, 0.78);
+}
+
+.seeall-shell[data-catalog-kind="collection"] .seeall-eyebrow {
+  color: rgba(186, 156, 255, 0.78);
+}
+
+/* Chart catalogs keep their positions on the destination, exactly as on the
+   Home rail: a CSS counter, so no extra DOM node and no extra image. */
+.seeall-shell[data-catalog-ranked="true"] .seeall-grid {
+  counter-reset: seeall-rank;
+}
+
+.seeall-shell[data-catalog-ranked="true"] .seeall-card {
+  counter-increment: seeall-rank;
+}
+
+.seeall-shell[data-catalog-ranked="true"] .seeall-card-poster-wrap::after {
+  content: counter(seeall-rank);
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(10, 10, 14, 0.78);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 30px;
+  text-align: center;
 }
 
 .seeall-title {

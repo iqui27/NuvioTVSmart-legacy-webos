@@ -17,8 +17,36 @@ import {
   renderTitleWatchedBadge
 } from "../../components/watchedTitleBadge.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
+import { getHomeRowKind, isRankedHomeRow } from "../home/homeRowKind.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
+
+/**
+ * The destination inherits the row's identity instead of inventing its own.
+ *
+ * `getHomeRowKind` reads the taxonomy straight out of the catalog id, and the
+ * descriptor the door hands over already carries `addonId` + `catalogId` — so
+ * this needs no new plumbing and no API call, and it cannot disagree with the
+ * eyebrow the user just saw on the Home row.
+ *
+ * Measured before writing this: the grid itself is already right (six columns
+ * of 291x442 at 1920x1080, flex-wrap fallback for Chromium 53, `skip=`
+ * pagination and predictable initial focus all working). So this deliberately
+ * does NOT rebuild the layout per kind — it only carries over what the row
+ * already told the user: the category label, and chart numbering where the
+ * position is real.
+ */
+function seeAllKindLabels() {
+  return {
+    streaming: t("home.rowKind.streaming", {}, "Streaming"),
+    genre: t("home.rowKind.genre", {}, "Genre"),
+    curated: t("home.rowKind.curated", {}, "Curated"),
+    themed: t("home.rowKind.themed", {}, "Themed"),
+    trending: t("home.rowKind.trending", {}, "Trending"),
+    foryou: t("home.rowKind.foryou", {}, "For You"),
+    collection: t("home.rowKind.collection", {}, "Collection")
+  };
+}
 
 function isBackEvent(event) {
   return Environment.isBackEvent(event);
@@ -643,9 +671,20 @@ export const CatalogSeeAllScreen = {
           .join("")
       : `<div class="seeall-empty">${escapeHtml(t("catalog_see_all_empty_title", {}, "No items available"))}</div>`;
 
+    const catalogKind = getHomeRowKind({
+      addonId: descriptor.addonId || "",
+      catalogId: descriptor.catalogId || ""
+    });
+    const catalogRanked = isRankedHomeRow({
+      addonId: descriptor.addonId || "",
+      catalogId: descriptor.catalogId || ""
+    });
+    const kindLabel = catalogKind ? String(seeAllKindLabels()[catalogKind] || "").trim() : "";
+
     this.container.innerHTML = `
-      <div class="seeall-shell">
+      <div class="seeall-shell"${catalogKind ? ` data-catalog-kind="${escapeHtml(catalogKind)}"` : ""}${catalogRanked ? ` data-catalog-ranked="true"` : ""}>
         <header class="seeall-header">
+          ${kindLabel ? `<div class="seeall-eyebrow" aria-hidden="true">${escapeHtml(kindLabel)}</div>` : ""}
           <h2 class="seeall-title">${escapeHtml(title)}</h2>
           ${
             this.layoutPrefs?.catalogAddonNameEnabled !== false && descriptor.addonName
