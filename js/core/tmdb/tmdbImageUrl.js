@@ -31,3 +31,27 @@ export function normalizeTmdbBackdropUrl(value) {
     return Number.isFinite(largura) && largura < 1280 ? `${base}w1280/` : `${base}${tamanho}/`;
   });
 }
+
+/**
+ * Sobe uma arte do TMDB para `original`, para uso em tela ESTATICA.
+ *
+ * Contraparte deliberada de normalizeTmdbBackdropUrl, que baixa tudo para w1280.
+ * A diferenca entre as duas nao e a qualidade desejada, e QUANTAS VEZES a imagem
+ * e decodificada: na Home o hero troca de arte a cada movimento entre fileiras,
+ * e ali `original` custou 1125ms num unico decode. Na tela de detalhe a arte e
+ * carregada uma vez e fica, dentro de uma abertura que ja leva ~2s.
+ *
+ * O motivo de precisar de `original`: o viewport do app e 1920x1080 mas o
+ * devicePixelRatio nesta TV e 2, entao o painel desenha 3840x2160. Uma arte
+ * w1280 esticada para 1920 CSS vira upscale de 3x em pixel fisico, que e o que
+ * se ve como imagem "pixelada" num televisor 4K.
+ *
+ * URL que nao seja do TMDB volta byte a byte igual.
+ */
+export function tmdbArteParaTelaEstatica(value, tamanho = "original") {
+  const normalized = String(value || "").trim();
+  if (!normalized || !TMDB_IMAGE_HOST_PATTERN.test(normalized)) {
+    return normalized;
+  }
+  return normalized.replace(/(\/t\/p\/)(original|w\d+)\//i, `$1${tamanho}/`);
+}
