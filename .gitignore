@@ -28,3 +28,8 @@ js/runtime/generated/
 .vscode/
 .claude/
 .agents/
+
+# O symlink `node_modules` chegou a ser versionado apontando para si mesmo, o que
+# quebrava prettier/eslint com "Too many levels of symbolic links" e apagava as
+# dependencias na troca de branch. A linha com barra nao cobre um symlink.
+node_modules
