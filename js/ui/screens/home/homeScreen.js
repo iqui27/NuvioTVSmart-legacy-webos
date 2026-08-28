@@ -19,6 +19,10 @@ import { mapWithConcurrency } from "../../../core/network/mapWithConcurrency.js"
 import { filterReleasedItems } from "../../../core/util/releaseInfoUtils.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { showHomeRatings } from "../../../core/util/imdbRatingVisibility.js";
+import {
+  continueWatchingUsesEpisodeThumbnails,
+  continueWatchingImageSources
+} from "../../../core/util/continueWatchingImage.js";
 import { ContinueWatchingPreferences } from "../../../data/local/continueWatchingPreferences.js";
 import { HomeCatalogStore } from "../../../data/local/homeCatalogStore.js";
 import { CollectionsStore, buildCollectionHomeKey } from "../../../data/local/collectionsStore.js";
@@ -32,6 +36,7 @@ import { StartupSyncService } from "../../../core/profile/startupSyncService.js"
 import { AvatarRepository } from "../../../data/remote/supabase/avatarRepository.js";
 import { MemberAccessRepository } from "../../../data/remote/supabase/memberAccessRepository.js";
 import { Platform } from "../../../platform/index.js";
+import { WatchProgressSource } from "../../../data/local/traktSettingsStore.js";
 import {
   getTvHeroTransitionMode,
   getTvRuntimePerformanceProfile
@@ -128,6 +133,8 @@ import {
   shouldApplyLateContinueWatchingFocus
 } from "./homeFocusPolicy.js";
 import { resolveNextUpCandidates } from "./nextUpCandidateResolver.js";
+import { findAbsoluteEpisodeAnchorIndex } from "./nextUpEpisodeAnchor.js";
+import { shouldSurfaceNextUpForUntrackedSeries } from "./nextUpWatchingPolicy.js";
 import {
   getContinueWatchingRenderItems,
   shouldAppendContinueWatchingItems
@@ -1453,6 +1460,44 @@ function normalizeEpisodeEntries(videos = []) {
     });
 }
 
+function mapAbsoluteEpisodeKey(episodes, key) {
+  const [season, episode] = String(key || "")
+    .split(":")
+    .map(Number);
+  if (season !== 1 || episode <= 0) {
+    return null;
+  }
+  const index = findAbsoluteEpisodeAnchorIndex(episodes, { season, episode });
+  const target = index >= 0 ? episodes[index] : null;
+  return target ? episodeKey(target.season, target.episode) : null;
+}
+
+function mapAbsoluteWatchedEpisodeKeys(episodes, watchedEpisodeKeys) {
+  const mapped = new Set(watchedEpisodeKeys || []);
+  Array.from(mapped).forEach((key) => {
+    const mappedKey = mapAbsoluteEpisodeKey(episodes, key);
+    if (mappedKey) {
+      mapped.add(mappedKey);
+    }
+  });
+  return mapped;
+}
+
+function mapAbsoluteEpisodeProgress(episodes, progressByEpisode) {
+  const mapped = new Map(progressByEpisode);
+  progressByEpisode.forEach((entry, key) => {
+    const mappedKey = mapAbsoluteEpisodeKey(episodes, key);
+    if (!mappedKey) {
+      return;
+    }
+    const existing = mapped.get(mappedKey);
+    if (!existing || Number(entry?.updatedAt || 0) > Number(existing?.updatedAt || 0)) {
+      mapped.set(mappedKey, entry);
+    }
+  });
+  return mapped;
+}
+
 function findEpisodeEntry(videos = [], season = null, episode = null) {
   const targetSeason = Number(season);
   const targetEpisode = Number(episode || 0);
@@ -2034,7 +2079,19 @@ function buildNextUpSeedFromWatchedItem(item = {}) {
     durationMs: 100,
     progressPercent: 100,
     updatedAt: watchedAt,
-    source: "watched_items"
+    source: "watched_items",
+    isSimklAbsoluteEpisode: item?.isSimklAbsoluteEpisode === true
+  };
+}
+
+function getContinueWatchingNextUpSeedOptions() {
+  const source =
+    watchProgressRepository.getContinueWatchingSource?.() || WatchProgressSource.NUVIO_SYNC;
+  const useLocalWatchedItemSeeds = source === WatchProgressSource.NUVIO_SYNC;
+  return {
+    applyDaysCap: source === WatchProgressSource.TRAKT,
+    includeProgressSeeds: !useLocalWatchedItemSeeds,
+    includeWatchedItemSeeds: useLocalWatchedItemSeeds
   };
 }
 
@@ -2564,40 +2621,27 @@ function renderContinueWatchingCard(item, index, options = {}) {
   const subtitle = normalized.episodeTitle || "";
   const isNextUp = Boolean(normalized?.isNextUp);
   const hasAired = normalized?.hasAired !== false;
-  const useEpisodeThumbnails = options?.useEpisodeThumbnails !== false;
+  const cardStyle = options?.cardStyle;
+  const useEpisodeThumbnails = continueWatchingUsesEpisodeThumbnails(
+    cardStyle,
+    options?.useEpisodeThumbnails
+  );
   const blurNextUp = Boolean(options?.blurNextUp && isNextUp && useEpisodeThumbnails);
   const rowKey = String(options?.rowKey || "continue_watching").trim() || "continue_watching";
-  const cardImageSources = useEpisodeThumbnails
-    ? !isNextUp
-      ? [
-          normalized.episodeThumbnail,
-          normalized.backdrop,
-          normalized.poster,
-          normalized.thumbnail,
-          normalized.background
-        ]
-      : !hasAired
-        ? [
-            normalized.backdrop,
-            normalized.poster,
-            normalized.thumbnail,
-            normalized.background,
-            normalized.episodeThumbnail
-          ]
-        : [
-            normalized.thumbnail,
-            normalized.episodeThumbnail,
-            normalized.backdrop,
-            normalized.poster,
-            normalized.background
-          ]
-    : [
-        normalized.backdrop,
-        normalized.poster,
-        normalized.thumbnail,
-        normalized.episodeThumbnail,
-        normalized.background
-      ];
+  const cardImageSources = continueWatchingImageSources(
+    {
+      poster: normalized.poster,
+      backdrop: normalized.backdrop,
+      thumbnail: normalized.thumbnail,
+      episodeThumbnail: normalized.episodeThumbnail
+    },
+    {
+      cardStyle,
+      useEpisodeThumbnails: options?.useEpisodeThumbnails,
+      isNextUp,
+      hasAired
+    }
+  );
   const uniqueCardImageSources = uniqueNonEmptyValues(cardImageSources);
   const cardImage = uniqueCardImageSources[0] || "";
   const fallbackQueue = encodeHeroBackdropFallbacks(uniqueCardImageSources.slice(1));
@@ -2674,15 +2718,16 @@ export function renderContinueWatchingSection(items = [], options = {}) {
     1,
     Math.min(10, Number(options?.loadingCount || items.length || 3))
   );
-  const cardOptions = {
-    useEpisodeThumbnails: options?.useEpisodeThumbnails,
-    blurNextUp: options?.blurNextUp,
-    rowKey
-  };
   const itemLimit = Math.max(1, Number(options?.itemLimit || items.length || 1));
   const cardStyle = ["card", "wide", "poster"].includes(String(options?.cardStyle || "card"))
     ? String(options.cardStyle)
     : "card";
+  const cardOptions = {
+    useEpisodeThumbnails: options?.useEpisodeThumbnails,
+    blurNextUp: options?.blurNextUp,
+    cardStyle,
+    rowKey
+  };
   const renderedItems = getContinueWatchingRenderItems(items, itemLimit);
   return `
     <section class="home-row home-row-continue home-row-continue-${cardStyle}"${rowKey ? ` data-row-key="${escapeAttribute(rowKey)}"` : ""}>
@@ -2793,7 +2838,8 @@ function renderLegacyCatalogRowsMarkup(rows = [], options = {}) {
         catalogId: rowData.catalogId || "",
         catalogName: rowData.catalogName || "",
         type: rowData.type || "movie",
-        initialItems: items
+        initialItems: items,
+        initialNextSkip: Number(rowData?.result?.data?.nextSkip || 0)
       });
     }
 
@@ -8964,8 +9010,7 @@ export const HomeScreen = {
     this.layoutPrefs = prefs;
     this.sidebarExpanded = Boolean(this.layoutPrefs?.modernSidebar && this.sidebarExpanded);
     this.layoutMode = String(prefs.homeLayout || "classic").toLowerCase();
-    const includeWatchedItemNextUpSeeds =
-      watchProgressRepository.getContinueWatchingSource?.() !== "trakt";
+    const nextUpSeedOptions = getContinueWatchingNextUpSeedOptions();
     const watchedItemsPromise = watchedItemsRepository.getAll(2000).catch(() => []);
     watchedItemsPromise.then((watchedItems) => {
       if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
@@ -9335,9 +9380,7 @@ export const HomeScreen = {
           this.continueWatching,
           this.watchedItems,
           {
-            applyDaysCap: !includeWatchedItemNextUpSeeds,
-            includeProgressSeeds: !includeWatchedItemNextUpSeeds,
-            includeWatchedItemSeeds: includeWatchedItemNextUpSeeds,
+            ...nextUpSeedOptions,
             nextUpFromFurthestEpisode: prefs.nextUpFromFurthestEpisode
           }
         ).slice(0, CW_MAX_NEXT_UP_LOOKUPS);
@@ -10676,10 +10719,17 @@ export const HomeScreen = {
     }
     const showUnairedNextUp = options?.showUnairedNextUp !== false;
 
-    const progressByEpisode = this.buildEpisodeProgressIndex(
+    let progressByEpisode = this.buildEpisodeProgressIndex(
       allProgress,
       completedProgress?.contentId
     );
+    const isSimklAbsoluteEpisode = completedProgress?.isSimklAbsoluteEpisode === true;
+    const resolvedWatchedEpisodeKeys = isSimklAbsoluteEpisode
+      ? mapAbsoluteWatchedEpisodeKeys(episodes, watchedEpisodeKeys)
+      : watchedEpisodeKeys;
+    if (isSimklAbsoluteEpisode) {
+      progressByEpisode = mapAbsoluteEpisodeProgress(episodes, progressByEpisode);
+    }
     const anchorVideoId = String(completedProgress?.videoId || "").trim();
     let anchorIndex = anchorVideoId
       ? episodes.findIndex((entry) => String(entry?.id || "") === anchorVideoId)
@@ -10692,6 +10742,13 @@ export const HomeScreen = {
         (entry) =>
           Number(entry.season || 0) === anchorSeason && Number(entry.episode || 0) === anchorEpisode
       );
+    }
+
+    if (anchorIndex < 0 && isSimklAbsoluteEpisode) {
+      anchorIndex = findAbsoluteEpisodeAnchorIndex(episodes, {
+        season: anchorSeason,
+        episode: anchorEpisode
+      });
     }
 
     if (anchorIndex < 0) {
@@ -10724,7 +10781,7 @@ export const HomeScreen = {
       const candidate = episodes[index];
       const key = episodeKey(candidate.season, candidate.episode);
       const candidateProgress = progressByEpisode.get(key);
-      if (watchedEpisodeKeys?.has?.(key)) {
+      if (resolvedWatchedEpisodeKeys?.has?.(key)) {
         continue;
       }
       if (candidateProgress && isCompletedForContinueWatching(candidateProgress)) {
@@ -10758,10 +10815,7 @@ export const HomeScreen = {
       Array.isArray(nextUpProgressCandidates) && nextUpProgressCandidates.length
         ? nextUpProgressCandidates
         : this.selectNextUpProgressCandidates(allProgress, inProgressItems, watchedItems, {
-            applyDaysCap: watchProgressRepository.getContinueWatchingSource?.() === "trakt",
-            includeProgressSeeds: watchProgressRepository.getContinueWatchingSource?.() === "trakt",
-            includeWatchedItemSeeds:
-              watchProgressRepository.getContinueWatchingSource?.() !== "trakt",
+            ...getContinueWatchingNextUpSeedOptions(),
             nextUpFromFurthestEpisode: this.layoutPrefs?.nextUpFromFurthestEpisode
           });
 
@@ -10822,6 +10876,15 @@ export const HomeScreen = {
           }
         );
         if (!nextEpisode) {
+          return null;
+        }
+        if (
+          !watchProgressRepository.isTrackedAsWatching(contentId) &&
+          !shouldSurfaceNextUpForUntrackedSeries({
+            seedUpdatedAt: progressEntry?.updatedAt,
+            released: nextEpisode.released
+          })
+        ) {
           return null;
         }
         const hasAired = hasEpisodeAiredForContinueWatching(nextEpisode.released);
@@ -12075,6 +12138,7 @@ export const HomeScreen = {
     const cardOptions = {
       useEpisodeThumbnails: this.layoutPrefs?.useEpisodeThumbnailsInCw !== false,
       blurNextUp: resolveContinueWatchingBlurNextUp(this.layoutPrefs),
+      cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card",
       rowKey
     };
     const markup = nextItems
@@ -12399,7 +12463,11 @@ export const HomeScreen = {
               duplicatePageRetryCount = 0;
               return;
             }
-            const nextSkip = skip + incomingItems.length;
+            const reportedNextSkip = Number(result.data?.nextSkip);
+            const nextSkip =
+              Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
+                ? Math.trunc(reportedNextSkip)
+                : skip + incomingItems.length;
             const startIndex = latestItems.length;
             // Update in-memory row data
             if (liveRowPayload) {

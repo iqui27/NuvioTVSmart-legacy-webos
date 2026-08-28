@@ -189,7 +189,13 @@ export const CatalogSeeAllScreen = {
     this.items = this.layoutPrefs?.hideUnreleasedContent
       ? filterReleasedItems(initialItems)
       : [...initialItems];
-    this.nextSkip = this.items.length ? 100 : 0;
+    const initialNextSkip = Number(params?.initialNextSkip);
+    this.nextSkip =
+      Number.isFinite(initialNextSkip) && initialNextSkip > 0
+        ? Math.trunc(initialNextSkip)
+        : this.items.length
+          ? 100
+          : 0;
     this.loading = false;
     this.hasMore = true;
     this.lastFocusedKey = this.items[0]?.id ? `item:${this.items[0].id}` : null;
@@ -272,7 +278,11 @@ export const CatalogSeeAllScreen = {
         this.items.push(item);
         addedCount += 1;
       });
-      this.nextSkip = skip + 100;
+      const reportedNextSkip = Number(result?.data?.nextSkip);
+      this.nextSkip =
+        Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
+          ? Math.trunc(reportedNextSkip)
+          : skip + rawIncoming.length;
     }
     this.hasMore = rawIncoming.length > 0;
     this.loading = false;

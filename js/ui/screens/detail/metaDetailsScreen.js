@@ -2795,7 +2795,9 @@ export const MetaDetailsScreen = {
           ? mergeGenreLists(meta.genres, enrichment.genres)
           : meta.genres,
         releaseInfo: settings.useReleaseDates
-          ? meta.releaseInfo || enrichment.releaseInfo
+          ? isSeries
+            ? enrichment.releaseInfo || meta.releaseInfo
+            : meta.releaseInfo || enrichment.releaseInfo
           : meta.releaseInfo,
         released: settings.useReleaseDates
           ? meta.released || meta.releaseDate || meta.release_date || enrichment.released || null

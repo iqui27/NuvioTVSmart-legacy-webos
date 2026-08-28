@@ -255,7 +255,10 @@ function buildFolderSourceRows(tabs = []) {
         result: {
           status: tab.loading ? "loading" : tab.error ? "error" : "success",
           data: {
-            items: Array.isArray(tab.items) ? tab.items : []
+            items: Array.isArray(tab.items) ? tab.items : [],
+            hasMore: Boolean(tab.hasMore),
+            currentPage: Math.max(0, Number(tab.page || 1) - 1),
+            nextSkip: Math.max(0, Number(tab.nextSkip || 0))
           }
         },
         loadingItems: tab.loading
@@ -428,7 +431,7 @@ async function fetchJson(url, options = {}) {
   return { response, payload };
 }
 
-async function fetchAddonSourceItems(source = {}, page = 1) {
+async function fetchAddonSourceItems(source = {}, page = 1, skipOverride = null) {
   const addons = await addonRepository.getInstalledAddons();
   const addon = findAddonForSource(source, addons);
   const addonBaseUrl = firstNonEmpty(addon?.baseUrl, source.addonBaseUrl);
@@ -436,6 +439,10 @@ async function fetchAddonSourceItems(source = {}, page = 1) {
     throw new Error("Addon not found");
   }
   const extraArgs = source.genre ? { genre: source.genre } : {};
+  const requestedSkip = skipOverride == null ? Number.NaN : Number(skipOverride);
+  const skip = Number.isFinite(requestedSkip)
+    ? Math.max(0, Math.trunc(requestedSkip))
+    : Math.max(0, (page - 1) * 100);
   const result = await catalogRepository.getCatalog({
     addonBaseUrl,
     addonId: firstNonEmpty(addon?.id, source.addonId, addonBaseUrl),
@@ -443,19 +450,24 @@ async function fetchAddonSourceItems(source = {}, page = 1) {
     catalogId: source.catalogId,
     catalogName: buildAddonTabLabel(source, addons),
     type: source.type,
-    skip: Math.max(0, (page - 1) * 100),
+    skip,
     extraArgs,
     supportsSkip: true
   });
   if (result?.status !== "success") {
     throw new Error(String(result?.message || "Could not load catalog"));
   }
+  const reportedNextSkip = Number(result.data?.nextSkip);
+  const items = (result.data?.items || [])
+    .map((item) => normalizeItem(item, source.type))
+    .filter((item) => item.id);
   return {
-    items: (result.data?.items || [])
-      .map((item) => normalizeItem(item, source.type))
-      .filter((item) => item.id),
+    items,
     hasMore: Boolean(result.data?.hasMore),
-    page
+    page,
+    nextSkip: Number.isFinite(reportedNextSkip)
+      ? Math.max(0, Math.trunc(reportedNextSkip))
+      : skip + items.length
   };
 }
 
@@ -763,7 +775,7 @@ async function fetchTraktSourceItems(source = {}, page = 1) {
   };
 }
 
-async function fetchSourceItems(source = {}, page = 1) {
+async function fetchSourceItems(source = {}, page = 1, skipOverride = null) {
   const provider = String(source.provider || "addon").toLowerCase();
   if (provider === "tmdb") {
     return fetchTmdbSourceItems(source, page);
@@ -771,7 +783,7 @@ async function fetchSourceItems(source = {}, page = 1) {
   if (provider === "trakt") {
     return fetchTraktSourceItems(source, page);
   }
-  return fetchAddonSourceItems(source, page);
+  return fetchAddonSourceItems(source, page, skipOverride);
 }
 
 export const FolderDetailScreen = {
@@ -885,6 +897,9 @@ export const FolderDetailScreen = {
             items: Array.isArray(restored.items) ? [...restored.items] : [],
             hasMore: Boolean(restored.hasMore),
             page: Math.max(1, Number(restored.page || 1)),
+            nextSkip: Number.isFinite(Number(restored.nextSkip))
+              ? Math.max(0, Math.trunc(Number(restored.nextSkip)))
+              : Math.max(0, (Math.max(1, Number(restored.page || 1)) - 1) * 100),
             loading: false,
             error: String(restored.error || ""),
             restoreNeedsReload: Boolean(restored.restoreNeedsReload)
@@ -978,6 +993,7 @@ export const FolderDetailScreen = {
       items: [],
       hasMore: false,
       page: 1,
+      nextSkip: 0,
       loading: false,
       error: ""
     }));
@@ -992,6 +1008,7 @@ export const FolderDetailScreen = {
               items: [],
               hasMore: false,
               page: 1,
+              nextSkip: 0,
               loading: true,
               error: ""
             },
@@ -1048,7 +1065,8 @@ export const FolderDetailScreen = {
     }
     try {
       const nextPage = append ? Math.max(1, Number(tab.page || 1) + 1) : 1;
-      const result = await fetchSourceItems(tab.source, nextPage);
+      const requestSkip = append ? Number(tab.nextSkip || 0) : 0;
+      const result = await fetchSourceItems(tab.source, nextPage, requestSkip);
       const existing = append ? this.tabs[tabIndex].items || [] : [];
       const seen = new Set(existing.map((item) => `${item.type}:${item.id}`));
       const incoming = (result.items || []).filter((item) => {
@@ -1064,6 +1082,11 @@ export const FolderDetailScreen = {
         items: append ? [...existing, ...incoming] : incoming,
         hasMore: Boolean(result.hasMore && incoming.length),
         page: Number(result.page || nextPage),
+        nextSkip: Number.isFinite(Number(result.nextSkip))
+          ? Math.max(0, Math.trunc(Number(result.nextSkip)))
+          : append
+            ? Number(this.tabs[tabIndex].nextSkip || 0)
+            : 0,
         loading: false,
         error: ""
       };
@@ -1636,7 +1659,7 @@ export const FolderDetailScreen = {
     this.tabs[tabIndex] = { ...tab, loading: true, error: "" };
     try {
       const nextPage = Math.max(1, Number(tab.page || 1) + 1);
-      const result = await fetchSourceItems(tab.source, nextPage);
+      const result = await fetchSourceItems(tab.source, nextPage, Number(tab.nextSkip || 0));
       const existing = Array.isArray(tab.items) ? tab.items : [];
       const seen = new Set(existing.map((item) => `${item.type}:${item.id}`));
       const incoming = (result.items || []).filter((item) => {
@@ -1654,6 +1677,9 @@ export const FolderDetailScreen = {
         items: merged,
         hasMore,
         page: Number(result.page || nextPage),
+        nextSkip: Number.isFinite(Number(result.nextSkip))
+          ? Math.max(0, Math.trunc(Number(result.nextSkip)))
+          : Number(tab.nextSkip || 0),
         loading: false,
         error: ""
       };
@@ -1662,6 +1688,9 @@ export const FolderDetailScreen = {
         rowData.result.data.items = merged;
         rowData.result.data.hasMore = hasMore;
         rowData.result.data.currentPage = Number(result.page || nextPage);
+        rowData.result.data.nextSkip = Number.isFinite(Number(result.nextSkip))
+          ? Math.max(0, Math.trunc(Number(result.nextSkip)))
+          : Number(tab.nextSkip || 0);
       }
       if (incoming.length && track?.isConnected) {
         const modernLandscapePostersEnabled = Boolean(

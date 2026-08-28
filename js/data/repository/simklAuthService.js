@@ -1,7 +1,6 @@
 /* global __NUVIO_APP_VERSION__ */
 import { SIMKL_API_URL, SIMKL_APP_NAME, SIMKL_CLIENT_ID } from "../../config.js";
 import { SimklAuthStore } from "../local/simklAuthStore.js";
-import { SimklCredentialSyncService } from "../../core/profile/simklCredentialSyncService.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 
 const DEFAULT_API_URL = "https://api.simkl.com";
@@ -199,7 +198,6 @@ export const SimklAuthService = {
     }
     SimklAuthStore.saveToken(accessToken, profileId);
     const username = await fetchUserSettings(profileId).catch(() => null);
-    await SimklCredentialSyncService.pushCurrentToRemote(profileId);
     return { type: "approved", username };
   },
 
@@ -211,7 +209,6 @@ export const SimklAuthService = {
 
   async disconnect() {
     const profileId = activeProfileId();
-    await SimklCredentialSyncService.deleteRemote(profileId);
     SimklAuthStore.clearAuth(profileId);
   }
 };

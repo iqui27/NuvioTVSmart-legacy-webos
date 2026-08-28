@@ -581,6 +581,25 @@ export const TmdbEntityBrowseScreen = {
     if (!(shell instanceof HTMLElement)) {
       return;
     }
+
+    // Keep the Android-style entity header visible when focus returns to the
+    // first content rail. The Web shell scrolls the hero and rails together;
+    // generic visibility padding would otherwise stop with the first card
+    // near the top and leave the studio logo partially clipped.
+    const firstRail = this.container?.querySelector(".tmdb-entity-rail");
+    const focusedRail = node.closest(".tmdb-entity-rail");
+    if (firstRail && focusedRail === firstRail) {
+      if (shell.scrollTop > 0) {
+        if (!instant && typeof shell.scrollTo === "function") {
+          shell.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+          shell.scrollTop = 0;
+        }
+      }
+      this.savedScrollTop = 0;
+      return;
+    }
+
     const shellRect = shell.getBoundingClientRect();
     const cardRect = node.getBoundingClientRect();
     const topPadding = 36;
@@ -696,7 +715,14 @@ export const TmdbEntityBrowseScreen = {
     }
     const targetCards = this.getCardNodes(String(targetRail.key || ""));
     if (targetCards.length) {
-      const preferred = Math.min(currentIndex, targetCards.length - 1);
+      const targetRailKey = String(targetRail.key || "");
+      const rememberedIndex = Number(this.railFocusIndexByKey?.[targetRailKey]);
+      // Keep focus local to each rail, matching Android TV's per-row
+      // focusRestorer. A rail that has not been visited must start at index 0;
+      // it must not inherit the source rail's horizontal position.
+      const targetIndex =
+        Number.isInteger(rememberedIndex) && rememberedIndex >= 0 ? rememberedIndex : 0;
+      const preferred = Math.min(targetIndex, targetCards.length - 1);
       this.focusNode(targetCards[preferred]);
     }
     return true;
