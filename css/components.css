@@ -21410,8 +21410,11 @@ html.tizen-tv.no-css-math .cast-detail-shell {
 .seeall-body {
   display: flex;
   align-items: flex-start;
-  /* 380 do painel + 32 de respiro: reserva a coluna que o painel fixo ocupa. */
-  padding-right: 412px;
+  /* 336 do painel + 32 de respiro: reserva a coluna que o painel fixo ocupa.
+     Era 412 (painel de 380) e isso custava DUAS colunas de posteres — medido a
+     1920x1080: grade de 1300px, 4 colunas de 248. Com 368 a grade vai a 1344 e
+     cabem 5. O painel encolheu na largura, nao no tamanho da letra. */
+  padding-right: 368px;
 }
 
 .seeall-body > .seeall-grid {
@@ -21430,7 +21433,7 @@ html.tizen-tv.no-css-math .cast-detail-shell {
   position: fixed;
   top: 170px;
   right: 104px;
-  width: 380px;
+  width: 336px;
   max-height: calc(100% - 210px);
   overflow: hidden;
   padding: 4px 0 0;
@@ -21445,43 +21448,90 @@ html.tizen-tv.no-css-math .cast-detail-shell {
   opacity: 1;
 }
 
+/* Arte de fundo do painel. Vem do data-backdrop-src do card, entao nao custa
+   requisicao nenhuma, e e o que da corpo a coluna: antes eram cinco linhas de
+   texto pequeno sozinhas num retangulo de 380x870. */
+.seeall-detail-art {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 190px;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.seeall-detail-backdrop {
+  display: block;
+  width: 100%;
+  height: 190px;
+  object-fit: cover;
+}
+
+.seeall-detail-art-scrim {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 96px;
+  background: linear-gradient(rgba(8, 10, 16, 0), rgba(8, 10, 16, 0.85));
+}
+
+.seeall-detail-logo {
+  display: block;
+  max-width: 264px;
+  max-height: 82px;
+  margin-bottom: 4px;
+}
+
+/* Tipografia a 10 pes: o piso legivel no sofa e 20px neste viewport, e o texto
+   deste painel estava em 17-19px. Medido na tela real a 1920x1080. */
 .seeall-detail-title {
   color: rgba(255, 255, 255, 0.96);
-  font-size: 30px;
+  font-size: 38px;
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.16;
 }
 
 .seeall-detail-rating {
   display: inline-block;
-  margin-top: 12px;
-  padding: 3px 11px;
-  border-radius: 7px;
+  margin-top: 14px;
+  padding: 4px 13px;
+  border-radius: 8px;
   background: rgba(245, 197, 24, 0.92);
   color: #17130a;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
-  line-height: 26px;
+  line-height: 30px;
 }
 
 .seeall-detail-meta {
-  margin-top: 10px;
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 19px;
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 24px;
   font-weight: 600;
 }
 
 .seeall-detail-genres {
-  margin-top: 4px;
-  color: rgba(220, 231, 244, 0.7);
-  font-size: 17px;
+  margin-top: 6px;
+  color: rgba(220, 231, 244, 0.72);
+  font-size: 22px;
 }
 
 .seeall-detail-desc {
-  margin-top: 14px;
-  color: rgba(255, 255, 255, 0.84);
-  font-size: 18px;
-  line-height: 26px;
+  margin-top: 16px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 24px;
+  line-height: 34px;
+}
+
+.seeall-detail-source {
+  margin-top: 18px;
+  color: rgba(220, 231, 244, 0.6);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
 }
 
 .seeall-grid {

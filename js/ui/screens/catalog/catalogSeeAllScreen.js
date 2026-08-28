@@ -691,8 +691,12 @@ export const CatalogSeeAllScreen = {
     const title = descriptor.catalogName || "Catalog";
     const cards = this.items.length
       ? this.items
-          .map(
-            (item, index) => `
+          .map((item, index) => {
+            // Uma vez por card. Estava sendo chamado quatro vezes — uma por
+            // atributo — o que da 200 execucoes numa lista de 50 itens, toda
+            // vez que a grade e remontada.
+            const fatos = buildSeeAllFacts(item, descriptor);
+            return `
           <article class="seeall-card focusable"
                    data-action="openDetail"
                    data-item-id="${item.id || ""}"
@@ -705,10 +709,10 @@ export const CatalogSeeAllScreen = {
                     data-addon-id="${escapeHtml(descriptor.addonId || item.addonId || "")}"
                     data-addon-name="${escapeHtml(descriptor.addonName || item.addonName || "")}"
                     data-catalog-type="${escapeHtml(descriptor.type || item.catalogType || "")}"
-                    data-facts-meta="${escapeHtml(buildSeeAllFacts(item, descriptor).meta)}"
-                    data-facts-rating="${escapeHtml(buildSeeAllFacts(item, descriptor).rating)}"
-                    data-facts-genres="${escapeHtml(buildSeeAllFacts(item, descriptor).genres)}"
-                    data-facts-desc="${escapeHtml(buildSeeAllFacts(item, descriptor).desc)}"
+                    data-facts-meta="${escapeHtml(fatos.meta)}"
+                    data-facts-rating="${escapeHtml(fatos.rating)}"
+                    data-facts-genres="${escapeHtml(fatos.genres)}"
+                    data-facts-desc="${escapeHtml(fatos.desc)}"
                     data-focus-key="item:${item.id || index}"
                     data-item-index="${index}">
             <div class="seeall-card-poster-wrap">
@@ -728,8 +732,8 @@ export const CatalogSeeAllScreen = {
                 : ""
             }
           </article>
-        `
-          )
+        `;
+          })
           .join("")
       : `<div class="seeall-empty">${escapeHtml(t("catalog_see_all_empty_title", {}, "No items available"))}</div>`;
 
@@ -759,11 +763,17 @@ export const CatalogSeeAllScreen = {
             ${cards}
           </section>
           <aside class="seeall-detail" aria-hidden="true">
+            <div class="seeall-detail-art">
+              <img class="seeall-detail-backdrop" alt="" aria-hidden="true" decoding="async" />
+              <div class="seeall-detail-art-scrim" aria-hidden="true"></div>
+            </div>
+            <img class="seeall-detail-logo" alt="" aria-hidden="true" decoding="async" />
             <div class="seeall-detail-title"></div>
             <div class="seeall-detail-rating"></div>
             <div class="seeall-detail-meta"></div>
             <div class="seeall-detail-genres"></div>
             <div class="seeall-detail-desc"></div>
+            <div class="seeall-detail-source"></div>
           </aside>
         </div>
         ${
@@ -818,12 +828,36 @@ export const CatalogSeeAllScreen = {
     if (!painel || !(node instanceof HTMLElement)) {
       return;
     }
+    // A arte de fundo e o logo saem do proprio card (data-backdrop-src /
+    // data-logo-src): nenhuma requisicao nova, e e o que preenche a coluna, que
+    // antes ficava com um bloco de texto pequeno perdido no meio do vazio.
+    // O catalogo NAO traz imdbRating, entao a nota fica vazia na maioria dos
+    // itens — buscar meta a cada movimento do D-pad custaria rede e travaria a
+    // navegacao, que ja esta lenta.
+    const arte = painel.querySelector(".seeall-detail-backdrop");
+    const backdrop = node.dataset.backdropSrc || "";
+    if (arte) {
+      if (arte.getAttribute("src") !== backdrop) {
+        arte.setAttribute("src", backdrop);
+      }
+      arte.style.display = backdrop ? "" : "none";
+    }
+    const logo = painel.querySelector(".seeall-detail-logo");
+    const logoSrc = node.dataset.logoSrc || "";
+    if (logo) {
+      if (logo.getAttribute("src") !== logoSrc) {
+        logo.setAttribute("src", logoSrc);
+      }
+      logo.style.display = logoSrc ? "" : "none";
+    }
     const campos = [
-      [".seeall-detail-title", node.dataset.itemTitle || ""],
+      // Com logo, o titulo em texto vira repeticao.
+      [".seeall-detail-title", logoSrc ? "" : node.dataset.itemTitle || ""],
       [".seeall-detail-rating", node.dataset.factsRating || ""],
       [".seeall-detail-meta", node.dataset.factsMeta || ""],
       [".seeall-detail-genres", node.dataset.factsGenres || ""],
-      [".seeall-detail-desc", node.dataset.factsDesc || ""]
+      [".seeall-detail-desc", node.dataset.factsDesc || ""],
+      [".seeall-detail-source", node.dataset.addonName || ""]
     ];
     let algum = false;
     campos.forEach(([sel, texto]) => {
@@ -837,7 +871,7 @@ export const CatalogSeeAllScreen = {
         algum = true;
       }
     });
-    painel.classList.toggle("is-visible", algum);
+    painel.classList.toggle("is-visible", algum || Boolean(backdrop) || Boolean(logoSrc));
   },
 
   bindShellEvents() {
