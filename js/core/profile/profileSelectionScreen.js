@@ -83,7 +83,9 @@ function keyEventToDigit(event) {
 
 function getDefaultProfileColor() {
   const value = globalThis?.document
-    ? getComputedStyle(document.documentElement).getPropertyValue("--secondary-color").trim()
+    ? String(
+        getComputedStyle(document.documentElement).getPropertyValue("--secondary-color") || ""
+      ).trim()
     : "";
   return value || DEFAULT_PROFILE_COLOR;
 }

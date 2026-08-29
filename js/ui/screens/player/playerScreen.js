@@ -3643,9 +3643,11 @@ export const PlayerScreen = {
 
     const rootStyle = getComputedStyle(document.documentElement);
     const focusBackground =
-      rootStyle.getPropertyValue("--player-focus-background").trim() || "#303030";
-    const focusContent = rootStyle.getPropertyValue("--player-text-primary").trim() || "#ffffff";
-    const focusRing = rootStyle.getPropertyValue("--player-focus-ring").trim() || "#ffffff";
+      String(rootStyle.getPropertyValue("--player-focus-background") || "").trim() || "#303030";
+    const focusContent =
+      String(rootStyle.getPropertyValue("--player-text-primary") || "").trim() || "#ffffff";
+    const focusRing =
+      String(rootStyle.getPropertyValue("--player-focus-ring") || "").trim() || "#ffffff";
     const isFocused = document.activeElement === target || target.classList.contains("focused");
     const background = isFocused ? focusBackground : "rgba(30, 30, 30, 0.85)";
     const color = isFocused ? focusContent : "#fff";
@@ -20225,7 +20227,12 @@ export const PlayerScreen = {
     const lineHeight = rowHeight * total + rowGap * Math.max(0, total - 1);
     const currentLineHeight = clamp(Number(this.parentalGuideLineProgress || 0), 0, lineHeight);
     const rootStyle = getComputedStyle(document.documentElement);
-    const parentalAccent = rootStyle.getPropertyValue("--secondary-color").trim() || "#f5f5f5";
+    // String(... || "") e obrigatorio: no Chromium 38 (webOS 3) custom property
+    // nao existe e getPropertyValue devolve NULL, nao string vazia. O .trim()
+    // direto derrubava a tela — reporte do webOS 3.9, com o player ja aberto:
+    // "TypeError: Cannot read property 'trim' of null".
+    const parentalAccent =
+      String(rootStyle.getPropertyValue("--secondary-color") || "").trim() || "#f5f5f5";
     overlay.style.animationDelay = this.parentalGuideExiting ? `${containerExitDelay}ms` : "0ms";
     overlay.style.setProperty("--parental-row-height", `${rowHeight}px`);
     overlay.style.setProperty("--parental-row-gap", `${rowGap}px`);
