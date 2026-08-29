@@ -4349,6 +4349,31 @@ export const SettingsScreen = {
   renderPluginsSection() {
     const repositorios = PluginManager.listarRepositorios();
     const ligado = PluginManager.pluginsEnabled;
+
+    // O scraper e baixado em runtime e NAO passa pelo Babel do build: chega no
+    // aparelho como o autor escreveu. Testar `const` responde, em uma linha e
+    // sem rede, se este motor aceita o que a maioria dos provedores usa hoje.
+    // Medido nos 4 provedores do repositorio saimuel: 3 usam ES2015, 1 e ES5.
+    let motorAceitaEs2015 = true;
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function("const _teste = 1; return _teste;");
+    } catch (_) {
+      motorAceitaEs2015 = false;
+    }
+    const avisoMotor = motorAceitaEs2015
+      ? ""
+      : `<div class="settings-group-card">
+           <div class="settings-empty-state">
+             <p>${escapeHtml(
+               t(
+                 "plugins_engine_too_old",
+                 {},
+                 "This TV's browser engine is older than most providers expect. Providers written with modern JavaScript cannot run here and will simply return nothing; the app will tell you when that happens. Providers written for older engines still work."
+               )
+             )}</p>
+           </div>
+         </div>`;
     // A contagem de fornecedores exige baixar o manifesto, entao ela chega
     // depois: desenha "carregando", busca em segundo plano e redesenha uma vez.
     if (!this.pluginProviders) {
@@ -4412,6 +4437,7 @@ export const SettingsScreen = {
           })}
         </div>
       </div>
+      ${avisoMotor}
       <div class="settings-group-card">
         <div class="settings-stack">${listaHtml}</div>
       </div>

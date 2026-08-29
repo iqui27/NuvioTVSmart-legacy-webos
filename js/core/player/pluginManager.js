@@ -69,6 +69,7 @@ export const PluginManager = {
     if (!this.pluginsEnabled) {
       return [];
     }
+    this.ultimosProvedoresIncompativeis = [];
 
     const todas = PluginRuntime.listSources().filter((source) => source.enabled !== false);
     const legado = todas.filter((source) => !this.ehRepositorio(source));
@@ -112,6 +113,15 @@ export const PluginManager = {
                 streams
               };
             } catch (erro) {
+              // Incompatibilidade de motor nao e "nao achei nada": e o provedor
+              // que nao tem como rodar nesta TV. Guardado para a tela poder
+              // dizer isso em vez de mostrar uma lista vazia.
+              if (erro?.incompativelComOMotor) {
+                this.ultimosProvedoresIncompativeis = this.ultimosProvedoresIncompativeis || [];
+                if (this.ultimosProvedoresIncompativeis.indexOf(scraper?.nome) < 0) {
+                  this.ultimosProvedoresIncompativeis.push(scraper?.nome || "");
+                }
+              }
               console.warn("[Nuvio plugins] scraper falhou", scraper?.nome, erro);
               return null;
             }
