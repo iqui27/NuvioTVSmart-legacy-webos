@@ -700,8 +700,7 @@ const SECTION_META = [
   {
     id: "plugins",
     labelKey: "settings.sections.plugins.label",
-    subtitleKey: "settings.sections.plugins.subtitle",
-    hideFromNav: true
+    subtitleKey: "settings.sections.plugins.subtitle"
   },
   {
     id: "integration",
@@ -2409,7 +2408,7 @@ export const SettingsScreen = {
           ${renderSectionNavIcon(item.id)}
           <span class="settings-nav-label-wrap">
             <span class="settings-nav-label">${escapeHtml(translateSectionCopy(item).label)}</span>
-            ${item.id === "plugins" ? `<span class="settings-nav-badge">${escapeHtml(t("common.soon", {}, "Soon"))}</span>` : ""}
+
           </span>
         </span>
         ${iconSvg(ROW_ICONS.chevron, "settings-nav-chevron")}
@@ -4348,12 +4347,73 @@ export const SettingsScreen = {
   },
 
   renderPluginsSection() {
+    const repositorios = PluginManager.listarRepositorios();
+    const ligado = PluginManager.pluginsEnabled;
+    // A contagem de fornecedores exige baixar o manifesto, entao ela chega
+    // depois: desenha "carregando", busca em segundo plano e redesenha uma vez.
+    if (!this.pluginProviders) {
+      this.pluginProviders = {};
+      void PluginManager.listarFornecedores()
+        .then((resultados) => {
+          resultados.forEach(({ source, manifesto }) => {
+            this.pluginProviders[source.id] = manifesto ? manifesto.scrapers : null;
+          });
+          if (this.activeSection === "plugins") {
+            void this.render();
+          }
+        })
+        .catch(() => {});
+    }
+
+    this.actionMap.set("plugins:toggle", async () => {
+      PluginManager.setPluginsEnabled(!PluginManager.pluginsEnabled);
+      await this.render();
+    });
+
+    const listaHtml = repositorios.length
+      ? repositorios
+          .map((repo) => {
+            const fornecedores = (this.pluginProviders || {})[repo.id];
+            const detalhe = Array.isArray(fornecedores)
+              ? `${fornecedores.length} ${t("plugins_providers", {}, "providers")}`
+              : fornecedores === null
+                ? t("plugins_provider_error", {}, "could not be read")
+                : t("plugins_loading", {}, "loading...");
+            return `
+              <div class="settings-stack-row">
+                <span class="settings-row-copy">
+                  <span class="settings-row-title">${escapeHtml(repo.name)}</span>
+                  <span class="settings-row-subtitle">${escapeHtml(detalhe)}</span>
+                </span>
+              </div>`;
+          })
+          .join("")
+      : `<div class="settings-empty-state">
+           <p>${escapeHtml(t("plugins_empty", {}, "No plugin repositories. Add them from the phone or desktop app while signed in to the same account, and they sync to this TV."))}</p>
+         </div>`;
+
     return `
       ${this.renderSectionHeader(SECTION_META.find((item) => item.id === "plugins"))}
-      <div class="settings-group-card settings-group-card-fill">
-        <div class="settings-empty-state settings-empty-state-plugins">
-          <p class="settings-plugin-soon-text">Plugin support is coming soon.</p>
+      <div class="settings-group-card">
+        <div class="settings-stack">
+          ${this.renderToggleRow({
+            focusKey: "plugins:toggle",
+            title: t("plugins_enable_title", {}, "Use plugin providers"),
+            // O aviso fica na tela, nao so no codigo: quem liga isto passa a
+            // executar JavaScript baixado de repositorios de terceiros, que
+            // muda quando o autor quiser.
+            subtitle: t(
+              "plugins_enable_subtitle",
+              {},
+              "Runs code downloaded from the repositories in your account. Only enable repositories you trust."
+            ),
+            checked: ligado,
+            disabled: !repositorios.length
+          })}
         </div>
+      </div>
+      <div class="settings-group-card">
+        <div class="settings-stack">${listaHtml}</div>
       </div>
     `;
   },
