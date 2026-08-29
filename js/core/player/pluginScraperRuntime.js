@@ -129,6 +129,31 @@ function normalizarManifesto(texto, urlManifesto) {
   };
 }
 
+/**
+ * Compila o codigo do scraper. Separada para que o SyntaxError de um motor
+ * antigo possa ser distinguido de um erro de execucao pelo chamador.
+ */
+function criarFabrica(codigo) {
+  return new Function(
+    "globalThis",
+    "window",
+    "self",
+    "fetch",
+    "console",
+    "URL",
+    "URLSearchParams",
+    "TextDecoder",
+    "setTimeout",
+    "clearTimeout",
+    "module",
+    "exports",
+    `${codigo}
+;return (typeof getStreams === "function" && getStreams) ||
+      (module && module.exports && (module.exports.getStreams || module.exports)) ||
+      null;`
+  );
+}
+
 export const PluginScraperRuntime = {
   async carregarManifesto(urlManifesto, { forcar = false } = {}) {
     const chave = String(urlManifesto || "").trim();
@@ -163,24 +188,25 @@ export const PluginScraperRuntime = {
     }
     const codigo = await baixarTexto(chave, MAX_BYTES_SCRAPER);
     const moduleShim = { exports: {} };
-    const fabrica = new Function(
-      "globalThis",
-      "window",
-      "self",
-      "fetch",
-      "console",
-      "URL",
-      "URLSearchParams",
-      "TextDecoder",
-      "setTimeout",
-      "clearTimeout",
-      "module",
-      "exports",
-      `${codigo}
-;return (typeof getStreams === "function" && getStreams) ||
-        (module && module.exports && (module.exports.getStreams || module.exports)) ||
-        null;`
-    );
+    let fabrica;
+    try {
+      fabrica = criarFabrica(codigo);
+    } catch (erro) {
+      // O scraper e baixado em RUNTIME, entao ele NAO passa pelo Babel do nosso
+      // build: chega no aparelho exatamente como o autor escreveu. Num Chromium
+      // 38 (webOS 3) qualquer `const`, arrow ou template literal vira
+      // SyntaxError aqui. Medido nos 4 provedores do repositorio saimuel: tres
+      // usam sintaxe ES2015 e so um e ES5, ou seja a maioria nao tem como rodar
+      // naquele motor. Sem esta distincao o usuario ve "nenhuma fonte
+      // encontrada" e fica sem saber que o problema e a TV, nao a busca.
+      const ehSintaxe = erro instanceof SyntaxError || /syntax/i.test(String(erro?.message || ""));
+      const detalhe = ehSintaxe
+        ? "usa sintaxe que o motor desta TV nao entende"
+        : String(erro?.message || erro);
+      const falha = new Error(`${scraper?.nome || chave}: ${detalhe}`);
+      falha.incompativelComOMotor = ehSintaxe;
+      throw falha;
+    }
     const ambiente = {};
     const encontrado = fabrica(
       ambiente,

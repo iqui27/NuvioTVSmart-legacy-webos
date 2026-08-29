@@ -49,9 +49,22 @@ async function pathExists(filePath) {
   }
 }
 
+// Pedacos de tela carregados sob demanda, emitidos por scripts/build.mjs. Quem
+// os busca em runtime e js/runtime/loadScreenChunks.js, entao NADA no index.html
+// os referencia — se faltarem, o empacotamento passa e o defeito so aparece na
+// TV como uma tela que nunca abre ("Could not open this screen. Try again").
+// Foi exatamente o que aconteceu: o code splitting entrou depois deste script e
+// o pacote Tizen saiu sem player.chunk.js, entao o video nao reproduzia numa
+// Samsung enquanto o mesmo build funcionava no webOS. Listados aqui para o
+// empacotamento FALHAR em vez de entregar um pacote incompleto.
+const screenChunkFiles = ["player.chunk.js"];
+
 async function assertDistExists() {
   try {
     await access(path.join(distDir, "app.bundle.js"), fsConstants.R_OK);
+    for (const chunkFile of screenChunkFiles) {
+      await access(path.join(distDir, chunkFile), fsConstants.R_OK);
+    }
   } catch {
     throw new Error(`Build output not found at ${distDir}. Run "npm run build" first.`);
   }
@@ -251,6 +264,9 @@ async function stagePackage({
     copyDistFolder("css"),
     copyDistFolder("res"),
     cp(path.join(distDir, "app.bundle.js"), path.join(stagingDir, "app.bundle.js")),
+    ...screenChunkFiles.map((chunkFile) =>
+      cp(path.join(distDir, chunkFile), path.join(stagingDir, chunkFile))
+    ),
     cp(path.join(distDir, "core-js.bundle.js"), path.join(stagingDir, "core-js.bundle.js")),
     cp(path.join(distDir, "boot-guard.js"), path.join(stagingDir, "boot-guard.js")),
     cp(path.join(distDir, "youtube-proxy.html"), path.join(stagingDir, "youtube-proxy.html")),
