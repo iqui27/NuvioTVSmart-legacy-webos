@@ -130,6 +130,202 @@ function normalizarManifesto(texto, urlManifesto) {
 }
 
 /**
+ * Transpila, no proprio aparelho, o scraper que o motor nao entende.
+ *
+ * MEDIDO NA OLED65C9 (webOS 4.10, Chromium 53) — a variante webOS 3 e mais
+ * lenta, entao trate estes numeros como piso, nao como teto:
+ *   baixar o Babel (3MB)      767ms
+ *   avaliar o Babel          1712ms
+ *   transpilar 32KB (FSHD)   2372ms   -> compila depois em 9ms
+ *   transpilar 40KB (MegaE)  1749ms   -> compila depois em 14ms
+ *   transpilar 234KB (Peach)10330ms   -> compila depois em 68ms
+ *
+ * Tres decisoes que vem desses numeros:
+ * 1. O Babel e baixado SOB DEMANDA. Quem nao usa plugins, ou usa numa TV cujo
+ *    motor entende o scraper, nunca paga os 3MB nem os 1,7s — nao entra no
+ *    pacote nem no boot.
+ * 2. O resultado vai para o localStorage. Transpilar e uma vez por versao do
+ *    arquivo, nao uma vez por busca; sem isso, aqueles 10s do Peachify
+ *    voltariam a cada pesquisa.
+ * 3. Acima de MAX_KB_TRANSPILAR nao vale a pena: o custo cresce com o tamanho e
+ *    numa TV de 2016 um arquivo desses passaria de meio minuto. Melhor dizer que
+ *    o provedor e grande demais do que deixar a busca parecer travada.
+ */
+const BABEL_URL = "https://unpkg.com/@babel/standalone@7/babel.min.js";
+const PREFIXO_CACHE = "pluginScraperEs5:";
+const MAX_KB_TRANSPILAR = 320;
+const MAX_ENTRADAS_CACHE = 3;
+// Medido na C9: o localStorage do app ja carrega 1436KB em 50 chaves (addons,
+// progresso, perfis) e o maior bloco que aceitou gravar foi 2MB. Este cache NAO
+// pode disputar espaco com os dados do usuario — encher a cota faria o app
+// falhar ao salvar progresso, que e perda de verdade, enquanto perder o cache
+// so custa alguns segundos. Acima deste piso de uso, nao gravamos nada.
+const TETO_USO_LOCALSTORAGE_KB = 2600;
+let babelCarregando = null;
+
+export function motorEntendeEs2015() {
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function("const _t = 1; return _t;");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function lerCacheEs5(url) {
+  try {
+    const bruto = localStorage.getItem(PREFIXO_CACHE + url);
+    if (!bruto) {
+      return null;
+    }
+    const dados = JSON.parse(bruto);
+    return dados && typeof dados.codigo === "string" ? dados : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * `localStorage.setItem` e escrita sincrona e pode estourar a cota. Nao usamos
+ * LocalStore aqui de proposito: ele engole a excecao, e uma cota estourada
+ * viraria perda silenciosa. Ao estourar, descartamos as entradas mais antigas e
+ * seguimos SEM cache — transpilar de novo e lento, mas funciona.
+ */
+function usoLocalStorageKB() {
+  let total = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const chave = localStorage.key(i);
+      total += (chave || "").length + (localStorage.getItem(chave) || "").length;
+    }
+  } catch (_) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Math.round(total / 1024);
+}
+
+function gravarCacheEs5(url, codigo) {
+  const chave = PREFIXO_CACHE + url;
+  if (usoLocalStorageKB() + Math.round(codigo.length / 1024) > TETO_USO_LOCALSTORAGE_KB) {
+    // Segue sem cache de proposito: converter de novo custa segundos, encher a
+    // cota custaria os dados do usuario.
+    podarCacheEs5(0);
+    return false;
+  }
+  const valor = JSON.stringify({ quando: agora(), codigo });
+  try {
+    localStorage.setItem(chave, valor);
+    podarCacheEs5();
+    return true;
+  } catch (_) {
+    try {
+      limparCacheEs5();
+      localStorage.setItem(chave, valor);
+      return true;
+    } catch (__) {
+      return false;
+    }
+  }
+}
+
+function listarChavesCacheEs5() {
+  const chaves = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const chave = localStorage.key(i);
+      if (chave && chave.indexOf(PREFIXO_CACHE) === 0) {
+        chaves.push(chave);
+      }
+    }
+  } catch (_) {
+    return [];
+  }
+  return chaves;
+}
+
+function podarCacheEs5(limite = MAX_ENTRADAS_CACHE) {
+  const chaves = listarChavesCacheEs5();
+  if (chaves.length <= limite) {
+    return;
+  }
+  const comIdade = chaves
+    .map((chave) => {
+      let quando = 0;
+      try {
+        quando = Number(JSON.parse(localStorage.getItem(chave) || "{}").quando || 0);
+      } catch (_) {
+        quando = 0;
+      }
+      return { chave, quando };
+    })
+    .sort((a, b) => a.quando - b.quando);
+  comIdade.slice(0, comIdade.length - limite).forEach(({ chave }) => {
+    try {
+      localStorage.removeItem(chave);
+    } catch (_) {
+      /* nada a fazer */
+    }
+  });
+}
+
+function limparCacheEs5() {
+  listarChavesCacheEs5().forEach((chave) => {
+    try {
+      localStorage.removeItem(chave);
+    } catch (_) {
+      /* nada a fazer */
+    }
+  });
+}
+
+function carregarBabel() {
+  if (typeof window !== "undefined" && window.Babel && window.Babel.transform) {
+    return Promise.resolve(window.Babel);
+  }
+  if (babelCarregando) {
+    return babelCarregando;
+  }
+  babelCarregando = baixarTexto(BABEL_URL, 8 * 1024 * 1024)
+    .then((codigo) => {
+      // eslint-disable-next-line no-eval
+      (0, eval)(codigo);
+      const babel = typeof window !== "undefined" ? window.Babel : null;
+      if (!babel || !babel.transform) {
+        throw new Error("Babel nao expos transform");
+      }
+      return babel;
+    })
+    .catch((erro) => {
+      babelCarregando = null;
+      throw erro;
+    });
+  return babelCarregando;
+}
+
+async function converterParaEs5(url, codigo) {
+  const kb = Math.round(codigo.length / 1024);
+  if (kb > MAX_KB_TRANSPILAR) {
+    const grande = new Error(
+      `provedor grande demais para converter nesta TV (${kb}KB, teto ${MAX_KB_TRANSPILAR}KB)`
+    );
+    grande.incompativelComOMotor = true;
+    throw grande;
+  }
+  const cacheado = lerCacheEs5(url);
+  if (cacheado) {
+    return cacheado.codigo;
+  }
+  const babel = await carregarBabel();
+  const convertido = babel.transform(codigo, {
+    presets: [["env", { targets: { chrome: "38" } }]],
+    compact: true
+  }).code;
+  gravarCacheEs5(url, convertido);
+  return convertido;
+}
+
+/**
  * Compila o codigo do scraper. Separada para que o SyntaxError de um motor
  * antigo possa ser distinguido de um erro de execucao pelo chamador.
  */
@@ -200,12 +396,23 @@ export const PluginScraperRuntime = {
       // naquele motor. Sem esta distincao o usuario ve "nenhuma fonte
       // encontrada" e fica sem saber que o problema e a TV, nao a busca.
       const ehSintaxe = erro instanceof SyntaxError || /syntax/i.test(String(erro?.message || ""));
-      const detalhe = ehSintaxe
-        ? "usa sintaxe que o motor desta TV nao entende"
-        : String(erro?.message || erro);
-      const falha = new Error(`${scraper?.nome || chave}: ${detalhe}`);
-      falha.incompativelComOMotor = ehSintaxe;
-      throw falha;
+      if (!ehSintaxe) {
+        throw new Error(`${scraper?.nome || chave}: ${String(erro?.message || erro)}`);
+      }
+      // Sintaxe que este motor nao entende: tenta converter no proprio aparelho.
+      // So chega aqui quem realmente precisa — num motor moderno a compilacao
+      // acima ja teria funcionado.
+      try {
+        const emEs5 = await converterParaEs5(chave, codigo);
+        fabrica = criarFabrica(emEs5);
+      } catch (erroConversao) {
+        const detalhe = erroConversao?.incompativelComOMotor
+          ? String(erroConversao.message || "")
+          : `nao foi possivel converter para este motor (${String(erroConversao?.message || erroConversao)})`;
+        const falha = new Error(`${scraper?.nome || chave}: ${detalhe}`);
+        falha.incompativelComOMotor = true;
+        throw falha;
+      }
     }
     const ambiente = {};
     const encontrado = fabrica(

@@ -62,6 +62,7 @@ import { CW_DISPLAY_SNAPSHOT_KEY, CW_ENRICHMENT_CACHE_KEY } from "../home/homeCo
 import { I18n } from "../../../i18n/index.js";
 import { BUILD_LABEL } from "../../../config.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
+import { motorEntendeEs2015 } from "../../../core/player/pluginScraperRuntime.js";
 import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
 import { TraktAuthService } from "../../../data/repository/traktAuthService.js";
 import { mdbListRepository } from "../../../data/repository/mdbListRepository.js";
@@ -4354,25 +4355,20 @@ export const SettingsScreen = {
     const ligado = PluginManager.pluginsEnabled;
 
     // O scraper e baixado em runtime e NAO passa pelo Babel do build: chega no
-    // aparelho como o autor escreveu. Testar `const` responde, em uma linha e
-    // sem rede, se este motor aceita o que a maioria dos provedores usa hoje.
-    // Medido nos 4 provedores do repositorio saimuel: 3 usam ES2015, 1 e ES5.
-    let motorAceitaEs2015 = true;
-    try {
-      // eslint-disable-next-line no-new-func
-      new Function("const _teste = 1; return _teste;");
-    } catch (_) {
-      motorAceitaEs2015 = false;
-    }
-    const avisoMotor = motorAceitaEs2015
+    // aparelho como o autor escreveu. Num motor antigo ele e convertido aqui
+    // mesmo, o que custa tempo na PRIMEIRA busca — medido na C9: 1,7s para
+    // carregar o conversor mais 1,7 a 2,4s por provedor de 30-40KB, e o
+    // resultado fica em cache. Dizer isso antes evita que a espera pareca
+    // travamento.
+    const avisoMotor = motorEntendeEs2015()
       ? ""
       : `<div class="settings-group-card">
            <div class="settings-empty-state">
              <p>${escapeHtml(
                t(
-                 "plugins_engine_too_old",
+                 "plugins_engine_converts",
                  {},
-                 "This TV's browser engine is older than most providers expect. Providers written with modern JavaScript cannot run here and will simply return nothing; the app will tell you when that happens. Providers written for older engines still work."
+                 "This TV's engine is older than most providers expect, so they are converted on the TV the first time you search. Expect a wait of a few seconds per provider on that first search only — the result is kept. Very large providers are skipped and reported."
                )
              )}</p>
            </div>
