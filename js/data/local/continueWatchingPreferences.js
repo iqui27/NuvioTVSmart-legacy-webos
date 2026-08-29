@@ -84,7 +84,7 @@ export const ContinueWatchingPreferences = {
     return writeForProfile(profileId, {
       ...current,
       dismissedNextUpKeys: current.dismissedNextUpKeys.filter(
-        (key) => !key.startsWith(`${normalizedContentId}|`)
+        (key) => key !== normalizedContentId && !key.startsWith(`${normalizedContentId}|`)
       )
     });
   }

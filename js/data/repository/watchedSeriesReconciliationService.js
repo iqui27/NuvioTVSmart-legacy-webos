@@ -11,6 +11,15 @@ function isSeriesType(type = "") {
   return ["series", "tv", "anime", "show", "tvshow"].includes(normalized);
 }
 
+function isRemoteSimklSeriesMarker(item = {}, contentIds = new Set()) {
+  return (
+    String(item?.trackingProviderId || "").toLowerCase() === "simkl" &&
+    contentIds.has(String(item?.contentId || "")) &&
+    item?.season == null &&
+    item?.episode == null
+  );
+}
+
 function firstPositiveInt(values = []) {
   for (const value of values) {
     const numeric = Number(value);
@@ -202,6 +211,9 @@ export const watchedSeriesReconciliationService = {
       watchProgressRepository.getAll().catch(() => []),
       watchedItemsRepository.isWatched(normalizedContentId).catch(() => false)
     ]);
+    const hasRemoteSimklSeriesMarker = watchedItems.some((item) =>
+      isRemoteSimklSeriesMarker(item, contentIds)
+    );
 
     const watchedEpisodeKeys = new Set();
     watchedItems.forEach((item) => {
@@ -246,7 +258,11 @@ export const watchedSeriesReconciliationService = {
       return true;
     }
 
-    if (!allWatched && hasSeriesMarker) {
+    // A completed Simkl entry with no episode history is projected as a root
+    // watched marker, matching Android. It is provider state, not a local
+    // marker inferred from the episodes currently returned by the meta addon,
+    // so do not erase it merely because those episode rows are incomplete.
+    if (!allWatched && hasSeriesMarker && !hasRemoteSimklSeriesMarker) {
       await watchedItemsRepository.unmark(normalizedContentId, { rootOnly: true });
       detailWatchedEnrichmentService.invalidateCache(normalizedContentId);
       return true;

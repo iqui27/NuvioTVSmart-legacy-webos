@@ -95,7 +95,9 @@ function t(key, params = {}, fallback = key) {
 
 function getThemeAccentFallback() {
   const value = globalThis?.document
-    ? getComputedStyle(document.documentElement).getPropertyValue("--secondary-color").trim()
+    ? String(
+        getComputedStyle(document.documentElement).getPropertyValue("--secondary-color") || ""
+      ).trim()
     : "";
   return value || "#f5f5f5";
 }

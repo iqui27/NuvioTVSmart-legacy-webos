@@ -54,3 +54,38 @@ test("catalog skips malformed entries and preserves pagination count", async () 
   assert.equal(result.data.nextSkip, 15, "pagination advances by the raw entry count");
   assert.equal(result.data.hasMore, true, "raw entry count keeps pagination going");
 });
+
+test("catalog deduplicates ids while preserving the raw pagination count", async () => {
+  CatalogApi.getCatalog = async () => ({
+    metas: [
+      { id: "tt1", type: "series", name: "First" },
+      { id: "tt1", type: "series", name: "Duplicate" },
+      { id: "tt2", type: "series", name: "Second" }
+    ]
+  });
+
+  const result = await catalogRepository.getCatalog({
+    addonBaseUrl: "https://addon.example",
+    addonId: "addon",
+    addonName: "Addon",
+    catalogId: "duplicate-catalog",
+    catalogName: "Duplicate Catalog",
+    type: "series",
+    skip: 0,
+    supportsSkip: true
+  });
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(
+    result.data.items.map((item) => item.id),
+    ["tt1", "tt2"],
+    "duplicate ids keep only the first entry"
+  );
+  assert.deepEqual(
+    result.data.items.map((item) => item.name),
+    ["First", "Second"],
+    "the first entry wins when an id is repeated"
+  );
+  assert.equal(result.data.nextSkip, 3, "pagination counts duplicate raw entries");
+  assert.equal(result.data.hasMore, true);
+});

@@ -116,6 +116,7 @@ import { createAssRenderer } from "../../../core/player/assRenderer.js";
 import { SUPPORTS_CSS_VARS } from "../../../core/capabilities/cssVarsSupport.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
 import { decodeSubtitleResponseBody } from "../../../core/player/subtitleCharsetDetector.js";
+import { sanitizeSubtitleMojibake } from "../../../core/player/subtitleMojibakeSanitizer.js";
 import {
   SUBTITLE_VIRTUALIZATION_DEFAULT_ROW_EXTENT,
   SUBTITLE_VIRTUALIZATION_MIN_WINDOW,
@@ -3643,9 +3644,11 @@ export const PlayerScreen = {
 
     const rootStyle = getComputedStyle(document.documentElement);
     const focusBackground =
-      rootStyle.getPropertyValue("--player-focus-background").trim() || "#303030";
-    const focusContent = rootStyle.getPropertyValue("--player-text-primary").trim() || "#ffffff";
-    const focusRing = rootStyle.getPropertyValue("--player-focus-ring").trim() || "#ffffff";
+      String(rootStyle.getPropertyValue("--player-focus-background") || "").trim() || "#303030";
+    const focusContent =
+      String(rootStyle.getPropertyValue("--player-text-primary") || "").trim() || "#ffffff";
+    const focusRing =
+      String(rootStyle.getPropertyValue("--player-focus-ring") || "").trim() || "#ffffff";
     const isFocused = document.activeElement === target || target.classList.contains("focused");
     const background = isFocused ? focusBackground : "rgba(30, 30, 30, 0.85)";
     const color = isFocused ? focusContent : "#fff";
@@ -14238,14 +14241,14 @@ export const PlayerScreen = {
         typeof TextDecoder === "function"
           ? await decodeSubtitleResponseBody(response, { languageHint, contentType })
           : null;
-      const body = decodedBody ?? (await response.text());
+      const body = sanitizeSubtitleMojibake(decodedBody ?? (await response.text()));
       return { body, sourceUrl: original, contentType, resolvedUrl: response.url || original };
     } catch (directError) {
       if (Environment.isWebOS()) {
         try {
           const resolved = await localMediaSubtitleRepository.getExternalSubtitleText(original);
           return {
-            body: resolved.body,
+            body: sanitizeSubtitleMojibake(resolved.body),
             sourceUrl: original,
             contentType: resolved.contentType,
             resolvedUrl: resolved.resolvedUrl || original
@@ -15415,7 +15418,7 @@ export const PlayerScreen = {
             languageHint: subtitle?.lang || subtitle?.language || subtitle?.languageCode
           })
         : null;
-    const text = decodedText ?? (await response.text());
+    const text = sanitizeSubtitleMojibake(decodedText ?? (await response.text()));
     if (!isCurrentSelection()) {
       return false;
     }
@@ -20248,7 +20251,12 @@ export const PlayerScreen = {
     const lineHeight = rowHeight * total + rowGap * Math.max(0, total - 1);
     const currentLineHeight = clamp(Number(this.parentalGuideLineProgress || 0), 0, lineHeight);
     const rootStyle = getComputedStyle(document.documentElement);
-    const parentalAccent = rootStyle.getPropertyValue("--secondary-color").trim() || "#f5f5f5";
+    // String(... || "") e obrigatorio: no Chromium 38 (webOS 3) custom property
+    // nao existe e getPropertyValue devolve NULL, nao string vazia. O .trim()
+    // direto derrubava a tela — reporte do webOS 3.9, com o player ja aberto:
+    // "TypeError: Cannot read property 'trim' of null".
+    const parentalAccent =
+      String(rootStyle.getPropertyValue("--secondary-color") || "").trim() || "#f5f5f5";
     overlay.style.animationDelay = this.parentalGuideExiting ? `${containerExitDelay}ms` : "0ms";
     // webOS 3 (Chromium 38): os setProperty("--parental-*") abaixo sao no-op;
     // valem os fallbacks var(..., x) congelados no build. A excecao boa:

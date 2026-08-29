@@ -23629,3 +23629,48 @@ html.no-flex-gap .stream-route-card-badges-lazy > * {
     right: var(--tv-safe-gutter-wide, 96px);
   }
 }
+
+/* Painel de legendas no Chromium 53: itens espremidos e texto sobreposto.
+ *
+ * CAUSA RAIZ, medida na C9: cada coluna do painel e um flex column de altura
+ * fixa, e os itens ficam com o `flex-shrink: 1` que o flexbox da de graca. Como
+ * o conteudo somado passa da altura visivel, o motor ENCOLHE cada item em vez de
+ * deixar a coluna rolar — um item de 131px virava 40px. Com `overflow: visible`,
+ * o texto continua desenhado no tamanho real e invade os itens vizinhos: foi o
+ * que apareceu na TV como a lista de legendas toda embaralhada.
+ * Medido: 15 de 15 itens da lista e 10 de 10 das opcoes transbordando; com
+ * `flex-shrink: 0`, zero em ambas, e as colunas passam a rolar (o que ja estava
+ * previsto, elas tem overflow auto).
+ *
+ * A COLUNA DE ESTILO tinha um segundo defeito, independente: a linha
+ * "− rotulo +" e um grid `<botao> minmax(0,1fr) <botao>` e, sem grid, o meio
+ * recebe `flex: 1 1 0%`, que aqui resulta em largura ZERO quando os botoes ja
+ * ocupam quase toda a linha (medido: 108 / 0 / 112 px numa coluna de 274).
+ * Testado e descartado: trocar `0%` por `0px` e forcar `flex-grow` — os dois
+ * seguem dando zero. O que devolve largura e estreitar os botoes: o CSS base ja
+ * usa 58px, e so este modal os alarga para var(--player-overlay-step-width).
+ * Com a coluna em 360px o rotulo fica com 184px e "Tamanho da fonte" ocupa duas
+ * linhas em vez de tres (altura do item 127px contra 163px), sem truncar nada —
+ * a coluna do meio ainda fica com 812px, que sobra para os nomes de release.
+ */
+html.no-css-grid .player-subtitle-rail > * {
+  flex-shrink: 0;
+}
+
+html.no-css-grid .player-subtitle-overlay-grid > :nth-child(3) {
+  flex: 0 0 360px;
+  min-width: 360px;
+  max-width: 360px;
+}
+
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dialog-step {
+  flex: 0 0 58px;
+  width: 58px;
+  min-width: 58px;
+  max-width: 58px;
+}
+
+html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dialog-item-center {
+  flex: 1 1 auto;
+  min-width: 0;
+}

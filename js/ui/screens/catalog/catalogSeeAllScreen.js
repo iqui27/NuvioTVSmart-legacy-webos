@@ -7,6 +7,7 @@ import { Environment } from "../../../platform/environment.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { I18n } from "../../../i18n/index.js";
 import { filterReleasedItems } from "../../../core/util/releaseInfoUtils.js";
+import { mergeCatalogPage } from "../../../core/util/catalogPagination.js";
 import { focusWithoutAutoScroll } from "../../components/sidebarNavigation.js";
 import {
   posterItemFromNode,
@@ -333,32 +334,25 @@ export const CatalogSeeAllScreen = {
     const incoming = this.layoutPrefs?.hideUnreleasedContent
       ? filterReleasedItems(rawIncoming)
       : rawIncoming;
-    let addedCount = 0;
-    if (rawIncoming.length) {
-      const seen = new Set(this.items.map((item) => item.id));
-      incoming.forEach((item) => {
-        if (!item?.id || seen.has(item.id)) {
-          return;
-        }
-        seen.add(item.id);
-        this.items.push(item);
-        addedCount += 1;
-      });
-      // `skip + 100` assumia que toda pagina do addon tem 100 itens. Quando ela
-      // vem menor — o "IMDb Top 250" devolveu 50 — a proxima requisicao parte de
-      // um deslocamento maior do que o que foi lido e os itens do meio somem sem
-      // aviso: a lista fica com buraco e ninguem percebe. Manifesto Stremio nao
-      // declara tamanho de pagina, entao o unico numero confiavel e quanto veio.
-      // A home ja fazia assim (homeScreen.js: `skip + incomingItems.length`).
-      // O upstream (d51f350) passou a preferir o nextSkip que o addon reporta,
-      // quando ele vem coerente; o calculo por quantidade lida fica de reserva.
-      const reportedNextSkip = Number(result?.data?.nextSkip);
-      this.nextSkip =
-        Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
-          ? Math.trunc(reportedNextSkip)
-          : skip + rawIncoming.length;
-    }
-    this.hasMore = rawIncoming.length > 0;
+    // O calculo do proximo deslocamento ja foi nosso: `skip + 100` assumia que
+    // toda pagina do addon tem 100 itens, e quando ela vinha menor — o "IMDb Top
+    // 250" devolveu 50 — a requisicao seguinte partia de um ponto adiante do que
+    // foi lido, e os itens do meio sumiam sem aviso nenhum. O helper do upstream
+    // (mergeCatalogPage) chega no mesmo resultado, prefere o nextSkip reportado
+    // quando ele e coerente e ainda deduplica por type:id em vez de so id, entao
+    // a nossa versao local foi retirada em favor dele no merge do 1.0.0.
+    const merged = mergeCatalogPage(
+      this.items,
+      incoming,
+      skip,
+      rawIncoming.length,
+      result?.data?.nextSkip,
+      result?.data?.hasMore
+    );
+    const addedCount = merged.addedCount;
+    this.items = merged.items;
+    this.nextSkip = merged.nextSkip;
+    this.hasMore = merged.hasMore;
     this.loading = false;
     this.pendingRestoreFocus = true;
     this.preserveViewportOnNextRender = Boolean(preserveViewport && addedCount > 0);

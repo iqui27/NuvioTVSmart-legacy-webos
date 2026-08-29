@@ -148,7 +148,7 @@ export const TraktScrobbleService = {
   pause(context) {
     clearStartTimer();
     if (lastAction === "start" || lastAction === null) {
-      void sendScrobbleRequest("pause", context);
+      void sendScrobbleRequest("stop", context);
     }
   },
 

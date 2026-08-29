@@ -602,11 +602,15 @@ export const TmdbEntityBrowseScreen = {
 
     const shellRect = shell.getBoundingClientRect();
     const cardRect = node.getBoundingClientRect();
+    const focusedRailRect =
+      focusedRail instanceof HTMLElement ? focusedRail.getBoundingClientRect() : cardRect;
     const topPadding = 36;
     const bottomPadding = 56;
     let nextTop = shell.scrollTop;
-    if (cardRect.top < shellRect.top + topPadding) {
-      nextTop -= shellRect.top + topPadding - cardRect.top;
+    // Scroll the containing rail, not only its card. Android's bring-into-view
+    // keeps the rail heading visible when focus moves back to an upper row.
+    if (focusedRailRect.top < shellRect.top + topPadding) {
+      nextTop -= shellRect.top + topPadding - focusedRailRect.top;
     } else if (cardRect.bottom > shellRect.bottom - bottomPadding) {
       nextTop += cardRect.bottom - (shellRect.bottom - bottomPadding);
     }
