@@ -154,7 +154,13 @@ function normalizarManifesto(texto, urlManifesto) {
 const BABEL_URL = "https://unpkg.com/@babel/standalone@7/babel.min.js";
 const PREFIXO_CACHE = "pluginScraperEs5:";
 const MAX_KB_TRANSPILAR = 320;
-const MAX_ENTRADAS_CACHE = 6;
+const MAX_ENTRADAS_CACHE = 3;
+// Medido na C9: o localStorage do app ja carrega 1436KB em 50 chaves (addons,
+// progresso, perfis) e o maior bloco que aceitou gravar foi 2MB. Este cache NAO
+// pode disputar espaco com os dados do usuario — encher a cota faria o app
+// falhar ao salvar progresso, que e perda de verdade, enquanto perder o cache
+// so custa alguns segundos. Acima deste piso de uso, nao gravamos nada.
+const TETO_USO_LOCALSTORAGE_KB = 2600;
 let babelCarregando = null;
 
 export function motorEntendeEs2015() {
@@ -186,8 +192,27 @@ function lerCacheEs5(url) {
  * viraria perda silenciosa. Ao estourar, descartamos as entradas mais antigas e
  * seguimos SEM cache — transpilar de novo e lento, mas funciona.
  */
+function usoLocalStorageKB() {
+  let total = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const chave = localStorage.key(i);
+      total += (chave || "").length + (localStorage.getItem(chave) || "").length;
+    }
+  } catch (_) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Math.round(total / 1024);
+}
+
 function gravarCacheEs5(url, codigo) {
   const chave = PREFIXO_CACHE + url;
+  if (usoLocalStorageKB() + Math.round(codigo.length / 1024) > TETO_USO_LOCALSTORAGE_KB) {
+    // Segue sem cache de proposito: converter de novo custa segundos, encher a
+    // cota custaria os dados do usuario.
+    podarCacheEs5(0);
+    return false;
+  }
   const valor = JSON.stringify({ quando: agora(), codigo });
   try {
     localStorage.setItem(chave, valor);
@@ -219,9 +244,9 @@ function listarChavesCacheEs5() {
   return chaves;
 }
 
-function podarCacheEs5() {
+function podarCacheEs5(limite = MAX_ENTRADAS_CACHE) {
   const chaves = listarChavesCacheEs5();
-  if (chaves.length <= MAX_ENTRADAS_CACHE) {
+  if (chaves.length <= limite) {
     return;
   }
   const comIdade = chaves
@@ -235,7 +260,7 @@ function podarCacheEs5() {
       return { chave, quando };
     })
     .sort((a, b) => a.quando - b.quando);
-  comIdade.slice(0, comIdade.length - MAX_ENTRADAS_CACHE).forEach(({ chave }) => {
+  comIdade.slice(0, comIdade.length - limite).forEach(({ chave }) => {
     try {
       localStorage.removeItem(chave);
     } catch (_) {
