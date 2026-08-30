@@ -616,10 +616,11 @@ async function batchEnrichProgressItems(items) {
 }
 
 class WatchProgressRepository {
-  async saveProgress(progress) {
+  async saveProgress(progress, options = {}) {
     if (isCloudProgressItem(progress)) {
       return;
     }
+    const syncRemote = options === false || options?.syncRemote === false ? false : true;
     const pid = activeProfileId();
     if (isSeriesType(progress?.contentType)) {
       ContinueWatchingPreferences.removeDismissedNextUpKeysForContent(progress?.contentId, pid);
@@ -633,7 +634,9 @@ class WatchProgressRepository {
       pid
     );
     invalidateContinueWatchingDisplaySnapshot();
-    queueWatchProgressCloudSync();
+    if (syncRemote) {
+      queueWatchProgressCloudSync(pid);
+    }
   }
 
   async getProgressByContentId(contentId) {
@@ -670,7 +673,7 @@ class WatchProgressRepository {
     WatchProgressStore.remove(contentId, videoId, pid);
     await deleteWatchProgressFromCloud(removedItems, pid);
     invalidateContinueWatchingDisplaySnapshot();
-    queueWatchProgressCloudSync();
+    queueWatchProgressCloudSync(pid);
   }
 
   async getRecent(limit = 30, { enrichMetadata = true } = {}) {
