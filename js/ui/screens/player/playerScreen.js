@@ -1,5 +1,9 @@
 import { PlayerController } from "../../../core/player/playerController.js";
 import {
+  detectarEntradaDolbyVision,
+  DOLBY_VISION_INCOMPATIVEL
+} from "../../../core/player/dolbyVisionProbe.js";
+import {
   audioTrackLabelConflictsWithCodec,
   formatAudioCodecName,
   getAuthoritativeAudioCodecValue,
@@ -11761,6 +11765,34 @@ export const PlayerScreen = {
         reason: "stream-url-expired"
       });
       return;
+    }
+
+    // Antes de entregar a URL ao pipeline: um MP4 cujo sample entry e `dvhe`
+    // devolve MEDIA_ERR_DECODE nesta TV, e nem `canPlayType` nem o nome do
+    // release denunciam isso (os dois arquivos medidos trazem "DoVi" no nome, e
+    // canPlayType responde "probably" para dvhe.05.06). Ler 4KB custa ~1,4s e
+    // troca um erro cru por uma frase que diz o que fazer. So bloqueia com
+    // evidencia: sem `moov` no inicio do arquivo o probe devolve "desconhecido"
+    // e o playback segue normal.
+    if (Environment.isWebOS()) {
+      const vereditoDolbyVision = await detectarEntradaDolbyVision(normalizedStreamUrl);
+      if (!this.isActiveMountToken(mountToken)) {
+        return;
+      }
+      if (vereditoDolbyVision === DOLBY_VISION_INCOMPATIVEL) {
+        const aviso = t(
+          "player_error_dolby_vision_sample_entry",
+          {},
+          "This file is packaged as Dolby Vision in a way this TV's browser cannot decode. Another source of the same title usually plays — look for one labelled HDR10 or SDR, or a different release."
+        );
+        this.markPlaybackSourceFailed(normalizedStreamUrl, sourceCandidate);
+        this.showStartupError(aviso, {
+          streamCandidate: sourceCandidate,
+          playbackUrl: normalizedStreamUrl,
+          reason: "dolby-vision-sample-entry"
+        });
+        return;
+      }
     }
 
     const selectedIndex = this.streamCandidates.findIndex(
