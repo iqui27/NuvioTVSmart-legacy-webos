@@ -27,6 +27,8 @@ import { WATCH_PROGRESS_UNKNOWN_DURATION_PERCENT } from "../../domain/model/watc
 import { parseAspectRatio } from "./playerAspect.js";
 
 const MIN_PROGRESS_SYNC_DURATION_MS = 1000;
+const WATCH_PROGRESS_SAVE_INTERVAL_MS = 90_000;
+const WATCH_PROGRESS_SAVE_THRESHOLD_MS = 5_000;
 const WEBOS_AUDIO_TRACK_SELECTION_TIMEOUT_MS = 4000;
 const AVPLAY_BUFFER_FOR_PLAY_SECONDS = 5;
 const AVPLAY_BUFFER_FOR_RESUME_SECONDS = 4;
@@ -147,6 +149,8 @@ export const PlayerController = {
   currentEpisode: null,
   currentCloudSessionToken: null,
   progressSaveTimer: null,
+  progressSeekSyncTimer: null,
+  lastSavedProgressPositionMs: 0,
   lastProgressPushAt: 0,
   lifecycleBound: false,
   lifecycleFlushHandler: null,
@@ -2880,10 +2884,15 @@ export const PlayerController = {
         return false;
       }
       this.video.currentTime = seconds;
+      this.scheduleProgressSyncAfterSeek();
       return true;
     }
 
-    return this.seekAvPlayTo(Math.max(0, Math.floor(seconds * 1000)));
+    const didSeek = this.seekAvPlayTo(Math.max(0, Math.floor(seconds * 1000)));
+    if (didSeek) {
+      this.scheduleProgressSyncAfterSeek();
+    }
+    return didSeek;
   },
 
   isPlaybackEnded() {
@@ -4499,6 +4508,7 @@ export const PlayerController = {
             }
           }
           this.isPlaying = false;
+          this.stopProgressSaving();
           console.warn(warningLabel, error);
           return null;
         });
@@ -4508,6 +4518,7 @@ export const PlayerController = {
           return;
         }
         this.isPlaying = false;
+        this.stopProgressSaving();
         console.warn(warningLabel, error);
       });
   },
@@ -4564,6 +4575,8 @@ export const PlayerController = {
 
     this.video.addEventListener("ended", () => {
       this.isPlaying = false;
+      this.stopProgressSaving();
+      this.cancelProgressSyncAfterSeek();
       this.syncWebOsPlaybackKeepAwake();
       const context = this.createProgressContext();
       const durationMs = Math.floor(this.getDurationSeconds() * 1000);
@@ -4575,6 +4588,8 @@ export const PlayerController = {
 
     this.video.addEventListener("error", (e) => {
       this.isPlaying = false;
+      this.stopProgressSaving();
+      this.cancelProgressSyncAfterSeek();
       this.syncWebOsPlaybackKeepAwake();
       const customErrorCode = Number(e?.detail?.mediaErrorCode || 0);
       const nativeErrorCode = Number(this.video?.error?.code || 0);
@@ -4593,11 +4608,20 @@ export const PlayerController = {
       if (event?.type === "canplay" || event?.type === "playing") {
         this.reapplyWebOsPlaybackRate().catch(() => {});
       }
+      if (event?.type === "playing" && this.playbackSessionActive && this.isPlaying) {
+        this.startProgressSaving();
+      }
     };
     this.video.addEventListener("loadedmetadata", syncNativeMediaId);
     this.video.addEventListener("loadeddata", syncNativeMediaId);
     this.video.addEventListener("canplay", syncNativeMediaId);
     this.video.addEventListener("playing", syncNativeMediaId);
+    this.video.addEventListener("waiting", () => {
+      // Android takes a local checkpoint when playback enters buffering, then
+      // waits for the next real playing event before resuming the periodic job.
+      this.saveProgressIfNeeded();
+      this.stopProgressSaving();
+    });
     this.video.addEventListener("seeked", () => {
       this.reapplyWebOsPlaybackRate().catch(() => {});
     });
@@ -4659,6 +4683,74 @@ export const PlayerController = {
     }
   },
 
+  startProgressSaving() {
+    this.stopProgressSaving();
+    this.progressSaveTimer = setInterval(() => {
+      this.saveProgressIfNeeded();
+    }, WATCH_PROGRESS_SAVE_INTERVAL_MS);
+  },
+
+  stopProgressSaving() {
+    if (this.progressSaveTimer !== null) {
+      clearInterval(this.progressSaveTimer);
+      this.progressSaveTimer = null;
+    }
+  },
+
+  saveProgressIfNeeded() {
+    if (!this.playbackSessionActive || !this.isPlaying) {
+      return false;
+    }
+
+    const positionMs = Math.floor(this.getCurrentTimeSeconds() * 1000);
+    const durationMs = Math.floor(this.getDurationSeconds() * 1000);
+    if (!Number.isFinite(positionMs) || positionMs <= 0) {
+      return false;
+    }
+    if (isShortPlaceholderDuration(durationMs)) {
+      return false;
+    }
+    if (
+      Math.abs(positionMs - Number(this.lastSavedProgressPositionMs || 0)) <
+      WATCH_PROGRESS_SAVE_THRESHOLD_MS
+    ) {
+      return false;
+    }
+
+    this.lastSavedProgressPositionMs = positionMs;
+    const context = this.createProgressContext();
+    void this.flushProgress(positionMs, durationMs, false, context, {
+      allowCloudSync: false,
+      syncRemote: false
+    }).catch((error) => {
+      console.warn("Watch progress local checkpoint failed", error);
+    });
+    return true;
+  },
+
+  cancelProgressSyncAfterSeek() {
+    if (this.progressSeekSyncTimer !== null) {
+      clearTimeout(this.progressSeekSyncTimer);
+      this.progressSeekSyncTimer = null;
+    }
+  },
+
+  scheduleProgressSyncAfterSeek() {
+    this.cancelProgressSyncAfterSeek();
+    if (!this.playbackSessionActive) {
+      return;
+    }
+    this.progressSeekSyncTimer = setTimeout(() => {
+      this.progressSeekSyncTimer = null;
+      if (!this.playbackSessionActive) {
+        return;
+      }
+      void this.flushCurrentProgress({ forceCloudSync: true }).catch((error) => {
+        console.warn("Watch progress seek sync failed", error);
+      });
+    }, 700);
+  },
+
   async play(
     url,
     {
@@ -4683,6 +4775,8 @@ export const PlayerController = {
     const requestedUrl = String(url || "").trim();
     const playToken = Number(this.playRequestToken || 0) + 1;
     this.playRequestToken = playToken;
+    this.stopProgressSaving();
+    this.cancelProgressSyncAfterSeek();
 
     await this.flushCurrentProgress({ allowCloudSync: false });
     if (!this.isPlaybackRequestActive(playToken)) {
@@ -4694,6 +4788,7 @@ export const PlayerController = {
     // matching Android TV's lastKnownDuration contract.
     this.lastKnownDurationSeconds = 0;
     this.lastProgressSnapshot = null;
+    this.lastSavedProgressPositionMs = 0;
     this.playbackSessionActive = true;
     this.applyStartupAudioGateToVideo();
 
@@ -4932,25 +5027,14 @@ export const PlayerController = {
 
     this.isPlaying = true;
     this.syncWebOsPlaybackKeepAwake();
-
-    if (this.progressSaveTimer) {
-      clearInterval(this.progressSaveTimer);
-    }
-
-    this.progressSaveTimer = setInterval(() => {
-      const context = this.createProgressContext();
-      this.flushProgress(
-        Math.floor(this.getCurrentTimeSeconds() * 1000),
-        Math.floor(this.getDurationSeconds() * 1000),
-        false,
-        context
-      );
-    }, 5000);
+    this.startProgressSaving();
   },
 
   pause() {
     if (!this.video) return;
 
+    this.stopProgressSaving();
+    this.cancelProgressSyncAfterSeek();
     this.flushCurrentProgress({ forceCloudSync: true });
 
     if (this.isUsingAvPlay()) {
@@ -4978,7 +5062,11 @@ export const PlayerController = {
   resume() {
     if (!this.video) return;
 
-    this.flushCurrentProgress({ forceCloudSync: false });
+    this.cancelProgressSyncAfterSeek();
+    this.flushCurrentProgress({ allowCloudSync: false });
+    if (this.playbackSessionActive) {
+      this.startProgressSaving();
+    }
     if (this.startupAudioGateActive) {
       this.applyStartupAudioGateToVideo();
       return;
@@ -5031,6 +5119,8 @@ export const PlayerController = {
   stop({ forceCloudSync = true, allowCloudSync = true, flushProgress = true } = {}) {
     if (!this.video) return;
 
+    this.stopProgressSaving();
+    this.cancelProgressSyncAfterSeek();
     this.playRequestToken = Number(this.playRequestToken || 0) + 1;
     this.setStartupPresentationAudioMuted(false);
     const flushPromise = flushProgress
@@ -5038,10 +5128,6 @@ export const PlayerController = {
       : Promise.resolve(false);
     if (!this.playbackSessionActive) {
       this.syncWebOsPlaybackKeepAwake();
-      if (this.progressSaveTimer) {
-        clearInterval(this.progressSaveTimer);
-        this.progressSaveTimer = null;
-      }
       return flushPromise;
     }
     this.playbackSessionActive = false;
@@ -5089,15 +5175,11 @@ export const PlayerController = {
     this.currentPlaybackHeaders = {};
     this.currentPlaybackMediaSourceType = null;
     this.lastKnownDurationSeconds = 0;
+    this.lastSavedProgressPositionMs = 0;
     this.playbackEngine = "none";
     this.lastPlaybackErrorCode = 0;
     this.clearPlaybackEngineAttempts();
     this.avplayFallbackAttempts.clear();
-
-    if (this.progressSaveTimer) {
-      clearInterval(this.progressSaveTimer);
-      this.progressSaveTimer = null;
-    }
 
     return flushPromise;
   },
@@ -5187,7 +5269,8 @@ export const PlayerController = {
         : Number(snapshot?.durationMs || 0);
 
     await this.flushProgress(positionMs, durationMs, false, context, {
-      allowCloudSync: allowCloudSync && !forceCloudSync
+      allowCloudSync: allowCloudSync && !forceCloudSync,
+      syncRemote: forceCloudSync ? true : allowCloudSync
     });
     if (forceCloudSync && String(context?.itemType || "").toLowerCase() !== "cloud") {
       await this.pushProgressIfDue(true);
@@ -5238,7 +5321,7 @@ export const PlayerController = {
     durationMs,
     clear = false,
     context = null,
-    { allowCloudSync = true } = {}
+    { allowCloudSync = true, syncRemote = allowCloudSync } = {}
   ) {
     const active = context || this.createProgressContext();
     if (!active?.itemId) {
@@ -5285,24 +5368,27 @@ export const PlayerController = {
 
     if (clear || isCompleted) {
       if (isCompleted) {
-        await watchProgressRepository.saveProgress({
-          contentId: active.itemId,
-          contentType: active.itemType || "movie",
-          videoId: active.videoId || null,
-          season: active.season,
-          episode: active.episode,
-          title: active.title || null,
-          poster: active.poster || null,
-          background: active.background || null,
-          logo: active.logo || null,
-          episodeTitle: active.episodeTitle || null,
-          positionMs: hasFiniteDuration
-            ? Math.max(0, Math.trunc(safeDuration))
-            : Math.max(0, Math.trunc(safePosition)),
-          durationMs: hasFiniteDuration
-            ? Math.max(0, Math.trunc(safeDuration))
-            : Math.max(0, Math.trunc(safePosition))
-        });
+        await watchProgressRepository.saveProgress(
+          {
+            contentId: active.itemId,
+            contentType: active.itemType || "movie",
+            videoId: active.videoId || null,
+            season: active.season,
+            episode: active.episode,
+            title: active.title || null,
+            poster: active.poster || null,
+            background: active.background || null,
+            logo: active.logo || null,
+            episodeTitle: active.episodeTitle || null,
+            positionMs: hasFiniteDuration
+              ? Math.max(0, Math.trunc(safeDuration))
+              : Math.max(0, Math.trunc(safePosition)),
+            durationMs: hasFiniteDuration
+              ? Math.max(0, Math.trunc(safeDuration))
+              : Math.max(0, Math.trunc(safePosition))
+          },
+          { syncRemote }
+        );
         if (watchedSeriesReconciliationService.isSeriesType(active.itemType)) {
           void watchedSeriesReconciliationService
             .reconcile(active.itemId, active.itemType, {
@@ -5329,24 +5415,27 @@ export const PlayerController = {
       return false;
     }
 
-    await watchProgressRepository.saveProgress({
-      contentId: active.itemId,
-      contentType: active.itemType || "movie",
-      videoId: active.videoId || null,
-      season: active.season,
-      episode: active.episode,
-      title: active.title || null,
-      poster: active.poster || null,
-      background: active.background || null,
-      logo: active.logo || null,
-      episodeTitle: active.episodeTitle || null,
-      // Persist the stream identity so Continue Watching can resume the same
-      // source instead of reopening the stream picker.
-      streamIdentity: active.streamIdentity || null,
-      positionMs: Math.max(0, Math.trunc(safePosition)),
-      durationMs: hasFiniteDuration ? Math.max(0, Math.trunc(safeDuration)) : 0,
-      progressPercent: hasFiniteDuration ? null : WATCH_PROGRESS_UNKNOWN_DURATION_PERCENT
-    });
+    await watchProgressRepository.saveProgress(
+      {
+        contentId: active.itemId,
+        contentType: active.itemType || "movie",
+        videoId: active.videoId || null,
+        season: active.season,
+        episode: active.episode,
+        title: active.title || null,
+        poster: active.poster || null,
+        background: active.background || null,
+        logo: active.logo || null,
+        episodeTitle: active.episodeTitle || null,
+        // Persist the stream identity so Continue Watching can resume the same
+        // source instead of reopening the stream picker.
+        streamIdentity: active.streamIdentity || null,
+        positionMs: Math.max(0, Math.trunc(safePosition)),
+        durationMs: hasFiniteDuration ? Math.max(0, Math.trunc(safeDuration)) : 0,
+        progressPercent: hasFiniteDuration ? null : WATCH_PROGRESS_UNKNOWN_DURATION_PERCENT
+      },
+      { syncRemote }
+    );
     if (!allowCloudSync) {
       return true;
     }

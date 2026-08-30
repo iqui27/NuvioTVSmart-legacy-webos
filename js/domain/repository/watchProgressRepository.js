@@ -1,5 +1,5 @@
 export const WatchProgressRepositoryContract = {
-  saveProgress: "saveProgress(progress)",
+  saveProgress: "saveProgress(progress, options)",
   getProgressByContentId: "getProgressByContentId(contentId)",
   getResumeByContentId: "getResumeByContentId(contentId, target)",
   getResumeByContentIds: "getResumeByContentIds(contentIds, target)",

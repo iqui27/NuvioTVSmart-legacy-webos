@@ -995,6 +995,22 @@ function isTextSubtitleTrack(track) {
   );
 }
 
+function findTextSubtitleTrack(metadata, trackNumber, trackOrdinal) {
+  var normalizedTrackNumber = Math.trunc(Number(trackNumber));
+  if (Number.isFinite(normalizedTrackNumber) && normalizedTrackNumber > 0) {
+    var exactTrack = metadata.tracks.find(function (entry) {
+      return entry.number === normalizedTrackNumber && isTextSubtitleTrack(entry);
+    });
+    if (exactTrack) return exactTrack;
+  }
+
+  var normalizedTrackOrdinal = Math.trunc(Number(trackOrdinal));
+  if (!Number.isFinite(normalizedTrackOrdinal) || normalizedTrackOrdinal < 0) {
+    return null;
+  }
+  return metadata.tracks.filter(isTextSubtitleTrack)[normalizedTrackOrdinal] || null;
+}
+
 function isAssSubtitleCodec(value) {
   var text = String(value || "").trim();
   if (!text) return false;
@@ -1812,15 +1828,14 @@ async function buildWindow(mediaUrl, trackNumber, startSeconds, endSeconds, requ
 async function buildTextWindow(
   mediaUrl,
   trackNumber,
+  trackOrdinal,
   startSeconds,
   endSeconds,
   includeAssBody,
   requestContext
 ) {
   var metadata = await loadMetadata(mediaUrl);
-  var track = metadata.tracks.find(function (entry) {
-    return entry.number === trackNumber && isTextSubtitleTrack(entry);
-  });
+  var track = findTextSubtitleTrack(metadata, trackNumber, trackOrdinal);
   if (!track) {
     throw bitmapSubtitleError(
       "TRACK_NOT_FOUND",
@@ -1829,14 +1844,15 @@ async function buildTextWindow(
   }
   var startMs = Math.max(0, Math.floor(startSeconds * 1000));
   var endMs = Math.max(startMs + 1000, Math.floor(endSeconds * 1000));
-  var positions = selectClusterPositions(metadata, trackNumber, startMs, endMs);
+  var resolvedTrackNumber = track.number;
+  var positions = selectClusterPositions(metadata, resolvedTrackNumber, startMs, endMs);
   var loadedFrames = await loadClusterFrames(mediaUrl, metadata, track, positions, requestContext);
   var frames = selectTextFramesInRange(loadedFrames, startMs, endMs);
   var payload = buildTextSubtitleWindowPayload(track, frames, startMs, endMs, {
     includeAssBody: includeAssBody
   });
   return Object.assign(payload, {
-    trackNumber: trackNumber,
+    trackNumber: resolvedTrackNumber,
     codecId: track.codecId || "",
     language: track.language || "",
     name: track.name || "",
@@ -1849,23 +1865,34 @@ async function buildTextWindow(
 async function getEmbeddedTextSubtitleWindow(options) {
   var mediaUrl = normalizeMediaUrl(options && options.url);
   var trackNumber = Math.trunc(Number(options && options.trackNumber));
+  var trackOrdinal = Math.trunc(Number(options && options.trackOrdinal));
   var startSeconds = Math.max(0, Number(options && options.startSeconds) || 0);
   var includeAssBody = Boolean(options && options.includeAssBody);
   var requestedEnd = Number(options && options.endSeconds);
   var endSeconds = Number.isFinite(requestedEnd)
     ? Math.min(startSeconds + 180, Math.max(startSeconds + 1, requestedEnd))
     : startSeconds + 120;
-  if (!Number.isFinite(trackNumber) || trackNumber <= 0) {
-    throw bitmapSubtitleError("INVALID_TRACK", "Embedded text subtitle track number is invalid");
+  if (
+    (!Number.isFinite(trackNumber) || trackNumber <= 0) &&
+    (!Number.isFinite(trackOrdinal) || trackOrdinal < 0)
+  ) {
+    throw bitmapSubtitleError(
+      "INVALID_TRACK",
+      "Embedded text subtitle track number or ordinal is invalid"
+    );
   }
   var normalizedWindow = normalizeWindowRange(startSeconds, endSeconds);
   var bucketStart = normalizedWindow.startSeconds;
   var bucketEnd = normalizedWindow.endSeconds;
-  var activeKey = mediaUrl + "::" + trackNumber;
+  var trackKey =
+    Number.isFinite(trackNumber) && trackNumber > 0
+      ? "number:" + trackNumber
+      : "ordinal:" + trackOrdinal;
+  var activeKey = mediaUrl + "::" + trackKey;
   var cacheKey =
     mediaUrl +
     "::" +
-    trackNumber +
+    trackKey +
     "::" +
     bucketStart +
     "::" +
@@ -1884,6 +1911,7 @@ async function getEmbeddedTextSubtitleWindow(options) {
   var request = buildTextWindow(
     mediaUrl,
     trackNumber,
+    trackOrdinal,
     bucketStart,
     bucketEnd,
     includeAssBody,

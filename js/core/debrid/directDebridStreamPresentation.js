@@ -1017,36 +1017,7 @@ export const DebridStreamPresentation = {
     });
   },
 
-  sortForDisplay(streams = [], settings = DebridSettingsStore.get()) {
-    if (!settings.enabled || !DebridProviders.preferredResolverService(settings)) {
-      return streams;
-    }
-    const effective = effectiveSettings(settings);
-    if (!effective.sortCriteria.length) {
-      return streams;
-    }
-    const managed = [];
-    const managedPositions = new Set();
-    (streams || []).forEach((stream, index) => {
-      if (!isManagedDebridStream(stream)) {
-        return;
-      }
-      managedPositions.add(index);
-      managed.push({ stream, fact: facts(stream) });
-    });
-    if (managed.length <= 1) {
-      return streams;
-    }
-    managed.sort((left, right) => compareStreams(left, right, effective));
-    let managedIndex = 0;
-    return (streams || []).map((stream, index) => {
-      if (!managedPositions.has(index)) {
-        return stream;
-      }
-      return managed[managedIndex++]?.stream || stream;
-    });
-  },
-
+  isDirectDebrid,
   isManagedDebridStream,
   needsLocalDebridResolve
 };

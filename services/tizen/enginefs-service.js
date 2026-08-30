@@ -96,9 +96,9 @@ function startEngineFsRuntime() {
     expectedBaseUrl: "http://127.0.0.1:" + process.env.PORT
   });
   require("./runtime/media-http.cjs");
-  // AVPlay can expose a tx3g track without rendering it. Keep the fallback
-  // extractor beside the existing runtime so Tizen 4+ devices with the
-  // packaged web service can render the same timed text through the app HTML
+  // AVPlay can expose text tracks without rendering them. Keep the fallback
+  // extractors beside the existing runtime so Tizen 4+ devices with the
+  // packaged web service can render supported timed text through the app HTML
   // overlay. Devices that cannot start the service retain native fallback.
   require("./runtime/tx3g-subtitle-service.cjs").start();
 }

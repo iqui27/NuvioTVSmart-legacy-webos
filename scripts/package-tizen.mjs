@@ -238,6 +238,16 @@ async function stageTizenEngineFsService() {
       { recursive: true }
     )
   ]);
+  // The source runtime keeps a small alias so it can be tested in-place. A
+  // Tizen package must contain the actual parser because the webOS source tree
+  // is not part of the WGT.
+  await cp(
+    path.join(rootDir, "services", "webos", "src", "bitmapSubtitles.js"),
+    path.join(
+      stagingDir,
+      `${tizenEngineFsRuntimeDirRelativePath}/embedded-text-subtitle-parser.cjs`
+    )
+  );
 }
 
 async function copyDistFolder(folderName) {
@@ -463,7 +473,8 @@ async function assertSignedTizenPackage(outputPath, { requireEngineFsService = f
       tizenEngineFsServiceRelativePath,
       `${tizenEngineFsRuntimeDirRelativePath}/media-http.cjs`,
       `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-parser.cjs`,
-      `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-service.cjs`
+      `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-service.cjs`,
+      `${tizenEngineFsRuntimeDirRelativePath}/embedded-text-subtitle-parser.cjs`
     ];
     const missingServiceEntry = requiredServiceEntries.find((fileName) => !zip.file(fileName));
     if (missingServiceEntry) {

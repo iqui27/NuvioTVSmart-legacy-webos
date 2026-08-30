@@ -7,10 +7,15 @@ import { watchProgressRepository } from "../../../data/repository/watchProgressR
 import { isWatchProgressInProgress } from "../../../domain/model/watchProgress.js";
 import { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
 import { StreamPreferencesStore } from "../../../data/local/streamPreferencesStore.js";
+import { PluginManager } from "../../../core/player/pluginManager.js";
 import {
   selectAutoPlayStream,
   isAutoPlayEffectivelyEnabled
 } from "../../../core/streams/streamAutoPlaySelector.js";
+import {
+  orderSourceNames,
+  orderStreamsByAddonOrder
+} from "../../../core/streams/streamOrdering.js";
 import { buildStreamResumeIdentity } from "../../../core/streams/streamResumeIdentity.js";
 import { DirectDebridResolver } from "../../../core/debrid/directDebridResolver.js";
 import {
@@ -671,70 +676,43 @@ function resolveStreamBadgePlacement(badgeSettings = null) {
 }
 
 function getOrderedFilterNames(sourceChips = [], streams = []) {
-  const ordered = [];
-  const sortedChips = (sourceChips || [])
-    .slice()
-    .sort(
-      (left, right) =>
-        Number(left?.orderIndex ?? Number.MAX_SAFE_INTEGER) -
-        Number(right?.orderIndex ?? Number.MAX_SAFE_INTEGER)
-    );
-  sortedChips.forEach((chip) => {
-    if (chip?.name && !ordered.includes(chip.name)) {
-      ordered.push(chip.name);
-    }
+  return orderSourceNames(streams, sourceChips, {
+    isDirectDebrid: (stream) => DebridStreamPresentation.isDirectDebrid(stream)
   });
-  const sortedStreams = (streams || [])
-    .map((stream, index) => ({ stream, index }))
-    .sort((left, right) => {
-      const leftOrder = Number(left.stream?.addonOrderIndex ?? Number.MAX_SAFE_INTEGER);
-      const rightOrder = Number(right.stream?.addonOrderIndex ?? Number.MAX_SAFE_INTEGER);
-      if (leftOrder !== rightOrder) {
-        return leftOrder - rightOrder;
-      }
-      return left.index - right.index;
-    })
-    .map((entry) => entry.stream);
-  sortedStreams.forEach((stream) => {
-    const addonName = String(stream?.addonName || "").trim();
-    if (addonName && !ordered.includes(addonName)) {
-      ordered.push(addonName);
-    }
-  });
-  return ordered;
 }
 
 function sortStreamsByAddonOrder(streams = [], sourceChips = []) {
-  const order = new Map();
-  (sourceChips || []).forEach((chip, index) => {
-    const name = String(chip?.name || "").trim();
-    if (name && !order.has(name)) {
-      order.set(name, index);
-    }
-  });
-  return (streams || [])
-    .map((stream, index) => ({ stream, index }))
-    .sort((left, right) => {
-      // MP4 first, above the addon grouping. This TV outputs Dolby Vision only
-      // from an MP4 container — the same release in MKV plays as its HDR10 base
-      // layer — so the container decides more than the addon does.
-      const leftMp4 = streamIsMp4Container(left.stream) ? 0 : 1;
-      const rightMp4 = streamIsMp4Container(right.stream) ? 0 : 1;
-      if (leftMp4 !== rightMp4) {
-        return leftMp4 - rightMp4;
-      }
-      const leftOrder = order.has(left.stream?.addonName)
-        ? order.get(left.stream.addonName)
-        : Number(left.stream?.addonOrderIndex ?? Number.MAX_SAFE_INTEGER);
-      const rightOrder = order.has(right.stream?.addonName)
-        ? order.get(right.stream.addonName)
-        : Number(right.stream?.addonOrderIndex ?? Number.MAX_SAFE_INTEGER);
-      if (leftOrder !== rightOrder) {
-        return leftOrder - rightOrder;
-      }
-      return left.index - right.index;
+  return priorizarMp4(
+    orderStreamsByAddonOrder(streams, sourceChips, {
+      isDirectDebrid: (stream) => DebridStreamPresentation.isDirectDebrid(stream)
     })
-    .map((entry) => entry.stream);
+  );
+}
+
+/**
+ * MP4 primeiro, acima do agrupamento por addon.
+ *
+ * DIVERGENCIA DELIBERADA do upstream 1.0.1, que alinhou a ordenacao com o
+ * Android TV e removeu este criterio. Ele existe por medicao no aparelho: esta
+ * TV so entrega Dolby Vision a partir de um container MP4 — o mesmo release em
+ * MKV toca como a camada base HDR10. Duas versoes do mesmo titulo com metadados
+ * DV identicos se comportaram assim na OLED65C9.
+ *
+ * Aplicado DEPOIS da ordenacao deles e de forma estavel, entao a ordem por
+ * addon que o upstream define e preservada dentro de cada grupo — MP4 apenas
+ * sobe em bloco.
+ */
+function priorizarMp4(streams = []) {
+  const comIndice = (streams || []).map((stream, index) => ({ stream, index }));
+  comIndice.sort((left, right) => {
+    const leftMp4 = streamIsMp4Container(left.stream) ? 0 : 1;
+    const rightMp4 = streamIsMp4Container(right.stream) ? 0 : 1;
+    if (leftMp4 !== rightMp4) {
+      return leftMp4 - rightMp4;
+    }
+    return left.index - right.index;
+  });
+  return comIndice.map((entry) => entry.stream);
 }
 
 export const StreamScreen = {
@@ -1587,6 +1565,14 @@ export const StreamScreen = {
         .sort((left, right) => Number(left.orderIndex || 0) - Number(right.orderIndex || 0));
     };
 
+    if (PluginManager.pluginsEnabled) {
+      PluginManager.listPluginSources()
+        .filter((source) => source?.enabled !== false)
+        .forEach((source) => {
+          upsertSourceChip({ name: source.name, orderIndex: Number.MAX_SAFE_INTEGER }, "loading");
+        });
+    }
+
     const markSuccessfulSources = (names = []) => {
       if (!Array.isArray(names) || !names.length) {
         return;
@@ -1655,7 +1641,6 @@ export const StreamScreen = {
         return;
       }
       this.streams = mergeStreamItems(this.streams, chunkStreams);
-      this.scheduleDebridPreparation();
       markSuccessfulSources(
         groups.map((group) => ({
           name: group?.addonName || "",
@@ -1663,11 +1648,16 @@ export const StreamScreen = {
           orderIndex: group?.addonOrderIndex
         }))
       );
+      this.streams = sortStreamsByAddonOrder(this.streams, this.sourceChips);
+      this.scheduleDebridPreparation();
       if (this.streams.length && this.focusState?.zone !== "card") {
         this.focusState = { zone: "card", row: 0, action: "play" };
       }
       this.requestRender({ delayMs: 120 });
       this.maybeAutoResumeStream();
+      // Keep Android's timeout semantics: instant/bounded auto-play may select
+      // from the streams available when its wait window expires. The list
+      // itself is already source-ordered by sortStreamsByAddonOrder().
       this.maybeAutoPlayStream();
     };
 
@@ -1737,8 +1727,9 @@ export const StreamScreen = {
         }
         this.streams = mergeStreamItems(this.streams, missingStreams);
       }
-      this.scheduleDebridPreparation();
       markSuccessfulSources(this.streams.map((stream) => stream.addonName));
+      this.streams = sortStreamsByAddonOrder(this.streams, this.sourceChips);
+      this.scheduleDebridPreparation();
       if (this.streams.length && showAddonLogo) {
         await preloadAddonLogoImages(this.streams, this.addonLogoLookup);
       }
@@ -2037,7 +2028,7 @@ export const StreamScreen = {
     const orderedStreams = sortStreamsByAddonOrder(this.streams, this.sourceChips);
     const result =
       filter === "all"
-        ? DebridStreamPresentation.sortForDisplay(orderedStreams, DebridSettingsStore.get())
+        ? orderedStreams
         : orderedStreams.filter((stream) => stream.addonName === filter);
     this._filteredStreamsCache = {
       streams: this.streams,
