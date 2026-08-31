@@ -329,6 +329,52 @@ function buildLocalPayload(profileId = null) {
   });
 }
 
+/**
+ * Itens remotos que o local ainda conhece, na ordem remota, seguidos dos itens
+ * locais que o remoto ainda nao conhece, na ordem local. `order` e reindexado
+ * no fim para que a saida seja comparavel com a de buildLocalPayload().
+ *
+ * Os dois filtros importam e sao simetricos ao que o ramo legado abaixo ja faz
+ * com `uniqueKnownKeys`: sem o de baixo perdem-se os catalogos novos, sem o de
+ * cima ressuscitam catalogos de addons que o usuario ja removeu (medido: 43
+ * remotos + 54 locais davam 65 itens, e a assinatura continuava sem bater).
+ */
+function mergeRemoteItemsWithLocal(rawItems = [], localPayload = {}) {
+  const localItems = Array.isArray(localPayload.items) ? localPayload.items : [];
+  const localKeys = new Set();
+  localItems.forEach((item) => {
+    const key = syncItemKey(item);
+    if (key) {
+      localKeys.add(key);
+    }
+  });
+
+  const seen = new Set();
+  const merged = [];
+  (rawItems || [])
+    .map((item, index) => normalizeSyncItem(item, index))
+    .filter(itemHasIdentity)
+    .sort((left, right) => left.order - right.order)
+    .forEach((item) => {
+      const key = syncItemKey(item);
+      if (!key || seen.has(key) || !localKeys.has(key)) {
+        return;
+      }
+      seen.add(key);
+      merged.push(item);
+    });
+  localItems.forEach((item) => {
+    const key = syncItemKey(item);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(normalizeSyncItem(item, merged.length));
+  });
+
+  return merged.map((item, index) => ({ ...item, order: index }));
+}
+
 function decodePayload(settingsJson = {}, localPayload = {}) {
   if (!isPlainObject(settingsJson)) {
     return null;
@@ -349,10 +395,19 @@ function decodePayload(settingsJson = {}, localPayload = {}) {
       )
         ? Boolean(settingsJson.hide_catalog_underline)
         : undefined,
-      items: rawItems
-        .map((item, index) => normalizeSyncItem(item, index))
-        .filter(itemHasIdentity)
-        .sort((left, right) => left.order - right.order)
+      // O remoto so conhece os catalogos que existiam quando foi gravado. Os
+      // que apareceram depois (addon novo, colecao nova) precisam ser mantidos
+      // no fim, exatamente como o ramo legado abaixo ja faz — senao este ramo
+      // devolve MENOS itens do que existem e o applyPayload regrava a ordem
+      // local jogando os novos fora.
+      //
+      // Medido na OLED65C9: `[home-perf] homeCatalogSettingsSync.pull
+      // {"localItems":54,"remoteItems":43}` em TODO boot. 54 nunca e igual a
+      // 43, entao payloadSignature() nunca batia, applyPayload() rodava sempre
+      // e reescrevia `homeCatalogPrefs`. No boot seguinte ensureOrderKeys
+      // recolocava as 11 chaves no fim e o ciclo recomecava — nunca convergia,
+      // e cada volta invalidava a Home ja pintada.
+      items: mergeRemoteItemsWithLocal(rawItems, localPayload)
     };
   }
 
