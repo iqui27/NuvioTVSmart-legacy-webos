@@ -713,7 +713,7 @@ export const CatalogSeeAllScreen = {
             <div class="seeall-card-poster-wrap">
               ${
                 item.poster
-                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                  ? `<img class="seeall-card-poster-image" data-src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="${escapeHtml(item.name || "content")}" decoding="async" />`
                   : `<div class="seeall-card-poster placeholder"></div>`
               }
               ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -788,6 +788,10 @@ export const CatalogSeeAllScreen = {
     this.buildNavigationModel();
     this.bindCardEvents();
     this.bindShellEvents();
+    // Cada render traz cards novos (a primeira pagina e cada pagina seguinte), e
+    // eles nascem sem `src`. Sem esta chamada a grade abriria em branco ate o
+    // primeiro evento de rolagem.
+    this.agendarAtualizacaoDeImagens();
     if (this.pendingRestoreFocus) {
       const scrollMode = this.preserveViewportOnNextRender ? "none" : "center";
       this.pendingRestoreFocus = false;
@@ -869,16 +873,105 @@ export const CatalogSeeAllScreen = {
     painel.classList.toggle("is-visible", algum || Boolean(backdrop) || Boolean(logoSrc));
   },
 
+  /**
+   * Hidrata as imagens da grade perto da viewport e devolve ao estado `data-src`
+   * as que ficaram longe.
+   *
+   * POR QUE ISTO EXISTE: os cards nasciam com `src` preenchido e `loading="lazy"`,
+   * e esse atributo e Chrome 76 — o Chromium 53 das TVs ignora, entao TODA imagem
+   * carregava e ficava decodificada para sempre. Medido na OLED65C9 rolando um
+   * catalogo: 140 posteres, 140 decodificados, 52,2 megapixels retidos (~209MB de
+   * bitmap em RGBA). Num aparelho de 2016 o sistema mata o app para recuperar
+   * memoria, que foi exatamente o relato de um testador em webOS 3 ("scrolling
+   * through catalogs too much, the app restarts").
+   *
+   * A conta usa o INDICE do card, nao a posicao medida de cada um: a grade e
+   * uniforme, entao duas leituras de layout (largura da grade e altura de um card)
+   * bastam para saber em que linha cada indice esta. Ler `getBoundingClientRect`
+   * dos 140 cards a cada evento de rolagem custaria mais que o problema.
+   *
+   * A margem de liberacao e maior que a de hidratacao de proposito: sem essa folga
+   * o card parado na borda entraria em ciclo hidrata/libera a cada quadro do D-pad.
+   */
+  atualizarImagensDaGrade() {
+    const shell = this.container?.querySelector(".seeall-shell") || null;
+    const grade = this.container?.querySelector(".seeall-grid") || null;
+    if (!shell || !grade) {
+      return;
+    }
+    const imagens = grade.querySelectorAll(".seeall-card-poster-image");
+    if (!imagens.length) {
+      return;
+    }
+    const primeiroCard = grade.querySelector(".seeall-card");
+    const alturaCard = primeiroCard ? primeiroCard.offsetHeight : 0;
+    const larguraCard = primeiroCard ? primeiroCard.offsetWidth : 0;
+    if (!alturaCard || !larguraCard) {
+      return;
+    }
+    const colunas = Math.max(1, Math.round(grade.clientWidth / larguraCard));
+    const alturaVisivel = shell.clientHeight || 0;
+    const topo = Number(shell.scrollTop || 0);
+    const margemHidratar = alturaVisivel;
+    const margemLiberar = alturaVisivel * 2.5;
+    const inicioHidratar = topo - margemHidratar;
+    const fimHidratar = topo + alturaVisivel + margemHidratar;
+    const inicioLiberar = topo - margemLiberar;
+    const fimLiberar = topo + alturaVisivel + margemLiberar;
+
+    for (let i = 0; i < imagens.length; i += 1) {
+      const imagem = imagens[i];
+      const linha = Math.floor(i / colunas);
+      const y = linha * alturaCard;
+      const guardada = String(imagem.dataset.lazySrc || "").trim();
+      const pendente = String(imagem.dataset.src || "").trim();
+      if (y + alturaCard >= inicioHidratar && y <= fimHidratar) {
+        if (pendente && !imagem.getAttribute("src")) {
+          imagem.setAttribute("src", pendente);
+          imagem.dataset.lazySrc = pendente;
+          imagem.removeAttribute("data-src");
+        }
+        continue;
+      }
+      if (y + alturaCard < inicioLiberar || y > fimLiberar) {
+        // `removeAttribute` e obrigatorio: `src = ""` faz o Chromium 53 pedir a
+        // propria URL do documento e enfileirar um erro de rede por imagem.
+        if (guardada && imagem.getAttribute("src")) {
+          imagem.removeAttribute("src");
+          imagem.setAttribute("data-src", guardada);
+        }
+      }
+    }
+  },
+
+  agendarAtualizacaoDeImagens() {
+    if (this.atualizacaoDeImagensAgendada) {
+      return;
+    }
+    this.atualizacaoDeImagensAgendada = true;
+    const executar = () => {
+      this.atualizacaoDeImagensAgendada = false;
+      this.atualizarImagensDaGrade();
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(executar);
+    } else {
+      setTimeout(executar, 16);
+    }
+  },
+
   bindShellEvents() {
     const shell = this.container?.querySelector(".seeall-shell") || null;
     if (!shell || shell.__catalogSeeAllShellBound) {
       return;
     }
     shell.__catalogSeeAllShellBound = true;
+    this.agendarAtualizacaoDeImagens();
     shell.addEventListener(
       "scroll",
       () => {
         this.savedScrollTop = Number(shell.scrollTop || 0);
+        this.agendarAtualizacaoDeImagens();
         if (this.shouldAutoLoadMoreFromScroll(shell)) {
           this.loadNextPage({ preserveViewport: true });
         }
