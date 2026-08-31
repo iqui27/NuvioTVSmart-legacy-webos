@@ -4415,12 +4415,40 @@ export const HomeScreen = {
       return;
     }
     this.unsubscribeStartupSyncPullCompleted = StartupSyncService.subscribeToPullCompleted(
-      ({ profileId } = {}) => {
+      ({ profileId, changedHomeInputs } = {}) => {
         if (Router.getCurrent() !== "home") {
           return;
         }
         const activeProfileId = String(ProfileManager.getActiveProfileId() || "");
         if (profileId && String(profileId) !== activeProfileId) {
+          return;
+        }
+        // Este assinante recarregava a Home INTEIRA a cada pull que terminava,
+        // mudando algo ou nao. Medido na OLED65C9 num processo recem-lancado:
+        // uma segunda construcao completa por boot, com 3831 ms de jank somado
+        // contra 7253 ms da primeira. `changedHomeInputs` vem do proprio
+        // syncPull, que ja sabe superficie por superficie se aplicou algo — o
+        // sinal e de graca, ao contrario de reconstruir uma assinatura do
+        // localStorage (tentado: hashear collectionsState + addonManifestCache,
+        // 1,1 MB, custou mais que o render que evitava).
+        //
+        // Estritamente `=== false`: `undefined` (emissor antigo, evento de
+        // outro caminho) continua recarregando.
+        //
+        // A segunda metade do teste cobre o que o sinal do sync de proposito
+        // nao cobre: `profile settings` aplica badges, player e debrid junto
+        // com o layout e nao sabe distinguir, entao a parte que a Home usa e
+        // conferida aqui. buildSyncSensitiveHomeSignature() e barata (duas
+        // leituras memoizadas), ao contrario da tentativa anterior de hashear
+        // collectionsState + addonManifestCacheV2 — 1,1 MB que custaram mais
+        // que o render que evitavam.
+        const renderedSignature = this.renderedSyncSensitiveSignature;
+        if (
+          changedHomeInputs === false &&
+          renderedSignature &&
+          this.buildSyncSensitiveHomeSignature() === renderedSignature
+        ) {
+          logHomePerf("backgroundRefreshSkipped", { reason: "startup-sync" });
           return;
         }
         void this.requestHomeBackgroundRefresh({
@@ -9154,6 +9182,10 @@ export const HomeScreen = {
     }
     const afterHomeSync = (run) =>
       homeSyncPromise ? homeSyncPromise.then(run, run) : Promise.resolve().then(run);
+    // Identidade das preferencias sensiveis ao sync que ESTA carga consome.
+    // Lida pelo assinante de pull-completed para decidir se o que esta na tela
+    // ficou obsoleto.
+    this.renderedSyncSensitiveSignature = this.buildSyncSensitiveHomeSignature();
     const preserveHomeReturnState = Boolean(background && preserveReturnState);
     const preservedHeroItem = preserveHomeReturnState ? this.heroItem : null;
     const preservedHeroIdentity = preserveHomeReturnState ? buildHeroIdentity(this.heroItem) : "";

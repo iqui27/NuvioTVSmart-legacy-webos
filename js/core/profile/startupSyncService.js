@@ -119,6 +119,34 @@ function runSurface(label, task) {
     });
 }
 
+/**
+ * Uma superficie so conta como "nao mexeu na Home" quando ela rodou ate o fim
+ * E disse explicitamente que nao aplicou nada (`value === false`, que e o que
+ * todos os pulls com semantica booleana devolvem quando a assinatura remota
+ * bate com a local). Erro, deferimento por backoff ou retorno de outro formato
+ * contam como mudanca: errar para o lado de repintar e barato, errar para o
+ * lado de deixar a tela obsoleta nao e.
+ */
+function surfaceChangedHomeInputs(result) {
+  return !(result && result.ok === true && result.value === false);
+}
+
+// Mesmo portao do resto da instrumentacao da Home (`__NUVIO_DEBUG_HOME_PERF__`,
+// lido na hora da chamada), para que uma unica sessao de CDP atribua tudo.
+// Sem isto nao da para saber QUAL superficie continuou dizendo "mudei" e
+// impediu o refresh de ser dispensado.
+function logSurfaceChange(label, changed) {
+  if (!globalThis.__NUVIO_DEBUG_HOME_PERF__) {
+    return;
+  }
+  try {
+    console.info(`[home-perf] syncSurface`, {
+      surface: label,
+      changedHomeInputs: Boolean(changed)
+    });
+  } catch (_) {}
+}
+
 function notifySyncPullCompleted(event = {}) {
   syncPullCompletedListeners.forEach((listener) => {
     try {
@@ -305,6 +333,16 @@ export const StartupSyncService = {
     this.profileScopedSyncEnabled = true;
   },
 
+  // `true` ate que um pull complete e prove o contrario: antes disso ninguem
+  // sabe se o que esta na tela corresponde a nuvem.
+  lastPullChangedHomeInputs: true,
+
+  markHomeInputsChanged(changed) {
+    if (changed) {
+      this.lastPullChangedHomeInputs = true;
+    }
+  },
+
   subscribeToPullCompleted(listener) {
     if (typeof listener !== "function") {
       return () => {};
@@ -419,6 +457,7 @@ export const StartupSyncService = {
         notifySyncPullCompleted({
           profileId: normalizeProfileId(profileId),
           includeProfileScoped: Boolean(this.profileScopedSyncEnabled),
+          changedHomeInputs: Boolean(this.lastPullChangedHomeInputs),
           completedAt: Date.now()
         });
       }
@@ -469,6 +508,7 @@ export const StartupSyncService = {
                 notifySyncPullCompleted({
                   profileId: normalizeProfileId(profileId),
                   includeProfileScoped: Boolean(this.profileScopedSyncEnabled),
+                  changedHomeInputs: Boolean(this.lastPullChangedHomeInputs),
                   completedAt: Date.now()
                 });
               }
@@ -537,6 +577,9 @@ export const StartupSyncService = {
     }
 
     const activeProfileId = profileId;
+    // Nenhuma superficie mexeu no que a Home usa para montar fileiras ate aqui.
+    // Ver markHomeInputsChanged / surfaceChangedHomeInputs abaixo.
+    this.lastPullChangedHomeInputs = false;
     if (includeProfileSettings) {
       const profileSettingsResult = await runSurface("profile settings", async () => {
         const didApply = await ProfileSettingsSyncService.pull(activeProfileId);
@@ -545,6 +588,12 @@ export const StartupSyncService = {
         }
         return didApply;
       });
+      // `profile settings` NAO entra aqui de proposito. O applyRemoteBlob aplica
+      // badges de stream, player e debrid alem do layout, e devolve um unico
+      // "apliquei alguma coisa" — medido: `changedHomeInputs: true` em todo
+      // boot, por causa de ajustes que a Home nem le. A unica parte que a Home
+      // usa (layout + provedor de Continue Watching) ja tem verificacao propria
+      // e barata na Home, em buildSyncSensitiveHomeSignature().
       if (profileSettingsResult.ok && profileSettingsResult.value) {
         await runSurface("profile settings theme", async () => {
           await I18n.init();
@@ -596,7 +645,13 @@ export const StartupSyncService = {
       return false;
     }
 
-    await Promise.all([
+    // `LibrarySyncService.pull` devolve a lista de URLs, nao um booleano, e
+    // aplica a ordem com `{ silent: true }` — nao da para saber pelo retorno
+    // nem pelos eventos do repositorio se algo mudou. A lista inteira sao
+    // ~2,5 KB no localStorage, entao comparar a string antes e depois e mais
+    // barato que qualquer alternativa.
+    const addonUrlsBefore = String(addonRepository.getInstalledAddonUrls() || []);
+    const surfaceResults = await Promise.all([
       runSurface("collections", () => CollectionSyncService.pull(activeProfileId)),
       runSurface("home catalog settings", () =>
         HomeCatalogSettingsSyncService.pull(activeProfileId)
@@ -605,6 +660,24 @@ export const StartupSyncService = {
       runSurface("addons", () => LibrarySyncService.pull()),
       runSurface("saved library", () => SavedLibrarySyncService.pull(activeProfileId))
     ]);
+    // Indices em `surfaceResults`: 0 collections, 1 home catalog settings,
+    // 2 plugins, 3 addons, 4 saved library.
+    //
+    // So 0 e 1 entram no sinal. `plugins` (pluginSources) a Home nao le em
+    // lugar nenhum — quem le e a tela de ajustes e o runtime do player. E
+    // `savedLibrary` a Home so consulta item a item, por `isSaved`, para o
+    // estado do card expandido; nao e disso que as fileiras sao feitas. Os dois
+    // devolvem ARRAY e nao booleano, entao contavam como "mudou" em todo boot,
+    // e eram justamente o que impedia o refresh de ser dispensado. `addons`
+    // (indice 3) tambem devolve array e e tratada pela comparacao de URLs.
+    [0, 1].forEach((index) => {
+      const changed = surfaceChangedHomeInputs(surfaceResults[index]);
+      logSurfaceChange(index === 0 ? "collections" : "home catalog settings", changed);
+      this.markHomeInputsChanged(changed);
+    });
+    const addonsChanged = String(addonRepository.getInstalledAddonUrls() || []) !== addonUrlsBefore;
+    logSurfaceChange("addons", addonsChanged);
+    this.markHomeInputsChanged(addonsChanged);
 
     if (!this.isCurrentRun(generation) || isSyncBackoffActive()) {
       return false;
