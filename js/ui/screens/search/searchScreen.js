@@ -2031,7 +2031,14 @@ export const SearchScreen = {
     }
     if (action === "searchInput") {
       const input = this.container?.querySelector("#searchInput");
-      if (input) {
+      // Enter sobre o campo tem dois significados opostos, e a diferenca e se o
+      // campo JA esta em edicao. Chegando nele pelo D-pad, Enter quer dizer
+      // "abrir o teclado" e o focus() e o certo. Ja digitando, Enter quer dizer
+      // "buscar" — e ai o handler de keydown do proprio input acabou de dar
+      // blur() para o teclado do sistema fechar. Sem esta condicao os dois se
+      // anulavam: o blur saia e este focus() trazia o teclado de volta no mesmo
+      // quadro, que era o relato de webOS 3 (o teclado nao fecha no Enter).
+      if (input && !this.isSearchInputEditingActive(event)) {
         input.focus();
       }
     }
