@@ -1,6 +1,52 @@
 import { LocalStore } from "../storage/localStore.js";
+import { ProfileManager } from "../profile/profileManager.js";
 
 const KEY = "pluginSources";
+
+/**
+ * Repositorios de plugin sao POR PERFIL, e nao havia nada disso aqui: a lista
+ * vivia num `LocalStore.get("pluginSources")` cru, ou seja, uma unica lista global
+ * que todos os perfis enxergavam. Relatado por um testador -- ele ligou plugins num
+ * perfil secundario e viu os repositorios do perfil principal, exatamente como
+ * tinha acontecido antes com os addons.
+ *
+ * Um repositorio de plugin e "coisa instalada", nao preferencia: perfil novo comeca
+ * VAZIO em vez de herdar o principal. (O oposto vale para tema, layout e ajustes de
+ * player, que usam createProfileScopedStore e herdam de proposito.)
+ *
+ * MIGRACAO: uma lista antiga em formato de array pertence a quem a instalou, que so
+ * pode ser o perfil principal — ela vai para o "1" e os outros perfis nascem sem
+ * nada. Perfis ja contaminados nao tem como ser separados: o dado foi gravado numa
+ * lista so, sem dono.
+ */
+function lerEnvelope() {
+  const bruto = LocalStore.get(KEY, null);
+  if (bruto && typeof bruto === "object" && !Array.isArray(bruto) && bruto.__profileScoped) {
+    return { __profileScoped: true, profiles: { ...(bruto.profiles || {}) } };
+  }
+  const envelope = { __profileScoped: true, profiles: {} };
+  if (Array.isArray(bruto) && bruto.length) {
+    envelope.profiles["1"] = bruto;
+    LocalStore.set(KEY, envelope);
+  }
+  return envelope;
+}
+
+function perfilAtual() {
+  return String(ProfileManager.getActiveProfileId() ?? "1").trim() || "1";
+}
+
+function lerFontesDoPerfil() {
+  const envelope = lerEnvelope();
+  const atual = envelope.profiles[perfilAtual()];
+  return Array.isArray(atual) ? atual : [];
+}
+
+function gravarFontesDoPerfil(sources) {
+  const envelope = lerEnvelope();
+  envelope.profiles[perfilAtual()] = Array.isArray(sources) ? sources : [];
+  LocalStore.set(KEY, envelope);
+}
 
 function normalizeSources(input) {
   if (!Array.isArray(input)) {
@@ -27,7 +73,7 @@ function applyTemplate(template, vars) {
 
 export const PluginRuntime = {
   listSources() {
-    return normalizeSources(LocalStore.get(KEY, []));
+    return normalizeSources(lerFontesDoPerfil());
   },
 
   saveSources(sources) {
@@ -35,7 +81,7 @@ export const PluginRuntime = {
     if (JSON.stringify(this.listSources()) === JSON.stringify(normalized)) {
       return false;
     }
-    LocalStore.set(KEY, normalized);
+    gravarFontesDoPerfil(normalized);
     return true;
   },
 

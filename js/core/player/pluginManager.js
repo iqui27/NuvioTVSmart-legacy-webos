@@ -1,16 +1,40 @@
 import { LocalStore } from "../storage/localStore.js";
+import { ProfileManager } from "../profile/profileManager.js";
 import { PluginRuntime } from "./pluginRuntime.js";
 import { PluginScraperRuntime } from "./pluginScraperRuntime.js";
 
 const PLUGINS_ENABLED_KEY = "pluginsEnabled";
 
+// O interruptor tambem era global, junto com a lista de repositorios: ligar num
+// perfil ligava em todos. Mesmo envelope por perfil que PluginRuntime usa para as
+// fontes, e pela mesma razao — ver o comentario la.
+function lerEnvelopeLigado() {
+  const bruto = LocalStore.get(PLUGINS_ENABLED_KEY, null);
+  if (bruto && typeof bruto === "object" && bruto.__profileScoped) {
+    return { __profileScoped: true, profiles: { ...(bruto.profiles || {}) } };
+  }
+  const envelope = { __profileScoped: true, profiles: {} };
+  if (typeof bruto === "boolean" && bruto) {
+    // Estava ligado no formato antigo: o dono so pode ser o perfil principal.
+    envelope.profiles["1"] = true;
+    LocalStore.set(PLUGINS_ENABLED_KEY, envelope);
+  }
+  return envelope;
+}
+
+function perfilAtualDoPlugin() {
+  return String(ProfileManager.getActiveProfileId() ?? "1").trim() || "1";
+}
+
 export const PluginManager = {
   get pluginsEnabled() {
-    return Boolean(LocalStore.get(PLUGINS_ENABLED_KEY, false));
+    return Boolean(lerEnvelopeLigado().profiles[perfilAtualDoPlugin()]);
   },
 
   setPluginsEnabled(enabled) {
-    LocalStore.set(PLUGINS_ENABLED_KEY, Boolean(enabled));
+    const envelope = lerEnvelopeLigado();
+    envelope.profiles[perfilAtualDoPlugin()] = Boolean(enabled);
+    LocalStore.set(PLUGINS_ENABLED_KEY, envelope);
   },
 
   listPluginSources() {
