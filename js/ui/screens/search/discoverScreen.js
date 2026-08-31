@@ -32,6 +32,7 @@ import {
 } from "../../components/sidebarNavigation.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { scrollIntoNearestView } from "../../../platform/legacyDom.js";
+import { atualizarImagensDeGrade } from "../../../core/util/gradeLazyImages.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const PICKER_MENU_EXIT_MS = 160;
@@ -471,7 +472,7 @@ export const DiscoverScreen = {
                  <div class="seeall-card-poster-wrap">
                    ${
                      item.poster
-                       ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                       ? `<img class="seeall-card-poster-image" data-src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" decoding="async" />`
                        : `<div class="seeall-card-poster placeholder"></div>`
                    }
                    ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -1638,6 +1639,9 @@ export const DiscoverScreen = {
     }
     this.bindCardEvents();
     this.bindShellEvents();
+    // Cada pagina nova traz cards sem `src`; sem esta chamada eles so apareceriam
+    // no primeiro evento de rolagem seguinte.
+    this.agendarAtualizacaoDeImagens();
     this.bindPointerEvents();
     if (this.pendingRestoreFocus) {
       const scrollMode = this.preserveViewportOnNextRender ? "none" : "center";
@@ -1682,16 +1686,42 @@ export const DiscoverScreen = {
     });
   },
 
+  /**
+   * Ver js/core/util/gradeLazyImages.js: sem isto a grade do Discover retinha todo
+   * poster decodificado. Medido na C9 descendo tres vezes: 223 imagens, 78,8
+   * megapixels, ainda subindo — e o Discover pagina sem fim, entao nao existe teto.
+   */
+  agendarAtualizacaoDeImagens() {
+    if (this.atualizacaoDeImagensAgendada) {
+      return;
+    }
+    this.atualizacaoDeImagensAgendada = true;
+    const executar = () => {
+      this.atualizacaoDeImagensAgendada = false;
+      atualizarImagensDeGrade({
+        shell: this.getContentScroller(),
+        grade: this.container?.querySelector(".discover-grid") || null
+      });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(executar);
+    } else {
+      setTimeout(executar, 16);
+    }
+  },
+
   bindShellEvents() {
     const scroller = this.getContentScroller();
     if (!scroller || scroller.__discoverScrollBound) {
       return;
     }
     scroller.__discoverScrollBound = true;
+    this.agendarAtualizacaoDeImagens();
     scroller.addEventListener(
       "scroll",
       () => {
         this.savedScrollTop = Number(scroller.scrollTop || 0);
+        this.agendarAtualizacaoDeImagens();
         if (this.shouldAutoLoadMoreFromScroll(scroller)) {
           this.loadNextPage({ preserveViewport: true });
         }
