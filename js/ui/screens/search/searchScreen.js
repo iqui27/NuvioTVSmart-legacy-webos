@@ -1685,6 +1685,18 @@ export const SearchScreen = {
       if (event.keyCode !== 13) return;
       event.preventDefault();
       this.cancelScheduledInputSearch();
+      // O teclado da TV e o IME do sistema, e ele so fecha quando o campo perde
+      // o foco no DOM — mover o foco VISUAL do app para os resultados nao basta.
+      // Sem este blur o teclado fica cobrindo a tela depois do Enter e a unica
+      // saida e subir com o D-pad ate ele sumir, que foi o relato de um testador
+      // em webOS 3. O blur vem ANTES da busca porque `runSearchFromInput` e
+      // assincrona: esperar por ela deixaria o teclado aberto durante a consulta.
+      try {
+        input.blur();
+      } catch (_) {
+        // Alguns IMEs de TV recusam blur enquanto estao se acomodando; o pior
+        // caso e o comportamento antigo, entao nao vale interromper a busca.
+      }
       await this.runSearchFromInput(input, { autoFocusResults: true });
     });
   },
