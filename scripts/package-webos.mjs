@@ -7,6 +7,8 @@ import { readAppMetadata, syncVersionFiles } from "./appMetadata.mjs";
 import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { runWebOsToolsBinary } from "./aresCli.mjs";
 import { buildWebOsMediaRuntime } from "./webosMediaRuntime.mjs";
+import postcss from "postcss";
+import { uiScalePlugin } from "./uiScalePlugin.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -16,6 +18,54 @@ const cacheDir = path.join(rootDir, ".cache");
 const stagingDir = path.join(cacheDir, "webos-package");
 const appStageDir = path.join(stagingDir, "app");
 const serviceStageDir = path.join(stagingDir, "space.nuvio.webos.service");
+
+/*
+ * ISSUE #1 (lijovklm, webOS 3.4): a graphics plane do web app pode ser 1280x720 (painel
+ * FHD) ou 1920x1080 (UHD), e NAO da para saber qual no build -- nem o appinfo nem o meta
+ * viewport forcam uma delas (ambos medidos inertes). Como o CSS desta variante nasce com
+ * os px congelados em 1920 (Chromium 38 nao tem var()/clamp()), numa plane de 720 o layout
+ * fica 1,5x a tela e o overflow corta: o sintoma relatado.
+ *
+ * Entao o pacote leva as DUAS folhas -- a de 1920 e uma copia com os px a 2/3 -- e o
+ * index.html escolhe pelo innerWidth real no boot. Escalar em runtime (transform/zoom) nao
+ * serve: o dist mistura px com vw/vh, e vw/vh resolvem contra a viewport, nao contra o
+ * elemento escalado, entao o frame e o conteudo andariam em ritmos diferentes.
+ */
+const LEGACY_SCALED_SUFFIX = "-720";
+const LEGACY_SCALE = 2 / 3;
+const LEGACY_SCALED_SHEETS = ["css/base.css", "css/components.css"];
+// Acima disto o app usa a folha de 1920. 1366 e 1280 caem na de 720; 1920 fica de fora.
+const LEGACY_SCALE_MAX_WIDTH = 1600;
+
+function scaledSheetName(href) {
+  return href.replace(/\.css$/, `${LEGACY_SCALED_SUFFIX}.css`);
+}
+
+/*
+ * Gera a variante 720 a partir do CSS de 1920 JA construido, reusando o mesmo
+ * uiScalePlugin do build (com o mesmo skip-list) em vez de reimplementar a regra aqui.
+ */
+async function writeLegacyScaledStylesheets(stageDir) {
+  if (compatibilityPolicy.webOsChromiumVersion >= 49) {
+    return [];
+  }
+  const written = [];
+  for (const href of LEGACY_SCALED_SHEETS) {
+    const sourcePath = path.join(stageDir, href);
+    if (!(await pathExists(sourcePath))) {
+      throw new Error(`webOS legacy scaling expected ${href} in the staged app.`);
+    }
+    const source = await readFile(sourcePath, "utf8");
+    const result = await postcss([uiScalePlugin(LEGACY_SCALE)]).process(source, {
+      from: sourcePath,
+      to: sourcePath
+    });
+    const targetName = scaledSheetName(href);
+    await writeFile(path.join(stageDir, targetName), result.css, "utf8");
+    written.push(targetName);
+  }
+  return written;
+}
 
 const appName = "Nuvio TV";
 const webOsServiceId = "space.nuvio.webos.service";
@@ -174,19 +224,41 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
     requiredLabel: `LG webOS ${compatibilityPolicy.webOsRequiredVersion}+ · Chromium ${compatibilityPolicy.webOsChromiumVersion}+ (${compatibilityPolicy.webOsSupportYear}+)`
   });
 
-  // ISSUE #1 (lijovklm, webOS 3.4): a Home aparecia cortada no canto superior
-  // esquerdo, com o aspect ratio certo. Causa: em webOS <=3 a plataforma renderiza
-  // o app web numa viewport de 1280x720 (o `resolution:1920x1080` do appinfo e
-  // ignorado nessas TVs), mas TODO o CSS desta variante e congelado em px de 1920
-  // pelo cssVarsInlinePlugin/build.mjs (Chromium 38 nao tem var()/clamp()). Layout
-  // de 1920 numa viewport de 1280 = 1,5x a tela, e o overflow:hidden corta o resto.
-  // Fixar a viewport em 1920 faz o motor compor a 1920 e ESCALAR para a surface — a
-  // mesma tecnica que ja funciona no Tizen em painel 720p. So no motor antigo (sem
-  // var()); em webOS 4+/Chromium 49+ device-width ja resolve 1920, entao la nada muda.
-  const viewportContent =
+  // ISSUE #1: o meta viewport NAO altera a app resolution no webOS -- ela vem da
+  // plataforma. Medido nas duas pontas: forcar 1920 nao corrigiu o crop do lijovklm
+  // (exp22/exp23) e forcar 1280 na C9 deixou innerWidth em 1920 do mesmo jeito. No
+  // Tizen o meta funciona, e foi o que enganou. Fica device-width, que e neutro; quem
+  // resolve o tamanho e a escolha de folha por innerWidth logo abaixo.
+  const viewportContent = "width=device-width, initial-scale=1.0";
+
+  // Overlay de diagnostico opcional (NUVIO_DIAG_OVERLAY=1 no build). Existe porque
+  // o testador de webOS 3 (lijovklm, issue #1) nao tem console e instala por dev
+  // manager, entao nao ha como ler innerWidth/devicePixelRatio de outro jeito. Este
+  // bloco desenha esses valores num canto, atualizando sozinho, para ele fotografar.
+  // Nunca entra num build normal: so quando a env esta setada.
+  // ISSUE #1: no motor antigo o par de folhas e escolhido no boot pelo innerWidth real
+  // (ver writeLegacyScaledStylesheets). document.write durante o parse do head e sincrono,
+  // entao a folha certa entra antes do primeiro paint -- sem flash de layout errado.
+  const stylesheetTags =
     compatibilityPolicy.webOsChromiumVersion < 49
-      ? "width=1920, height=1080, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-      : "width=device-width, initial-scale=1.0";
+      ? `  <script>
+    (function () {
+      var largura = window.innerWidth || screen.width || 1920;
+      var sufixo = largura <= ${LEGACY_SCALE_MAX_WIDTH} ? "${LEGACY_SCALED_SUFFIX}" : "";
+      window.__NUVIO_UI_PLANE__ = { largura: largura, sufixo: sufixo };
+      var folhas = ${JSON.stringify(LEGACY_SCALED_SHEETS)};
+      for (var i = 0; i < folhas.length; i++) {
+        document.write(
+          '<link rel="stylesheet" href="' + folhas[i].replace(/\\.css$/, sufixo + ".css") + '">'
+        );
+      }
+    })();
+  </script>`
+      : LEGACY_SCALED_SHEETS.map((href) => `  <link rel="stylesheet" href="${href}" />`).join("\n");
+
+  const diagOverlay = process.env.NUVIO_DIAG_OVERLAY
+    ? `  <script>(function(){function f(){var vv=window.visualViewport;return 'iw='+window.innerWidth+' ih='+window.innerHeight+'\\ndpr='+window.devicePixelRatio+'\\nscreen='+screen.width+'x'+screen.height+'\\nclientWxH='+document.documentElement.clientWidth+'x'+document.documentElement.clientHeight+(vv?('\\nvisualVP='+Math.round(vv.width)+'x'+Math.round(vv.height)):'')+'\\ncss='+((window.__NUVIO_UI_PLANE__&&window.__NUVIO_UI_PLANE__.sufixo)?'720':'1920');}function d(){var e=document.getElementById('__nvdiag');if(!e){e=document.createElement('div');e.id='__nvdiag';e.style.cssText='position:fixed;top:0;left:0;z-index:2147483647;background:rgba(0,0,0,0.88);color:#0f0;font-family:monospace;font-size:34px;line-height:1.35;padding:16px 22px;white-space:pre;border:3px solid #0f0';(document.body||document.documentElement).appendChild(e);}e.textContent='NUVIO DIAG\\n'+f();}if(document.body){d();}document.addEventListener('DOMContentLoaded',d);setInterval(d,700);})();</script>\n`
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="en" class="no-flex-gap no-css-grid no-css-math no-backdrop-filter no-aspect-ratio">
@@ -196,11 +268,10 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>${appName}</title>
   <script src="assets/runtime/legacy-dom-shims.js"></script>
-  <link rel="stylesheet" href="css/base.css" />
-  <link rel="stylesheet" href="css/components.css" />
+${stylesheetTags}
 </head>
 <body>
-  <script src="boot-guard.js"></script>
+${diagOverlay}  <script src="boot-guard.js"></script>
   <script src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
   <script>window.__NUVIO_PLATFORM__ = "webos";</script>
   <script src="nuvio.env.js"></script>
@@ -274,6 +345,11 @@ async function stageApp() {
     )
   );
 
+  const scaledSheets = await writeLegacyScaledStylesheets(appStageDir);
+  if (scaledSheets.length) {
+    console.log(`variante 720 do CSS gerada: ${scaledSheets.join(", ")}`);
+  }
+
   const prunedLocales = await pruneRedundantLocaleXml();
   console.log(
     `dropped ${prunedLocales.removed} strings.xml locale directories ` +
@@ -287,6 +363,11 @@ async function stageApp() {
   appInfo.icon = "icon.png";
   appInfo.largeIcon = "largeIcon.png";
   appInfo.services = [webOsServiceId];
+  // ISSUE #1: o resolution do appinfo NAO decide sozinho a graphics plane. Medido na
+  // C9 (webOS 4.10, painel UHD): declarar 1280x720 aqui deixou innerWidth em 1920 do
+  // mesmo jeito. Em painel FHD a plane e travada em 720 e o 1920 e que nao vale. Como
+  // nenhum dos dois valores serve para as duas TVs, o appinfo fica no padrao 1920x1080
+  // e quem decide o tamanho do CSS e a deteccao de innerWidth em runtime (index.html).
   validateWebOsAppInfo(appInfo);
   await writeFile(appInfoPath, `${JSON.stringify(appInfo, null, 2)}\n`, "utf8");
 
