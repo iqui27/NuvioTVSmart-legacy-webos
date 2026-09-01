@@ -174,11 +174,25 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
     requiredLabel: `LG webOS ${compatibilityPolicy.webOsRequiredVersion}+ · Chromium ${compatibilityPolicy.webOsChromiumVersion}+ (${compatibilityPolicy.webOsSupportYear}+)`
   });
 
+  // ISSUE #1 (lijovklm, webOS 3.4): a Home aparecia cortada no canto superior
+  // esquerdo, com o aspect ratio certo. Causa: em webOS <=3 a plataforma renderiza
+  // o app web numa viewport de 1280x720 (o `resolution:1920x1080` do appinfo e
+  // ignorado nessas TVs), mas TODO o CSS desta variante e congelado em px de 1920
+  // pelo cssVarsInlinePlugin/build.mjs (Chromium 38 nao tem var()/clamp()). Layout
+  // de 1920 numa viewport de 1280 = 1,5x a tela, e o overflow:hidden corta o resto.
+  // Fixar a viewport em 1920 faz o motor compor a 1920 e ESCALAR para a surface — a
+  // mesma tecnica que ja funciona no Tizen em painel 720p. So no motor antigo (sem
+  // var()); em webOS 4+/Chromium 49+ device-width ja resolve 1920, entao la nada muda.
+  const viewportContent =
+    compatibilityPolicy.webOsChromiumVersion < 49
+      ? "width=1920, height=1080, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      : "width=device-width, initial-scale=1.0";
+
   return `<!DOCTYPE html>
 <html lang="en" class="no-flex-gap no-css-grid no-css-math no-backdrop-filter no-aspect-ratio">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="${viewportContent}" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>${appName}</title>
   <script src="assets/runtime/legacy-dom-shims.js"></script>
