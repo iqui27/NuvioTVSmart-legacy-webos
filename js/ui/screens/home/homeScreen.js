@@ -9155,31 +9155,18 @@ export const HomeScreen = {
     // screen. Home now renders from local/cached state immediately and the sync
     // lands afterwards: the Continue Watching reads below are the only thing
     // gated on it, and they update the row in place when they resolve.
-    let homeSyncPromise = null;
-    if (!background && StartupSyncService.started) {
-      const preSyncSignature = this.buildSyncSensitiveHomeSignature();
-      homeSyncPromise = measureHomeLoadStageAsync("startup-sync-background", () =>
-        StartupSyncService.requestHomeSyncNow().catch((error) => {
-          console.warn("Initial Continue Watching sync failed", error);
-          return false;
-        })
-      ).then((result) => {
-        // Home was rendered from local settings. If the pull actually changed a
-        // setting the rendered rows depend on (home layout, hero/unreleased
-        // prefs, or the Continue Watching provider), the paint on screen is
-        // stale in a way no partial updater can patch — reload it in the
-        // background rather than leave the wrong layout mounted.
-        if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
-          return result;
-        }
-        if (this.buildSyncSensitiveHomeSignature() !== preSyncSignature) {
-          this.loadData({ background: true, preserveReturnState: true }).catch((error) => {
-            console.warn("Post-sync Home refresh failed", error);
-          });
-        }
-        return result;
-      });
-    }
+    // Aqui existia um bloco que chamava StartupSyncService.requestHomeSyncNow().
+    // Esse metodo foi removido do servico em d45f8d0 e a chamada nunca foi atualizada:
+    // o TypeError estourava ANTES de o .catch ser anexado, entao homeSyncPromise virava
+    // uma promise rejeitada e o afterHomeSync abaixo (.then(run, run)) engolia tudo em
+    // silencio. Ou seja, o refresh pos-sync que o bloco descrevia NUNCA rodou -- e quem
+    // faz esse trabalho hoje e o assinante de pull-completed com changedHomeInputs
+    // (ab4dd2d), que decide o reload pela assinatura sem depender desta carga.
+    //
+    // Remover e equivalente ao comportamento atual, nao uma mudanca dele: com a promise
+    // rejeitada o `run` ja corria num microtask via .then(run, run); com null ele corre
+    // no mesmo microtask via Promise.resolve().then(run). O que sai e so o TypeError.
+    const homeSyncPromise = null;
     const afterHomeSync = (run) =>
       homeSyncPromise ? homeSyncPromise.then(run, run) : Promise.resolve().then(run);
     // Identidade das preferencias sensiveis ao sync que ESTA carga consome.

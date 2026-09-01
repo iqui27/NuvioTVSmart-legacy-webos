@@ -615,7 +615,13 @@ export const ProfileSelectionScreen = {
           <div class="profile-avatar" style="background:${escapeHtml(profile.avatarColorHex || getDefaultProfileColor())}">
             ${
               avatarUrl
-                ? `<img class="profile-avatar-image" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name)}"/>`
+                ? // ISSUE #1 (Mane155, webOS 3): o <img> do avatar e baixado direto pelo
+                  // Chromium da TV, nao pelo proxy Luna que a API usa -- num aparelho de
+                  // 2016 (CA store velha) ou com a rede dele a imagem pode falhar calada e
+                  // o circulo ficava com icone quebrado, parecendo "o perfil nao carregou".
+                  // Em erro cai para a inicial, igual a um perfil sem avatar. A inicial vem
+                  // do atributo (ja escapado) para nao precisar embutir texto em JS inline.
+                  `<img class="profile-avatar-image" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name)}" data-initial="${escapeHtml(getProfileInitial(profile.name))}" onerror="this.parentNode.textContent=this.getAttribute('data-initial')||''"/>`
                 : escapeHtml(getProfileInitial(profile.name))
             }
           </div>

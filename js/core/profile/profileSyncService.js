@@ -3,6 +3,7 @@ import { SessionStore } from "../storage/sessionStore.js";
 import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 import { MAX_PROFILES, ProfileManager } from "./profileManager.js";
 import { SupabaseApi } from "../../data/remote/supabase/supabaseApi.js";
+import { LocalStore } from "../storage/localStore.js";
 
 const TABLE = "tv_profiles";
 const FALLBACK_TABLE = "profiles";
@@ -23,6 +24,29 @@ const CLEAR_PROFILE_PIN_RPC = "clear_profile_pin";
 const VERIFY_PROFILE_PIN_RPC = "verify_profile_pin";
 const DELETE_PROFILE_DATA_RPC = "sync_delete_profile_data";
 const PROFILE_PULL_MIN_INTERVAL_MS = 10_000;
+
+// Ultimo estado de PIN por perfil que a nuvem confirmou. Ver pullProfileLockStates.
+const PROFILE_LOCK_STATES_CACHE_KEY = "profileLockStatesCache";
+
+function readCachedProfileLockStates() {
+  const cached = LocalStore.get(PROFILE_LOCK_STATES_CACHE_KEY, null);
+  if (!cached || typeof cached !== "object" || Array.isArray(cached)) {
+    return {};
+  }
+  // Normaliza para o mesmo formato do pull: chave string, valor booleano.
+  return Object.keys(cached).reduce((accumulator, key) => {
+    accumulator[String(key)] = Boolean(cached[key]);
+    return accumulator;
+  }, {});
+}
+
+function writeCachedProfileLockStates(states) {
+  try {
+    LocalStore.set(PROFILE_LOCK_STATES_CACHE_KEY, states || {});
+  } catch (_) {
+    // Cache e otimizacao de seguranca, nao pode derrubar o pull.
+  }
+}
 
 let lastPullStatus = "idle";
 let lastPullError = null;
@@ -298,16 +322,27 @@ export const ProfileSyncService = {
     }
   },
 
+  /*
+   * ISSUE #1 (Mane155, webOS 3): sem resposta da nuvem isto devolvia {} — e quem
+   * chama (app.js shouldShowProfileSelection) le {} como "nenhum perfil tem PIN".
+   * Na TV dele o proxy Luna estoura em 22 s e o backoff fica PERSISTIDO em
+   * localStorage por ate 10 min, entao um arranque frio dentro da janela caia
+   * nesse ramo e um perfil COM PIN abria SEM pedir PIN — falha aberta.
+   *
+   * Agora o ultimo estado bom e guardado e reusado quando o pull nao resolve:
+   * falha fechada com dado real, em vez de "desconhecido = sem PIN". Quem nunca
+   * conseguiu um pull continua com {} (nao ha o que preservar).
+   */
   async pullProfileLockStates() {
     if (isSyncBackoffActive()) {
-      return {};
+      return readCachedProfileLockStates();
     }
     try {
       if (!AuthManager.isAuthenticated) {
         return {};
       }
       const rows = await SupabaseApi.rpc(PULL_LOCKS_RPC, {}, true);
-      return (Array.isArray(rows) ? rows : []).reduce((accumulator, row) => {
+      const states = (Array.isArray(rows) ? rows : []).reduce((accumulator, row) => {
         const profileIndex = Number(row?.profile_index ?? row?.profileIndex ?? row?.id ?? 0);
         if (Number.isFinite(profileIndex) && profileIndex > 0) {
           accumulator[String(Math.trunc(profileIndex))] = Boolean(
@@ -316,9 +351,11 @@ export const ProfileSyncService = {
         }
         return accumulator;
       }, {});
+      writeCachedProfileLockStates(states);
+      return states;
     } catch (error) {
       console.warn("Profile lock state pull failed", error);
-      return {};
+      return readCachedProfileLockStates();
     }
   },
 

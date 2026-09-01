@@ -574,6 +574,12 @@ export const SearchScreen = {
     input.focus?.();
     this.focusNode(this.container?.querySelector(".focusable.focused") || null, input);
     restoreInputSelection(input, selectionSnapshot);
+    // Reportado pelo Mane155: os posteres da busca so apareciam depois que ele mexia
+    // no D-pad. Este caminho troca as fileiras a cada consulta, mas nao rodava a
+    // hidratacao — quem chamava era so o render completo, entao a primeira passada
+    // acontecia apenas no scroll seguinte. E idempotente: o listener e protegido por
+    // __searchScrollBound e so a passada inicial e refeita.
+    this.bindResultImageEvents();
     this.pendingAutoFocusResults = false;
   },
 

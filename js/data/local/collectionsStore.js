@@ -303,6 +303,15 @@ export const CollectionsStore = {
     }
   },
 
+  /*
+   * Normaliza um payload que JA e objeto. O caminho do sync recebe o JSON do RPC ja
+   * parseado e fazia JSON.stringify + importFromJson (JSON.parse) so para chegar no
+   * normalizeState -- um roundtrip de ~677 KB por boot, de graca.
+   */
+  normalizeCollections(value) {
+    return normalizeState(value).collections;
+  },
+
   exportCurrentProfileJson(profileId = null) {
     return this.exportToJson(this.getForProfile(profileId));
   },

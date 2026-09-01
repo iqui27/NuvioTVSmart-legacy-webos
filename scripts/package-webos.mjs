@@ -244,7 +244,14 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
       ? `  <script>
     (function () {
       var largura = window.innerWidth || screen.width || 1920;
-      var sufixo = largura <= ${LEGACY_SCALE_MAX_WIDTH} ? "${LEGACY_SCALED_SUFFIX}" : "";
+      // NUVIO_FORCE_UI_PLANE=720 no build gera um pacote que ignora a medicao e usa
+      // sempre a folha de 720. E o plano B para uma TV onde o innerWidth mentir sobre
+      // a plane real -- sem isso, descobrir isso custaria mais uma rodada com o testador.
+      var sufixo = ${process.env.NUVIO_FORCE_UI_PLANE === "720" ? "true" : "false"}
+        ? "${LEGACY_SCALED_SUFFIX}"
+        : largura <= ${LEGACY_SCALE_MAX_WIDTH}
+          ? "${LEGACY_SCALED_SUFFIX}"
+          : "";
       window.__NUVIO_UI_PLANE__ = { largura: largura, sufixo: sufixo };
       var folhas = ${JSON.stringify(LEGACY_SCALED_SHEETS)};
       for (var i = 0; i < folhas.length; i++) {
