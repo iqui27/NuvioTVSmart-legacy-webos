@@ -1,7 +1,11 @@
 import { Router } from "../../navigation/router.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Environment } from "../../../platform/environment.js";
-import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
+import {
+  atualizarImagensDeFileiras,
+  atualizarImagensDeGrade
+} from "../../../core/util/gradeLazyImages.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
@@ -96,14 +100,13 @@ function bestTraktImage(images = {}, ...kinds) {
   return kinds.map((kind) => normalizeTraktImageCandidate(images?.[kind])).find(Boolean) || "";
 }
 
-// Mesma razao do metaDetailsScreen: superconjunto das duas condicoes.
-function folderPosterLoadingMode() {
-  return Environment.isTizen() ||
-    Environment.isWebOS() ||
-    getTvRuntimePerformanceProfile().isPerformanceConstrained
-    ? "eager"
-    : "lazy";
-}
+// folderPosterLoadingMode() foi removido de proposito: ele devolvia "eager" nas
+// TVs (e "lazy" era ignorado de qualquer forma — `loading="lazy"` e Chrome 76,
+// o Chromium 53 do webOS 3 nao conhece o atributo), entao TODO poster do folder
+// decodificava no mount e ficava retido. O lazy agora e feito em JS com o mesmo
+// padrao data-src + hidrata/libera do catalogSeeAllScreen (ver
+// js/core/util/gradeLazyImages.js), que funciona em qualquer runtime — por isso
+// nao ha mais gate por plataforma aqui.
 
 function toImageUrl(path, kind = "poster") {
   if (!path) {
@@ -1376,7 +1379,7 @@ export const FolderDetailScreen = {
             <div class="seeall-card-poster-wrap">
               ${
                 item.poster
-                  ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="${folderPosterLoadingMode()}" decoding="async" />`
+                  ? `<img class="seeall-card-poster-image" data-src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="${escapeHtml(item.name || "content")}" decoding="async" />`
                   : `<div class="seeall-card-poster placeholder"></div>`
               }
               ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -1422,7 +1425,7 @@ export const FolderDetailScreen = {
           <div class="seeall-card-poster-wrap">
             ${
               item.poster
-                ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="${folderPosterLoadingMode()}" decoding="async" />`
+                ? `<img class="seeall-card-poster-image" data-src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="${escapeHtml(item.name || "content")}" decoding="async" />`
                 : `<div class="seeall-card-poster placeholder"></div>`
             }
             ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -1529,6 +1532,63 @@ export const FolderDetailScreen = {
     this.buildNavigationModel();
     this.restoreFocus();
     this.applyHeroToDom();
+    this.bindShellImageEvents();
+  },
+
+  /**
+   * Ver js/core/util/gradeLazyImages.js: os posteres do folder nasciam com `src`
+   * direto e `loading` calculado — que nas TVs era "eager" e, mesmo quando "lazy",
+   * o Chromium 53 ignora o atributo. Resultado: toda a colecao decodificada de uma
+   * vez. Mesmo padrao data-src + hidrata/libera do see-all, escolhendo a variante
+   * pela geometria do layout: grade uniforme no modo TABBED_GRID, fileiras
+   * horizontais empilhadas no modo de linhas por fonte.
+   */
+  agendarAtualizacaoDeImagens() {
+    if (this.atualizacaoDeImagensAgendada) {
+      return;
+    }
+    this.atualizacaoDeImagensAgendada = true;
+    const executar = () => {
+      this.atualizacaoDeImagensAgendada = false;
+      const shell = this.container?.querySelector(".folder-detail-shell") || null;
+      if (!shell) {
+        return;
+      }
+      const grade = shell.querySelector(".seeall-grid");
+      if (grade) {
+        atualizarImagensDeGrade({ shell, grade });
+        return;
+      }
+      atualizarImagensDeFileiras({
+        shell,
+        seletorFileira: ".folder-detail-row",
+        seletorImagem: ".seeall-card-poster-image"
+      });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(executar);
+    } else {
+      setTimeout(executar, 16);
+    }
+  },
+
+  bindShellImageEvents() {
+    const shell = this.container?.querySelector(".folder-detail-shell") || null;
+    if (!shell) {
+      return;
+    }
+    // Primeira passada antes de qualquer rolagem: a viewport inicial precisa
+    // estar hidratada quando o foco chegar.
+    this.agendarAtualizacaoDeImagens();
+    if (shell.__folderShellImagesBound) {
+      return;
+    }
+    shell.__folderShellImagesBound = true;
+    // A navegacao por D-pad escreve `shell.scrollTop` diretamente (ensureVisible),
+    // o que tambem dispara `scroll` — um unico listener cobre controle remoto e ponteiro.
+    shell.addEventListener("scroll", () => this.agendarAtualizacaoDeImagens(), {
+      passive: true
+    });
   },
 
   renderFollowLayout() {

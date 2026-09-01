@@ -35,6 +35,8 @@ import {
 } from "../../components/sidebarNavigation.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { scrollIntoNearestView } from "../../../platform/legacyDom.js";
+import { atualizarImagensDeGrade } from "../../../core/util/gradeLazyImages.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const PICKER_MENU_EXIT_MS = 160;
@@ -777,6 +779,7 @@ export const LibraryScreen = {
     }
 
     this.buildGridRows();
+    this.bindGridImageEvents();
     ScreenUtils.indexFocusables(this.container);
     bindRootSidebarEvents(this.container, {
       currentRoute: "library",
@@ -825,7 +828,17 @@ export const LibraryScreen = {
                        data-backdrop-src="${escapeHtml(item.background || "")}"
                        data-addon-base-url="${escapeHtml(item.addonBaseUrl || "")}"
                        data-focus-key="${escapeHtml(focusKey)}">
-                <div class="library-grid-poster${item.poster ? "" : " placeholder"}"${item.poster ? ` style="background-image:url('${escapeHtml(item.poster)}')"` : ""}>
+                <div class="library-grid-poster${item.poster ? "" : " placeholder"}">
+                  ${
+                    /* <img data-src> em vez de background-image inline: CSS de fundo
+                       nao tem lazy possivel por atributo, entao TODA a biblioteca
+                       decodificava no mount e ficava retida — mesma causa de OOM do
+                       see-all. O <img> entra no hidrata/libera de gradeLazyImages e
+                       ainda clampa a URL do TMDB para o que a tela usa. */
+                    item.poster
+                      ? `<img class="library-grid-poster-image" data-src="${escapeHtml(tmdbImageAtSize(item.poster, "w500"))}" alt="" decoding="async" />`
+                      : ""
+                  }
                   ${isWatched ? renderTitleWatchedBadge({ className: "library-watched-badge", iconClassName: "library-watched-badge-svg" }) : ""}
                 </div>
                 <div class="library-grid-title">${escapeHtml(item.name || item.id || "Untitled")}</div>
@@ -836,6 +849,51 @@ export const LibraryScreen = {
         </div>
       </section>
     `;
+  },
+
+  /**
+   * Ver js/core/util/gradeLazyImages.js: a Biblioteca inteira (potencialmente
+   * centenas de titulos numa lista do Trakt) decodificava no mount porque o poster
+   * era background-image inline — sem atributo para adiar nem soltar. Mesmo padrao
+   * data-src + hidrata/libera do catalogSeeAllScreen; a margem de 1,5 tela do
+   * helper tambem absorve o cabecalho/filtros acima da grade dentro do scroller.
+   */
+  agendarAtualizacaoDeImagens() {
+    if (this.atualizacaoDeImagensAgendada) {
+      return;
+    }
+    this.atualizacaoDeImagensAgendada = true;
+    const executar = () => {
+      this.atualizacaoDeImagensAgendada = false;
+      atualizarImagensDeGrade({
+        shell: this.container?.querySelector(".home-main") || null,
+        grade: this.container?.querySelector(".library-grid") || null,
+        seletorCard: ".library-grid-card",
+        seletorImagem: ".library-grid-poster-image"
+      });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(executar);
+    } else {
+      setTimeout(executar, 16);
+    }
+  },
+
+  bindGridImageEvents() {
+    const main = this.container?.querySelector(".home-main") || null;
+    if (!main) {
+      return;
+    }
+    // Primeira passada mesmo sem rolagem: a viewport inicial precisa hidratar
+    // antes de o foco chegar na grade.
+    this.agendarAtualizacaoDeImagens();
+    if (main.__libraryGridImagesBound) {
+      return;
+    }
+    main.__libraryGridImagesBound = true;
+    main.addEventListener("scroll", () => this.agendarAtualizacaoDeImagens(), {
+      passive: true
+    });
   },
 
   renderEmptyState() {
@@ -1106,6 +1164,7 @@ export const LibraryScreen = {
     this.libraryRouteEnterPending = false;
 
     this.buildGridRows();
+    this.bindGridImageEvents();
     ScreenUtils.indexFocusables(this.container);
     bindRootSidebarEvents(this.container, {
       currentRoute: "library",

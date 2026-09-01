@@ -25,6 +25,73 @@ const FATOR_MARGEM_LIBERACAO = 2.5;
 // a imagem chegar. 1,5 cobre a rolagem rapida e ainda deixa a memoria estavel.
 const FATOR_MARGEM_HIDRATACAO = 1.5;
 
+/**
+ * Variante para telas que sao uma PILHA VERTICAL DE FILEIRAS HORIZONTAIS
+ * (Busca, folder de colecao em modo fileiras). A conta por indice da versao de
+ * grade nao serve aqui: as fileiras tem alturas e contagens diferentes, entao a
+ * unica geometria confiavel e a posicao vertical de cada fileira — e como sao
+ * poucas (uma dezena, nao 200+ cards), medir cada uma por rolagem e barato.
+ * A decisao hidrata/libera e POR FILEIRA: todos os posteres de uma fileira perto
+ * da viewport carregam (a rolagem horizontal dentro dela e limitada e nao vaza
+ * memoria sem teto como a paginacao vertical), e a fileira longe devolve tudo.
+ * Mesmo protocolo de atributos e mesmas margens da versao de grade.
+ */
+export function atualizarImagensDeFileiras({ shell, seletorFileira, seletorImagem } = {}) {
+  if (!shell || !seletorFileira || !seletorImagem) {
+    return 0;
+  }
+  const fileiras = shell.querySelectorAll(seletorFileira);
+  if (!fileiras.length) {
+    return 0;
+  }
+  const alturaVisivel = shell.clientHeight || 0;
+  const topo = Number(shell.scrollTop || 0);
+  const shellRect = shell.getBoundingClientRect();
+  const margemHidratar = alturaVisivel * FATOR_MARGEM_HIDRATACAO;
+  const margemLiberar = alturaVisivel * FATOR_MARGEM_LIBERACAO;
+  const inicioHidratar = topo - margemHidratar;
+  const fimHidratar = topo + alturaVisivel + margemHidratar;
+  const inicioLiberar = topo - margemLiberar;
+  const fimLiberar = topo + alturaVisivel + margemLiberar;
+  let mexidas = 0;
+
+  for (let f = 0; f < fileiras.length; f += 1) {
+    const fileira = fileiras[f];
+    const rect = fileira.getBoundingClientRect();
+    // Posicao no conteudo do scroller, independente de onde o shell esta na tela.
+    const y = rect.top - shellRect.top + topo;
+    const altura = rect.height || 0;
+    const hidratar = y + altura >= inicioHidratar && y <= fimHidratar;
+    const liberar = y + altura < inicioLiberar || y > fimLiberar;
+    if (!hidratar && !liberar) {
+      continue; // Zona de histerese: nao mexe, evita ciclo na borda.
+    }
+    const imagens = fileira.querySelectorAll(seletorImagem);
+    for (let i = 0; i < imagens.length; i += 1) {
+      const imagem = imagens[i];
+      if (hidratar) {
+        const pendente = String(imagem.dataset.src || "").trim();
+        if (pendente && !imagem.getAttribute("src")) {
+          imagem.setAttribute("src", pendente);
+          imagem.dataset.lazySrc = pendente;
+          imagem.removeAttribute("data-src");
+          mexidas += 1;
+        }
+        continue;
+      }
+      const guardada = String(imagem.dataset.lazySrc || "").trim();
+      // `removeAttribute` e obrigatorio: `src = ""` faz o Chromium 53 pedir a
+      // propria URL do documento e enfileirar um erro de rede por imagem.
+      if (guardada && imagem.getAttribute("src")) {
+        imagem.removeAttribute("src");
+        imagem.setAttribute("data-src", guardada);
+        mexidas += 1;
+      }
+    }
+  }
+  return mexidas;
+}
+
 export function atualizarImagensDeGrade({
   shell,
   grade,

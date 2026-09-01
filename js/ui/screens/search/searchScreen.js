@@ -39,6 +39,8 @@ import {
   catalogSupportsExtra
 } from "./searchCatalogTargets.js";
 import { renderInlineIcon } from "../../components/inlineIcons.js";
+import { atualizarImagensDeFileiras } from "../../../core/util/gradeLazyImages.js";
+import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const SEARCH_RESULTS_PER_ROW_DEFAULT = 18;
@@ -832,7 +834,7 @@ export const SearchScreen = {
                      data-catalog-type="${escapeHtml(row.type || item.catalogType || "")}"
                      data-row-key="${escapeHtml(rowKey)}">
               <div class="search-result-poster-wrap">
-                ${item.poster ? `<img class="search-result-poster" src="${item.poster}" alt="${item.name || "content"}" loading="lazy" decoding="async" />` : `<div class="search-result-poster placeholder"></div>`}
+                ${item.poster ? `<img class="search-result-poster" data-src="${escapeHtml(tmdbImageAtSize(item.poster, "w342"))}" alt="${escapeHtml(item.name || "content")}" decoding="async" />` : `<div class="search-result-poster placeholder"></div>`}
                 ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
               </div>
               <div class="search-result-name" dir="auto">${item.name || "Untitled"}</div>
@@ -933,6 +935,7 @@ export const SearchScreen = {
     const input = this.container.querySelector("#searchInput");
     input?.blur?.();
     this.restoreScrollState();
+    this.bindResultImageEvents();
     const shouldFocusResults = Boolean(
       this.pendingAutoFocusResults && this.navModel?.rows?.[0]?.[0]
     );
@@ -942,6 +945,52 @@ export const SearchScreen = {
       this.restoreContentFocus(shouldFocusResults);
     }
     this.pendingAutoFocusResults = false;
+  },
+
+  /**
+   * Ver js/core/util/gradeLazyImages.js: os cards nasciam com `src` + `loading="lazy"`,
+   * atributo que o Chromium 53 das TVs ignora (e Chrome 76) — toda fileira de 12+
+   * itens decodificava inteira e ficava retida. Mesmo padrao do see-all/Discover,
+   * na variante por fileira porque a Busca e uma pilha de trilhos horizontais,
+   * nao uma grade uniforme.
+   */
+  agendarAtualizacaoDeImagens() {
+    if (this.atualizacaoDeImagensAgendada) {
+      return;
+    }
+    this.atualizacaoDeImagensAgendada = true;
+    const executar = () => {
+      this.atualizacaoDeImagensAgendada = false;
+      atualizarImagensDeFileiras({
+        shell: this.container?.querySelector(".search-content") || null,
+        seletorFileira: ".search-results-row",
+        seletorImagem: ".search-result-poster[data-src], .search-result-poster[data-lazy-src]"
+      });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(executar);
+    } else {
+      setTimeout(executar, 16);
+    }
+  },
+
+  bindResultImageEvents() {
+    const content = this.container?.querySelector(".search-content") || null;
+    if (!content) {
+      return;
+    }
+    // Primeira passada mesmo sem rolagem: o que esta na viewport inicial precisa
+    // hidratar antes de o usuario mexer no D-pad.
+    this.agendarAtualizacaoDeImagens();
+    if (content.__searchScrollBound) {
+      return;
+    }
+    content.__searchScrollBound = true;
+    // O tween de rolagem do D-pad escreve `scrollTop` por quadro; o rAF do
+    // agendador colapsa essa rajada numa reconciliacao por frame.
+    content.addEventListener("scroll", () => this.agendarAtualizacaoDeImagens(), {
+      passive: true
+    });
   },
 
   isPosterHoldTarget(node) {

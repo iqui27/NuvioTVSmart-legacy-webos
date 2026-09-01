@@ -488,8 +488,21 @@ async function bootstrapApp() {
 
   ThemeManager.apply();
   I18n.apply();
-  warmStreamingLibs({ delayMs: 1400 });
-  warmScreenChunks({ delayMs: 2600 });
+  // ISSUE #1 (Mane155, webOS 3 / Chromium 38, LG de 2016): o warmup aquece
+  // hls.js+dash.js+player.chunk (~1,8MB de JS) 1,4s/2,6s apos o shell — bem em
+  // cima da escolha de perfil e do mount da Home, os dois momentos que o usuario
+  // reportou lentos (perfil ~15s, home ~10s). Nesse SoC single-main-thread o
+  // parse desses libs compete com o desenho da Home e nada disso e preciso ate a
+  // primeira reproducao. Os loaders sob demanda (loadStreamingLibs/loadScreenChunks)
+  // ja carregam ao entrar na rota do player/tela, entao aqui o warm e so otimizacao:
+  // no runtime legacy ele custa mais do que rende. Nas TVs modernas segue igual.
+  const runtimePerf = getTvRuntimePerformanceProfile();
+  const pularWarmNoArranque =
+    (Platform.isWebOS() && runtimePerf.isLegacyTvRuntime) || runtimePerf.isPerformanceConstrained;
+  if (!pularWarmNoArranque) {
+    warmStreamingLibs({ delayMs: 1400 });
+    warmScreenChunks({ delayMs: 2600 });
+  }
   void checkForAppUpdateOnStartup();
 
   markBootStage("Restoring session");

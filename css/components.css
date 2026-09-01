@@ -4396,6 +4396,21 @@ button:focus-visible {
   background: var(--card-bg);
 }
 
+/* O poster virou <img data-src> (antes era background-image inline) para poder
+   entrar no lazy hidrata/libera de gradeLazyImages — fundo CSS nao tem como ser
+   adiado nem solto. O <img> absoluto reproduz o visual do `cover` de antes; o
+   raio herda do frame para as bordas nao vazarem. Funciona igual no fallback
+   .no-aspect-ratio (altura via padding-bottom), pois o absoluto preenche o box. */
+.library-grid-poster-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
 .library-grid-title {
   width: 100%;
   padding: 0 4px;
