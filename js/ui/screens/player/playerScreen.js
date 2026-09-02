@@ -22643,9 +22643,21 @@ export const PlayerScreen = {
       }
     }
 
-    if (normalizeItemType(this.params?.itemType || "movie") === "series") {
+    const itemType = normalizeItemType(this.params?.itemType || "movie");
+    const detailParams = this.buildDetailRouteParamsFromPlayer();
+    if (
+      this.params?.itemId &&
+      Router.popToExistingRoute?.("detail", detailParams, {
+        allowSingleIntermediateRoute: true
+      })
+    ) {
       this.releaseCurrentEngineFsStreamBestEffort("playback-ended", { removeTorrent: true });
-      void Router.navigate("detail", this.buildDetailRouteParamsFromPlayer(), {
+      return;
+    }
+
+    if (itemType === "series") {
+      this.releaseCurrentEngineFsStreamBestEffort("playback-ended", { removeTorrent: true });
+      void Router.navigate("detail", detailParams, {
         skipStackPush: true,
         replaceHistory: true
       });

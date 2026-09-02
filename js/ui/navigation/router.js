@@ -270,15 +270,20 @@ export const Router = {
     this.ignoreNextPopstate = false;
     this.suppressPopstateUntil = 0;
 
-    const stackEntry = this.stack[this.stack.length - 1];
+    const targetStackIndex = Number.isInteger(pending.targetStackIndex)
+      ? pending.targetStackIndex
+      : this.stack.length - 1;
+    const stackEntry = this.stack[targetStackIndex];
     const stackMatches =
       this.stack.length === Number(pending.stackLength) &&
-      getStackEntryRoute(stackEntry) === pending.route;
+      targetStackIndex >= 0 &&
+      getStackEntryRoute(stackEntry) === pending.route &&
+      (!pending.stackEntry || stackEntry === pending.stackEntry);
     const routeMatches = state?.route === pending.route;
     const sourceMatches = this.current === pending.sourceRoute;
 
     if (sourceMatches && stackMatches && routeMatches) {
-      this.stack.pop();
+      this.stack.splice(targetStackIndex);
       const targetParams =
         state?.params && typeof state.params === "object"
           ? state.params
@@ -295,7 +300,7 @@ export const Router = {
       // A few TV browser builds can emit a null state when the app reaches the
       // first history entry. Keep the requested Android destination instead of
       // allowing the generic no-state path to jump to Home.
-      this.stack.pop();
+      this.stack.splice(targetStackIndex);
       await this.navigate(pending.route, getStackEntryParams(stackEntry) || pending.params, {
         skipStackPush: true,
         replaceHistory: true,
@@ -435,40 +440,83 @@ export const Router = {
     this.ignoreNextPopstate = true;
   },
 
-  popToExistingRoute(routeName, fallbackParams = {}) {
+  popToExistingRoute(routeName, fallbackParams = {}, options = {}) {
     const targetRoute = String(routeName || "").trim();
     if (!targetRoute || !this.routes[targetRoute] || this.current === targetRoute) {
       return false;
     }
 
+    const allowSingleIntermediateRoute = Boolean(options?.allowSingleIntermediateRoute);
+
     if (this.pendingHistoryReturn) {
       return this.pendingHistoryReturn.route === targetRoute;
     }
 
-    if (!this.historyInitialized || !window?.history || typeof window.history.back !== "function") {
+    if (!this.historyInitialized || !window?.history) {
       return false;
     }
 
     const currentHistoryRoute = String(window.history.state?.route || "");
     if (currentHistoryRoute && currentHistoryRoute !== this.current) {
       // The current route is still mounting and has not written its browser
-      // entry yet. Calling history.back() here would pop the caller's route
-      // instead of the Player/Stream entry; let the conservative replacement
-      // path finish the pending navigation first.
+      // entry yet. Traversing history here would pop the caller's route instead
+      // of the Player/Stream entry; let the conservative replacement path
+      // finish the pending navigation first.
+      return false;
+    }
+
+    const topStackIndex = this.stack.length - 1;
+    const topStackRoute = getStackEntryRoute(this.stack[topStackIndex]);
+    const targetStackIndex =
+      topStackRoute === targetRoute
+        ? topStackIndex
+        : allowSingleIntermediateRoute && topStackIndex > 0
+          ? topStackIndex - 1
+          : -1;
+    if (targetStackIndex < 0) {
+      return false;
+    }
+
+    const stackEntry = this.stack[targetStackIndex];
+    if (getStackEntryRoute(stackEntry) !== targetRoute) {
+      return false;
+    }
+
+    if (allowSingleIntermediateRoute && targetRoute === "detail") {
+      const targetItemId = String(fallbackParams?.itemId || "").trim();
+      const targetItemType = String(fallbackParams?.itemType || "")
+        .trim()
+        .toLowerCase();
+      const stackParams = getStackEntryParams(stackEntry);
+      const stackItemId = String(stackParams?.itemId || "").trim();
+      const stackItemType = String(stackParams?.itemType || "")
+        .trim()
+        .toLowerCase();
+      if (
+        (targetItemId && stackItemId !== targetItemId) ||
+        (targetItemType && stackItemType && stackItemType !== targetItemType)
+      ) {
+        return false;
+      }
+    }
+
+    const historySteps = this.stack.length - targetStackIndex;
+    if (historySteps > 1 && !allowSingleIntermediateRoute) {
+      return false;
+    }
+    if (
+      (historySteps === 1 && typeof window.history.back !== "function") ||
+      (historySteps > 1 && typeof window.history.go !== "function")
+    ) {
       return false;
     }
 
     const previousHistoryRoute = String(window.history.state?.previousRoute || "");
-    if (previousHistoryRoute && previousHistoryRoute !== targetRoute) {
-      // The top Router entry can remain a Sources route after an in-place
-      // Player replacement (for example automatic episode progression). The
-      // explicit history predecessor prevents treating that stale stack entry
-      // as the Android destination.
-      return false;
-    }
-
-    const stackEntry = this.stack[this.stack.length - 1];
-    if (getStackEntryRoute(stackEntry) !== targetRoute) {
+    const expectedPreviousRoute = historySteps === 1 ? targetRoute : topStackRoute;
+    if (previousHistoryRoute && previousHistoryRoute !== expectedPreviousRoute) {
+      // The explicit history predecessor prevents treating a stale stack entry
+      // as the Android destination. For the natural-end path, one Sources
+      // entry may sit between Player and the existing Detail.
       return false;
     }
 
@@ -477,11 +525,17 @@ export const Router = {
       params: fallbackParams && typeof fallbackParams === "object" ? fallbackParams : {},
       sourceRoute: this.current,
       stackLength: this.stack.length,
+      stackEntry,
+      targetStackIndex,
       requestedAt: Date.now()
     };
 
     try {
-      window.history.back();
+      if (historySteps === 1) {
+        window.history.back();
+      } else {
+        window.history.go(-historySteps);
+      }
       return true;
     } catch (error) {
       this.pendingHistoryReturn = null;
