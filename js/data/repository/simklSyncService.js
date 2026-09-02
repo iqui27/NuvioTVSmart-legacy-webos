@@ -40,9 +40,18 @@ const STATUS_DEFINITIONS = [
 ];
 
 let refreshInFlight = null;
+const refreshStatusByProfile = new Map();
 
 function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
+}
+
+function setRefreshStatus(profileId, status) {
+  refreshStatusByProfile.set(String(profileId || "1"), status);
+}
+
+function snapshotHasLoadedProgress(snapshot) {
+  return Boolean(snapshot?.initialized && Number(snapshot?.lastSyncedAt || 0) > 0);
 }
 
 function emptySnapshot() {
@@ -657,13 +666,25 @@ export const SimklSyncService = {
 
   getSnapshot,
 
+  hasLoadedRemoteProgress(profileId = activeProfileId()) {
+    const snapshot = getSnapshot(profileId);
+    const status = refreshStatusByProfile.get(String(profileId || "1"));
+    if (status === "error") {
+      return false;
+    }
+    return snapshotHasLoadedProgress(snapshot);
+  },
+
   isTrackedAsWatching(contentId, profileId) {
     return isTrackedAsWatching(getSnapshot(profileId), contentId);
   },
 
   async refresh({ force = false } = {}) {
-    if (!SimklAuthService.isAuthenticated()) return false;
     const profileId = activeProfileId();
+    if (!SimklAuthService.isAuthenticated()) {
+      setRefreshStatus(profileId, "error");
+      return false;
+    }
     const current = getSnapshot(profileId);
     const needsBootstrap = current.schemaVersion !== SNAPSHOT_SCHEMA_VERSION;
     if (
@@ -672,9 +693,11 @@ export const SimklSyncService = {
       current.lastCheckedAt &&
       Date.now() - current.lastCheckedAt < AUTOMATIC_REFRESH_INTERVAL_MS
     ) {
+      setRefreshStatus(profileId, snapshotHasLoadedProgress(current) ? "loaded" : "error");
       return false;
     }
     if (refreshInFlight?.profileId === profileId) return refreshInFlight.promise;
+    setRefreshStatus(profileId, "loading");
     const promise = (
       needsBootstrap || !current.initialized
         ? initialSync(profileId)
@@ -683,7 +706,14 @@ export const SimklSyncService = {
       .then((snapshot) => {
         if (activeProfileId() !== profileId) return false;
         saveSnapshot({ ...snapshot, schemaVersion: SNAPSHOT_SCHEMA_VERSION }, profileId);
+        setRefreshStatus(profileId, "loaded");
         return true;
+      })
+      .catch((error) => {
+        if (activeProfileId() === profileId) {
+          setRefreshStatus(profileId, "error");
+        }
+        throw error;
       })
       .finally(() => {
         if (refreshInFlight?.promise === promise) refreshInFlight = null;
@@ -693,7 +723,9 @@ export const SimklSyncService = {
   },
 
   clearCurrentProfile() {
-    clearSnapshot();
+    const profileId = activeProfileId();
+    clearSnapshot(profileId);
+    setRefreshStatus(profileId, "loaded");
   },
 
   async getLibraryTabs() {

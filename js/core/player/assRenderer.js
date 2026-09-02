@@ -53,7 +53,8 @@ export function createAssRenderer({
   selectionToken,
   isCurrentSelection,
   resampling = "video_height",
-  forceRafFrameLoop = false
+  forceRafFrameLoop = false,
+  forcePlaybackFrameLoopKick = false
 }) {
   if (!body || !video || !container) {
     return { ok: false, error: "ass-renderer-missing-arguments" };
@@ -167,7 +168,10 @@ export function createAssRenderer({
         // would freeze at its initial seek. Re-dispatch play (ass.js listens
         // to both play and playing, but the player binds only playing, so a
         // synthetic playing would trigger onPlaying side effects).
-        if (video && typeof video.paused === "boolean" && !video.paused) {
+        const shouldKickPlaybackFrameLoop =
+          typeof video.dispatchEvent === "function" &&
+          (forcePlaybackFrameLoopKick || (typeof video.paused === "boolean" && !video.paused));
+        if (shouldKickPlaybackFrameLoop) {
           try {
             // Legacy webOS runtimes may lack the Event constructor; fall back
             // to document.createEvent like PlayerController.emitVideoEvent.
