@@ -280,7 +280,18 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
     });
   }
 
+  // Sem `force` explicito o requestSyncNow assume force=true e o atalho warm de 6 h
+  // (startupSyncService.js) fica inalcancavel a partir do boot: o pull completo -- 6
+  // estagios serializados, ~13 requisicoes, com collectionsState de 677 KB no meio --
+  // refazia tudo em todo arranque, no main thread, junto com a primeira pintura da
+  // Home. Com force:false um boot dentro da janela pinta do estado local e so o pull
+  // leve de foreground (progresso/assistidos/biblioteca) roda depois.
+  //
+  // Isto NAO aparecia nos builds exp.20-28: eles saiam com SUPABASE_URL vazia, a
+  // primeira requisicao falhava em milissegundos e o backoff derrubava o resto do
+  // sync. O pull completo so passa a rodar de verdade agora que o env esta correto.
   void StartupSyncService.requestSyncNow({
+    force: false,
     notifyPullCompleted: experienceRoute === "home"
   }).catch((error) => {
     console.warn("Profile background sync failed", error);

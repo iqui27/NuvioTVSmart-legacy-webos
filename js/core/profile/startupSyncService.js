@@ -468,6 +468,18 @@ export const StartupSyncService = {
       // precisa de copia na nuvem. Ver reconcileTraktCredentialDetached.
       reconcileTraktCredentialDetached(profileId);
       this.lastPullCompleted = true;
+      // Dispensar o pull completo nao pode significar dado congelado por 6 h: o que
+      // muda de um boot para o outro (progresso, assistidos, biblioteca) vem pelo
+      // pull leve de foreground -- 4 requisicoes, sem tema/i18n, e so depois de
+      // FOREGROUND_ACTIVITY_PULL_DELAY_MS, quando a Home ja pintou do estado local.
+      this.requestForegroundSync();
+      if (globalThis.__NUVIO_DEBUG_HOME_PERF__) {
+        try {
+          console.info("[home-perf] startupSync.warmSkip", { key: key });
+        } catch (_) {
+          // Log de diagnostico nunca derruba o sync.
+        }
+      }
       return true;
     }
 

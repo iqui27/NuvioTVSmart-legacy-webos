@@ -2576,7 +2576,10 @@ export const ProfileSelectionScreen = {
         experienceRoute === "home" ? {} : { replaceHistory: true, skipStackPush: true }
       );
       marcar("Router.navigate");
+      // Ver o comentario em app.js: force:false para nao refazer o pull completo em
+      // todo arranque e poder usar o atalho warm de 6 h.
       void StartupSyncService.requestSyncNow({
+        force: false,
         notifyPullCompleted: experienceRoute === "home"
       }).catch((error) => {
         console.warn("Profile background sync failed", error);
