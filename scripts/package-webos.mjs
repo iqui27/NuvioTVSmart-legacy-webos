@@ -243,28 +243,60 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
     compatibilityPolicy.webOsChromiumVersion < 49
       ? `  <script>
     (function () {
-      var largura = window.innerWidth || screen.width || 1920;
-      // NUVIO_FORCE_UI_PLANE=720 no build gera um pacote que ignora a medicao e usa
-      // sempre a folha de 720. E o plano B para uma TV onde o innerWidth mentir sobre
-      // a plane real -- sem isso, descobrir isso custaria mais uma rodada com o testador.
-      var sufixo = ${process.env.NUVIO_FORCE_UI_PLANE === "720" ? "true" : "false"}
-        ? "${LEGACY_SCALED_SUFFIX}"
-        : largura <= ${LEGACY_SCALE_MAX_WIDTH}
-          ? "${LEGACY_SCALED_SUFFIX}"
-          : "";
-      window.__NUVIO_UI_PLANE__ = { largura: largura, sufixo: sufixo };
+      // ISSUE #1 -- o quadro medido na TV do lijovklm (43LH595T-TD, Full HD, webOS 3.4):
+      //   iw=1920 ih=1080  dpr=1  screen=1280x720  clientWxH=1920x1080
+      // O layout viewport e 1920, a superficie visivel e 1280x720, e o compositor CORTA
+      // em vez de escalar. Sao DOIS numeros diferentes e cada um manda numa coisa:
+      //   - innerWidth  = espaco onde o CSS px resolve  -> decide QUAL folha carregar
+      //   - screen      = o que o usuario realmente ve  -> decide se precisa compensar
+      // Escolher pelo innerWidth foi o erro do exp.26/27: e justamente o numero que
+      // mente sobre o tamanho da tela.
+      var vp = window.innerWidth || 1920;
+      var tela = (window.screen && window.screen.width) || vp;
+      var sufixo = vp <= ${LEGACY_SCALE_MAX_WIDTH} ? "${LEGACY_SCALED_SUFFIX}" : "";
+      var forcado = ${process.env.NUVIO_FORCE_UI_PLANE === "720" ? "true" : "false"};
+      if (forcado) {
+        sufixo = "${LEGACY_SCALED_SUFFIX}";
+      }
+      window.__NUVIO_UI_PLANE__ = { vp: vp, tela: tela, sufixo: sufixo, escala: 1 };
       var folhas = ${JSON.stringify(LEGACY_SCALED_SHEETS)};
       for (var i = 0; i < folhas.length; i++) {
         document.write(
           '<link rel="stylesheet" href="' + folhas[i].replace(/\\.css$/, sufixo + ".css") + '">'
         );
       }
+
+      // ULTIMO RECURSO, so quando o appinfo resolution nao foi honrado e sobrou
+      // descasamento: encolhe o canvas inteiro para dentro da superficie visivel.
+      // Preferimos NAO chegar aqui -- com o layout viewport certo o layout e nativo e
+      // nada disso roda. O preco de escalar e que getBoundingClientRect passa a
+      // devolver px visuais enquanto scrollTop segue em px de layout, e as margens do
+      // lazy de imagem ficam proporcionalmente erradas; e feio, mas e melhor que 1/3
+      // da tela cortado.
+      if (tela > 0 && vp > tela) {
+        var escala = tela / vp;
+        window.__NUVIO_UI_PLANE__.escala = escala;
+        var aplicar = function () {
+          var raiz = document.documentElement;
+          if (!raiz) {
+            return;
+          }
+          raiz.style.transformOrigin = "0 0";
+          raiz.style.transform = "scale(" + escala + ")";
+          raiz.style.width = vp + "px";
+          raiz.style.overflow = "hidden";
+        };
+        if (document.documentElement) {
+          aplicar();
+        }
+        document.addEventListener("DOMContentLoaded", aplicar);
+      }
     })();
   </script>`
       : LEGACY_SCALED_SHEETS.map((href) => `  <link rel="stylesheet" href="${href}" />`).join("\n");
 
   const diagOverlay = process.env.NUVIO_DIAG_OVERLAY
-    ? `  <script>(function(){function f(){var vv=window.visualViewport;return 'iw='+window.innerWidth+' ih='+window.innerHeight+'\\ndpr='+window.devicePixelRatio+'\\nscreen='+screen.width+'x'+screen.height+'\\nclientWxH='+document.documentElement.clientWidth+'x'+document.documentElement.clientHeight+(vv?('\\nvisualVP='+Math.round(vv.width)+'x'+Math.round(vv.height)):'')+'\\ncss='+((window.__NUVIO_UI_PLANE__&&window.__NUVIO_UI_PLANE__.sufixo)?'720':'1920');}function d(){var e=document.getElementById('__nvdiag');if(!e){e=document.createElement('div');e.id='__nvdiag';e.style.cssText='position:fixed;top:0;left:0;z-index:2147483647;background:rgba(0,0,0,0.88);color:#0f0;font-family:monospace;font-size:34px;line-height:1.35;padding:16px 22px;white-space:pre;border:3px solid #0f0';(document.body||document.documentElement).appendChild(e);}e.textContent='NUVIO DIAG\\n'+f();}if(document.body){d();}document.addEventListener('DOMContentLoaded',d);setInterval(d,700);})();</script>\n`
+    ? `  <script>(function(){function f(){var vv=window.visualViewport;return 'iw='+window.innerWidth+' ih='+window.innerHeight+'\\ndpr='+window.devicePixelRatio+'\\nscreen='+screen.width+'x'+screen.height+'\\nclientWxH='+document.documentElement.clientWidth+'x'+document.documentElement.clientHeight+(vv?('\\nvisualVP='+Math.round(vv.width)+'x'+Math.round(vv.height)):'')+'\\ncss='+((window.__NUVIO_UI_PLANE__&&window.__NUVIO_UI_PLANE__.sufixo)?'720':'1920')+' escala='+((window.__NUVIO_UI_PLANE__&&window.__NUVIO_UI_PLANE__.escala)||1);}function d(){var e=document.getElementById('__nvdiag');if(!e){e=document.createElement('div');e.id='__nvdiag';e.style.cssText='position:fixed;top:0;left:0;z-index:2147483647;background:rgba(0,0,0,0.88);color:#0f0;font-family:monospace;font-size:34px;line-height:1.35;padding:16px 22px;white-space:pre;border:3px solid #0f0';(document.body||document.documentElement).appendChild(e);}e.textContent='NUVIO DIAG\\n'+f();}if(document.body){d();}document.addEventListener('DOMContentLoaded',d);setInterval(d,700);})();</script>\n`
     : "";
 
   return `<!DOCTYPE html>
@@ -370,11 +402,20 @@ async function stageApp() {
   appInfo.icon = "icon.png";
   appInfo.largeIcon = "largeIcon.png";
   appInfo.services = [webOsServiceId];
-  // ISSUE #1: o resolution do appinfo NAO decide sozinho a graphics plane. Medido na
-  // C9 (webOS 4.10, painel UHD): declarar 1280x720 aqui deixou innerWidth em 1920 do
-  // mesmo jeito. Em painel FHD a plane e travada em 720 e o 1920 e que nao vale. Como
-  // nenhum dos dois valores serve para as duas TVs, o appinfo fica no padrao 1920x1080
-  // e quem decide o tamanho do CSS e a deteccao de innerWidth em runtime (index.html).
+  // ISSUE #1 (lijovklm, 43LH595T-TD, painel Full HD, webOS 3.4): o overlay de
+  // diagnostico na TV dele mostrou o quadro real --
+  //   iw=1920 ih=1080  dpr=1  screen=1280x720  clientWxH=1920x1080
+  // O layout viewport e 1920x1080, a superficie VISIVEL e 1280x720, e o compositor
+  // NAO escala: ele CORTA. O usuario ve so o canto superior esquerdo (1280/1920 =
+  // 2/3, ancorado no topo-esquerda, aspect ratio intacto) -- exatamente o sintoma.
+  //
+  // Declarar 720 aqui alinha o layout viewport com a superficie nos aparelhos que
+  // honram o campo. Na C9 (UHD) medi que ele e ignorado e innerWidth fica 1920, o
+  // que e inofensivo: la a superficie tambem e 1920 e nao ha descasamento. Quando
+  // nem o appinfo nem o viewport resolvem, o index.html ainda compensa em runtime.
+  if (compatibilityPolicy.webOsChromiumVersion < 49) {
+    appInfo.resolution = "1280x720";
+  }
   validateWebOsAppInfo(appInfo);
   await writeFile(appInfoPath, `${JSON.stringify(appInfo, null, 2)}\n`, "utf8");
 
