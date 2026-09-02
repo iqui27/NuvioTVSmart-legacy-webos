@@ -33,6 +33,9 @@ const WEBOS_AUDIO_TRACK_SELECTION_TIMEOUT_MS = 4000;
 const AVPLAY_BUFFER_FOR_PLAY_SECONDS = 5;
 const AVPLAY_BUFFER_FOR_RESUME_SECONDS = 4;
 const AVPLAY_BUFFERING_TIMEOUT_SECONDS = 10;
+// Tizen keeps Samsung's default 20-second buffering timeout; allow a short
+// grace period for the seek callback before treating the native session as stuck.
+const AVPLAY_SEEK_TIMEOUT_MS = 30_000;
 
 function logEngineFsDebug(...args) {
   if (globalThis.__NUVIO_DEBUG_ENGINEFS__) {
@@ -185,6 +188,7 @@ export const PlayerController = {
   avplayDurationMs: 0,
   avplaySeekRequestToken: 0,
   avplaySeekInFlight: false,
+  avplaySeekTimeoutTimer: null,
   avplayTrackSyncAt: 0,
   lastPlaybackErrorCode: 0,
   lastHlsErrorDiagnostic: null,
@@ -670,6 +674,13 @@ export const PlayerController = {
     if (this.avplayTickTimer) {
       clearInterval(this.avplayTickTimer);
       this.avplayTickTimer = null;
+    }
+  },
+
+  clearAvPlaySeekTimeout() {
+    if (this.avplaySeekTimeoutTimer !== null) {
+      clearTimeout(this.avplaySeekTimeoutTimer);
+      this.avplaySeekTimeoutTimer = null;
     }
   },
 
@@ -2388,6 +2399,7 @@ export const PlayerController = {
   },
 
   teardownAvPlay() {
+    this.clearAvPlaySeekTimeout();
     this.avplaySeekRequestToken = Number(this.avplaySeekRequestToken || 0) + 1;
     this.avplaySeekInFlight = false;
     const avplay = this.getAvPlay();
@@ -2635,6 +2647,7 @@ export const PlayerController = {
           if (!this.isPlaybackRequestActive(playToken, url)) {
             return;
           }
+          this.clearAvPlaySeekTimeout();
           if (this.avplaySeekInFlight) {
             this.avplaySeekInFlight = false;
             this.avplaySeekRequestToken = Number(this.avplaySeekRequestToken || 0) + 1;
@@ -2816,6 +2829,7 @@ export const PlayerController = {
       if (seekToken !== Number(this.avplaySeekRequestToken || 0) || !this.isUsingAvPlay()) {
         return;
       }
+      this.clearAvPlaySeekTimeout();
 
       this.avplaySeekInFlight = false;
       this.refreshAvPlayTimeline();
@@ -2841,6 +2855,36 @@ export const PlayerController = {
         this.emitVideoEvent("canplay", { playbackEngine: this.playbackEngine });
       }
     };
+
+    this.avplaySeekTimeoutTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (seekToken !== Number(this.avplaySeekRequestToken || 0) || !this.isUsingAvPlay()) {
+        return;
+      }
+      this.clearAvPlaySeekTimeout();
+
+      const failedPlaybackEngine = this.playbackEngine;
+      const timeoutError = "PLAYER_ERROR_SEEK_FAILED (timeout)";
+      logTizenAvPlayDebug("Tizen AVPlay seek timed out; tearing down player", {
+        targetMs: normalizedTargetMs,
+        timeoutMs: AVPLAY_SEEK_TIMEOUT_MS
+      });
+      this.cancelProgressSyncAfterSeek();
+      this.teardownAvPlay();
+      this.playbackEngine = "none";
+      this.isPlaying = false;
+      this.syncWebOsPlaybackKeepAwake();
+      this.lastPlaybackErrorCode = this.mapAvPlayErrorToMediaCode("timeout");
+      this.emitVideoEvent("error", {
+        playbackEngine: failedPlaybackEngine,
+        mediaErrorCode: this.lastPlaybackErrorCode,
+        avplayError: timeoutError,
+        seekTimeout: true
+      });
+    }, AVPLAY_SEEK_TIMEOUT_MS);
 
     try {
       if (typeof avplay.seekTo === "function") {

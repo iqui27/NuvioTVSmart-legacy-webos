@@ -596,6 +596,7 @@ button:focus-visible {
 
 .profile-brand-lockup .member-brand-suffix {
   font-size: 32px;
+  transform: translateY(-3px);
 }
 
 .profile-title {
@@ -3113,7 +3114,7 @@ button:focus-visible {
 }
 
 .modern-sidebar-nav-item.selected.focused .modern-sidebar-nav-icon-circle {
-  background: var(--secondary-color);
+  background: var(--player-accent-gradient, var(--secondary-color));
 }
 
 .modern-sidebar-nav-icon-circle,
@@ -3133,7 +3134,7 @@ button:focus-visible {
 }
 
 .modern-sidebar-nav-item.selected .modern-sidebar-nav-icon-circle {
-  background: var(--secondary-color);
+  background: var(--player-accent-gradient, var(--secondary-color));
   color: var(--on-secondary);
 }
 
@@ -3253,7 +3254,8 @@ button:focus-visible {
 }
 
 .modern-sidebar-pill-icon-wrap {
-  background: var(--focus-bg);
+  background: var(--player-accent-gradient, var(--secondary-color));
+  color: var(--on-secondary);
   padding: 12px;
 }
 
@@ -4034,6 +4036,10 @@ button:focus-visible {
   color: var(--text-secondary);
 }
 
+.search-seeall-arrow.is-rtl {
+  transform: scaleX(-1);
+}
+
 .search-seeall-label {
   font-size: 30px;
   font-weight: 500;
@@ -4418,7 +4424,7 @@ button:focus-visible {
   width: 42px;
   height: 42px;
   border-radius: 999px;
-  background: var(--secondary-color);
+  background: var(--player-accent-gradient, var(--secondary-color));
   color: var(--on-secondary);
   display: inline-flex;
   align-items: center;
@@ -4443,7 +4449,7 @@ button:focus-visible {
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  background: var(--secondary-color);
+  background: var(--player-accent-gradient, var(--secondary-color));
   color: var(--on-secondary);
   display: inline-flex;
   align-items: center;
@@ -5817,6 +5823,10 @@ button:focus-visible {
     box-shadow 120ms ease;
 }
 
+.home-screen-shell .home-seeall-card-label-spacer {
+  display: none;
+}
+
 .home-screen-shell .home-seeall-label {
   font-size: 30px;
   font-weight: 500;
@@ -5826,6 +5836,10 @@ button:focus-visible {
 .home-screen-shell .home-seeall-arrow {
   font-size: 60px;
   color: var(--text-secondary);
+}
+
+.home-screen-shell .home-seeall-arrow.is-rtl {
+  transform: scaleX(-1);
 }
 
 .home-screen-shell .home-seeall-card.focused,
@@ -6230,6 +6244,11 @@ button:focus-visible {
   padding-bottom: 8px;
 }
 
+.home-screen-shell.home-layout-classic .home-track .home-seeall-card {
+  align-self: flex-start;
+  aspect-ratio: 2 / 3;
+}
+
 .home-screen-shell.home-layout-classic .home-poster-copy,
 .home-screen-shell.home-layout-grid .home-poster-copy {
   display: block;
@@ -6395,8 +6414,24 @@ button:focus-visible {
 }
 
 .home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card {
-  aspect-ratio: 2 / 3;
+  aspect-ratio: auto;
+  align-self: start;
+  flex-direction: column;
+  justify-content: flex-start;
   min-height: 0;
+}
+
+.home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card-inner {
+  height: auto;
+  aspect-ratio: 2 / 3;
+  flex: 0 0 auto;
+}
+
+.home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card-label-spacer {
+  display: block;
+  flex: 0 0 30px;
+  width: 100%;
+  height: 30px;
 }
 
 .home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card-inner {
@@ -6902,6 +6937,24 @@ button:focus-visible {
   overflow-x: hidden;
   scrollbar-width: none;
   scroll-padding-top: 0;
+  transition: opacity 480ms ease;
+}
+
+/* Android TV parity: once the hero trailer has rendered its first frame in
+   fullscreen, fade the rows and hero metadata while keeping the title/logo. */
+.home-screen-shell.home-layout-modern.home-modern-fullscreen-backdrop
+  .home-modern-stage.is-hero-trailer-active
+  .home-modern-rows-viewport,
+.home-screen-shell.home-layout-modern.home-modern-fullscreen-backdrop
+  .home-modern-stage.is-hero-trailer-active
+  .home-modern-hero-meta-line,
+.home-screen-shell.home-layout-modern.home-modern-fullscreen-backdrop
+  .home-modern-stage.is-hero-trailer-active
+  .home-modern-hero-secondary,
+.home-screen-shell.home-layout-modern.home-modern-fullscreen-backdrop
+  .home-modern-stage.is-hero-trailer-active
+  .home-hero-description {
+  opacity: 0;
 }
 
 .folder-detail-home-shell .home-main {
@@ -7140,6 +7193,22 @@ button:focus-visible {
   height: 100%;
   font-size: 64px;
   line-height: 1;
+}
+
+.home-screen-shell.home-layout-grid .home-collection-title-overlay {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 8px;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.74));
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .home-screen-shell.home-layout-modern .home-poster-card.is-landscape:not(.is-expanded) {
@@ -7671,6 +7740,7 @@ button:focus-visible {
 }
 
 .settings-content-header,
+.settings-group-heading,
 .settings-group-card,
 .settings-slide-panel {
   flex-shrink: 0;
@@ -10703,6 +10773,7 @@ button:focus-visible {
 
 .settings-about-wordmark .member-brand-suffix {
   font-size: 26px;
+  transform: translateY(-3px);
 }
 
 .settings-about-logo {
@@ -11096,6 +11167,653 @@ html.legacy-webos .debug-console-log-frame {
   display: flex;
   flex-direction: column;
   gap: min(1.25vw, 24px); /* ATV 12dp -> 24px */
+}
+
+.plugins-content-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  flex: 0 0 auto;
+  max-width: 1660px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.plugins-title {
+  margin: 0;
+  color: var(--text-color);
+  font-size: clamp(36px, 3vw, 56px);
+  line-height: 1.1;
+  font-weight: 600;
+}
+
+.plugins-subtitle {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: clamp(18px, 1.35vw, 26px);
+  line-height: 1.35;
+}
+
+.plugins-profile-badge {
+  max-width: 480px;
+  padding: 12px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  font-size: 17px;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.plugins-main {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.plugins-main::-webkit-scrollbar {
+  display: none;
+}
+
+.plugins-panel {
+  width: min(100%, 1660px);
+  margin: 0 auto;
+  padding: 4px 0 80px;
+}
+
+.plugins-runtime-card,
+.plugins-settings-card,
+.plugins-repository-card,
+.plugins-preserved-card,
+.plugins-readonly-card,
+.plugins-confirm-dialog {
+  border: 1px solid var(--border-color);
+  border-radius: 26px;
+  background: var(--bg-elevated);
+}
+
+.plugins-runtime-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 20px 24px;
+  color: var(--text-secondary);
+}
+
+.plugins-runtime-card.is-ready {
+  border-color: var(--focus-color);
+}
+
+.plugins-runtime-icon {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 32px;
+}
+
+.plugins-runtime-card.is-ready .plugins-runtime-icon {
+  color: var(--focus-color);
+}
+
+.plugins-readonly-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 16px 22px;
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.plugins-readonly-icon {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 25px;
+}
+
+.plugins-runtime-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.plugins-runtime-copy strong {
+  color: var(--text-color);
+  font-size: 21px;
+  line-height: 1.25;
+}
+
+.plugins-runtime-copy span {
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.plugins-settings-card {
+  margin-bottom: 18px;
+  padding: 24px;
+}
+
+.plugins-setting-card {
+  cursor: pointer;
+}
+
+.plugins-toggle-indicator {
+  display: block;
+  flex: 0 0 auto;
+  cursor: default;
+}
+
+.plugins-section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.plugins-section-heading h2,
+.plugins-repository-copy h2 {
+  margin: 0;
+  color: var(--text-color);
+  font-size: 27px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.plugins-section-heading p {
+  max-width: 980px;
+  margin: 7px 0 0;
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.plugins-section-label {
+  margin: 12px 0 -2px;
+}
+
+.plugins-section-label h2 {
+  margin: 0;
+  color: var(--text-color);
+  font-size: 27px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.plugins-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 76px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.plugins-setting-row > div,
+.plugins-provider-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.plugins-provider-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugins-setting-row strong,
+.plugins-provider-copy strong {
+  color: var(--text-color);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.plugins-setting-row span,
+.plugins-provider-copy span {
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.plugins-provider-title-row .plugins-type-badge {
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.plugins-type-badge.is-movie {
+  background: rgba(76, 175, 80, 0.2);
+  color: #72d477;
+}
+
+.plugins-type-badge.is-tv {
+  background: rgba(33, 150, 243, 0.2);
+  color: #65b7f6;
+}
+
+.plugins-type-badge.is-neutral {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+}
+
+.plugins-provider-version {
+  color: var(--text-secondary);
+}
+
+.plugins-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+}
+
+.plugins-repository-input {
+  min-width: 0;
+  min-height: 68px;
+  padding: 0 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  outline: none;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font: inherit;
+  font-size: 19px;
+}
+
+.plugins-repository-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.plugins-action,
+.plugins-toggle {
+  appearance: none;
+  border: 1px solid var(--border-color);
+  outline: none;
+  background: var(--bg-color);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.plugins-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 58px;
+  padding: 0 18px;
+  border-radius: 16px;
+  font-size: 17px;
+  white-space: nowrap;
+}
+
+.plugins-action .material-icons {
+  font-size: 21px;
+}
+
+.plugins-action.is-destructive {
+  color: #f19a9a;
+}
+
+.plugins-action.is-disabled,
+.plugins-toggle.is-disabled,
+.plugins-action:disabled,
+.plugins-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.plugins-toggle {
+  flex: 0 0 auto;
+  width: 70px;
+  min-width: 70px;
+  height: 42px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--bg-color);
+}
+
+.plugins-toggle-pill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  text-align: left;
+}
+
+.plugins-toggle-pill > span {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  transition:
+    transform 120ms ease,
+    background 120ms ease;
+}
+
+.plugins-toggle-pill.is-checked {
+  background: var(--focus-bg);
+}
+
+.plugins-toggle-pill.is-checked > span {
+  background: var(--focus-color);
+  transform: translateX(25px);
+}
+
+.plugins-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.plugins-status-message {
+  margin: 16px 0 0;
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.plugins-status-message.error,
+.plugins-warning {
+  color: #f19a9a;
+}
+
+.plugins-status-message.success {
+  color: var(--focus-color);
+}
+
+.plugins-message-overlay {
+  position: fixed;
+  z-index: 900;
+  left: 50%;
+  bottom: 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: min(90vw, 960px);
+  padding: 14px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(46, 125, 50, 0.94);
+  color: #fff;
+  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.35);
+  transform: translateX(-50%);
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.plugins-message-overlay.error {
+  background: rgba(183, 28, 28, 0.94);
+}
+
+.plugins-message-overlay .material-icons {
+  flex: 0 0 auto;
+  font-size: 22px;
+}
+
+.plugins-repository-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.plugins-repository-card {
+  padding: 24px;
+}
+
+.plugins-repository-card.is-metadata-only {
+  opacity: 0.68;
+}
+
+.plugins-repository-card.is-metadata-only .plugins-repository-type {
+  color: #e0b46a;
+}
+
+.plugins-repository-card.is-runtime-unavailable {
+  opacity: 0.68;
+}
+
+.plugins-repository-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.plugins-repository-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plugins-repository-type,
+.plugins-repository-url,
+.plugins-repository-description,
+.plugins-repository-meta,
+.plugins-warning,
+.plugins-empty-copy,
+.plugins-footer-note,
+.plugins-preserved-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.plugins-repository-type {
+  color: var(--focus-color);
+  font-size: 17px;
+}
+
+.plugins-repository-url {
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.plugins-repository-description {
+  max-width: 1100px;
+}
+
+.plugins-repository-meta {
+  margin-top: 3px;
+}
+
+.plugins-repository-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.plugins-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.plugins-provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 64px;
+  padding: 10px 0;
+}
+
+.plugins-provider-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.plugins-test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: -2px 0 8px;
+  padding: 10px 14px;
+  border-left: 2px solid var(--focus-color);
+  background: var(--bg-color);
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.plugins-test-result strong {
+  color: var(--text-color);
+  font-size: 16px;
+}
+
+.plugins-test-diagnostics-toggle {
+  align-self: flex-start;
+  margin-top: 5px;
+  padding: 3px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.plugins-test-diagnostics {
+  margin: 0;
+  padding: 8px 0 0;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.plugins-provider-badge {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.plugins-empty-card {
+  color: var(--text-secondary);
+  font-size: 20px;
+  text-align: center;
+}
+
+.plugins-empty-card p {
+  margin: 0;
+}
+
+.plugins-preserved-card {
+  margin-top: 18px;
+  padding: 18px 22px;
+}
+
+.plugins-preserved-card strong {
+  color: var(--text-color);
+  font-size: 18px;
+}
+
+.plugins-preserved-card p {
+  margin-top: 5px;
+}
+
+.plugins-footer-note {
+  margin: 20px 4px 0;
+  color: var(--text-tertiary);
+  font-size: 15px;
+}
+
+.plugins-focusable.focused {
+  border-color: var(--focus-color) !important;
+  box-shadow: 0 0 0 2px var(--focus-color);
+  color: var(--text-color);
+}
+
+.plugins-repository-input.focused {
+  background: var(--bg-elevated);
+}
+
+.plugins-confirm-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.plugins-confirm-dialog {
+  width: min(100%, 720px);
+  padding: 30px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+.plugins-confirm-dialog h2 {
+  margin: 0;
+  color: var(--text-color);
+  font-size: 30px;
+  line-height: 1.2;
+}
+
+.plugins-confirm-dialog p {
+  margin: 14px 0 0;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+.plugins-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+@media (max-width: 1100px) {
+  .plugins-content-header,
+  .plugins-repository-header {
+    flex-direction: column;
+  }
+
+  .plugins-profile-badge {
+    align-self: flex-start;
+    text-align: left;
+  }
+
+  .plugins-repository-actions {
+    justify-content: flex-start;
+  }
 }
 
 .addons-shell .home-sidebar {
@@ -12062,11 +12780,15 @@ html.legacy-webos .debug-console-log-frame {
   width: calc(var(--poster-card-width, 126px) * 1.7);
 }
 
-.home-row-continue-poster .home-continue-card {
-  width: var(--poster-card-width, 126px);
+.home-screen-shell .home-row-continue-poster .home-continue-card {
+  flex-basis: var(--home-poster-width);
+  min-width: var(--home-poster-width);
+  max-width: var(--home-poster-width);
+  width: var(--home-poster-width);
 }
 
-.home-row-continue-poster .home-continue-media {
+.home-screen-shell .home-row-continue-poster .home-continue-media {
+  height: var(--home-poster-height);
   aspect-ratio: 2 / 3;
 }
 
@@ -12653,7 +13375,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 
 .player-progress-fill {
   z-index: 2;
-  background: var(--player-secondary);
+  background: var(--player-accent-gradient, var(--player-secondary));
   transition: width 150ms linear;
 }
 
@@ -13790,7 +14512,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   width: 100%;
   height: 100%;
   border-radius: inherit;
-  background: var(--parental-accent, var(--secondary-color));
+  background: var(--player-accent-gradient, var(--secondary-color));
   opacity: 1;
 }
 
@@ -17362,7 +18084,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .series-episode-status.complete {
-  background: var(--secondary-color);
+  background: var(--player-accent-gradient, var(--secondary-color));
   color: var(--on-secondary);
   font-size: 24px;
 }
@@ -18242,22 +18964,23 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   animation: settingsLayoutClassicPreviewScrollLegacy 4s linear infinite !important;
 }
 
-.performance-constrained .nuvio-route-slide-enter,
-.performance-constrained .home-route-content-enter,
-.performance-constrained .addons-route-enter,
-.performance-constrained .search-route-enter,
-.performance-constrained .library-route-enter,
-.performance-constrained .settings-route-enter,
-.performance-constrained .settings-slide-panel {
-  animation: none !important;
-}
-
-.performance-constrained .addons-route-content.nuvio-route-slide-enter,
-.performance-constrained .plugins-route-content.nuvio-route-slide-enter {
-  --nuvio-route-slide-distance: 8.333vw;
-  animation: nuvioRouteSlideEnter 350ms cubic-bezier(0.4, 0, 0.2, 1) both !important;
-  will-change: opacity, transform;
-}
+/* NAO RELIGAR ANIMACAO NESTA TV.
+ *
+ * O desligamento geral logo acima (`.performance-constrained *`) foi testado por
+ * partes na OLED65C9 ao longo de 2026-09-01, e o dono reprovou TODAS as
+ * reintroducoes, nesta ordem:
+ *   - entrada de rota (homeRouteEnter 240ms, searchRouteEnter e
+ *     nuvioRouteSlideEnter 350ms, settingsSlidePanelEnter 320ms), que rodavam
+ *     entre telas, com o DOM parado: "continua ruim, ta lerdo, antes sem nenhuma
+ *     animacao tava bem melhor";
+ *   - deslize do scroll de foco no compositor (FLIP): "ficou ruim ta bem lerdo";
+ *   - escala de 1.05 no poster focado: "o melhor e sem animacao mesmo".
+ *
+ * Nenhuma dessas rejeicoes foi por medicao - as tres eram baratas, e o FLIP deu
+ * ZERO quadro acima de 32ms num harness isolado. O veredito e de SENSACAO: nesta
+ * TV a animacao adia a confirmacao de que a tecla fez alguma coisa, e e essa
+ * confirmacao que o usuario le como velocidade. Numero de quadro nao e argumento
+ * para reabrir isto. */
 
 .performance-constrained .home-content-card,
 .performance-constrained .home-poster-frame,
@@ -19204,8 +19927,18 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .no-aspect-ratio .home-screen-shell .home-poster-frame,
+.no-aspect-ratio .home-screen-shell.home-layout-classic .home-track .home-seeall-card,
 .no-aspect-ratio .home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card {
   height: calc(var(--home-poster-width) * 1.5);
+}
+
+.no-aspect-ratio .home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card {
+  height: calc(var(--home-poster-width) * 1.5 + 30px);
+}
+
+.no-aspect-ratio .home-screen-shell.home-layout-grid .home-grid-track .home-seeall-card-inner {
+  height: calc(var(--home-poster-width) * 1.5);
+  aspect-ratio: auto;
 }
 
 .no-aspect-ratio .home-screen-shell .home-collection-card.is-collection-square .home-poster-frame {
@@ -20278,6 +21011,29 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   .home-poster-card
   .home-poster-expanded-backdrop {
   transition: opacity 180ms cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
+/* NAO ANIMAR O FOCO. Testado na C9 em 2026-09-01 e reprovado pelo dono, em duas
+   formas: escala de 1.05 no poster e deslize do scroll no compositor (FLIP). As
+   duas eram baratas - a escala nem aparecia na medicao, o FLIP deu zero quadro
+   acima de 32ms num harness isolado - e as duas foram rejeitadas no sentir:
+   "ficou ruim ta bem lerdo", "o melhor e sem animacao mesmo". Numa TV o foco
+   tem que confirmar a tecla NA HORA; qualquer transicao ali le como input
+   lento. O que sobrou e a troca de cor da borda, abaixo.
+
+   O anel de foco do frame trocava de cor instantaneamente enquanto o poster
+   expandia em 180ms, entao os dois liam como dois eventos separados. Aqui ele
+   passa a usar a MESMA duracao e a MESMA curva da expansao logo acima, de modo
+   que borda e crescimento chegam juntos.
+   Custo: transicao de border-color repinta apenas a caixa da borda, e no maximo
+   dois frames por vez estao em transicao (o que ganha e o que perde o foco).
+   Nao animar box-shadow aqui: a sombra e desenhada fora da caixa e repinta uma
+   area muito maior, e as regras constrained acima ja a zeram de proposito. */
+.performance-constrained
+  .home-screen-shell.home-layout-modern
+  .home-poster-card
+  .home-poster-frame {
+  transition: border-color 180ms cubic-bezier(0.2, 0, 0, 1) !important;
 }
 
 .webos-pointer-remote .focusable {
@@ -23585,77 +24341,434 @@ html.no-flex-gap .stream-route-card-badges-lazy > * {
   }
 }
 
-/* Tizen 5/older Chromium keeps the Android hero logo on the TV-safe right
-   side. Keep this fallback limited to identified constrained Tizen runtimes;
-   modern Tizen and browser layouts retain their existing Web presentation. */
-.performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-hero-copy {
+/* Tizen hero layout mirrors Android's side-by-side logo treatment. The
+   platform class is applied before any entity screen is rendered, so this
+   does not depend on performance-profile detection. */
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-hero-copy {
   width: 100%;
   max-width: none;
 }
 
-.performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-logo {
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-logo {
   position: absolute;
   top: 50%;
-  right: 48px;
+  right: var(--tmdb-entity-safe-x);
   margin-bottom: 0;
   transform: translateY(-50%);
   object-position: center center;
 }
 
-.performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-eyebrow,
-.performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-title,
-.performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-meta,
-.performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-description {
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-eyebrow,
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-title,
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-meta,
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-description {
   max-width: calc(100% - 328px);
 }
 
-@media (min-width: 1520px) {
-  .performance-constrained.legacy-tizen .tmdb-entity-hero-has-logo .tmdb-entity-logo {
-    right: var(--tv-safe-gutter-wide, 96px);
-  }
+.tizen-tv .tmdb-entity-hero-has-logo .tmdb-entity-hero-copy[dir="rtl"] .tmdb-entity-logo {
+  right: auto;
+  left: var(--tmdb-entity-safe-x);
 }
 
-/* Painel de legendas no Chromium 53: itens espremidos e texto sobreposto.
- *
- * CAUSA RAIZ, medida na C9: cada coluna do painel e um flex column de altura
- * fixa, e os itens ficam com o `flex-shrink: 1` que o flexbox da de graca. Como
- * o conteudo somado passa da altura visivel, o motor ENCOLHE cada item em vez de
- * deixar a coluna rolar — um item de 131px virava 40px. Com `overflow: visible`,
- * o texto continua desenhado no tamanho real e invade os itens vizinhos: foi o
- * que apareceu na TV como a lista de legendas toda embaralhada.
- * Medido: 15 de 15 itens da lista e 10 de 10 das opcoes transbordando; com
- * `flex-shrink: 0`, zero em ambas, e as colunas passam a rolar (o que ja estava
- * previsto, elas tem overflow auto).
- *
- * A COLUNA DE ESTILO tinha um segundo defeito, independente: a linha
- * "− rotulo +" e um grid `<botao> minmax(0,1fr) <botao>` e, sem grid, o meio
- * recebe `flex: 1 1 0%`, que aqui resulta em largura ZERO quando os botoes ja
- * ocupam quase toda a linha (medido: 108 / 0 / 112 px numa coluna de 274).
- * Testado e descartado: trocar `0%` por `0px` e forcar `flex-grow` — os dois
- * seguem dando zero. O que devolve largura e estreitar os botoes: o CSS base ja
- * usa 58px, e so este modal os alarga para var(--player-overlay-step-width).
- * Com a coluna em 360px o rotulo fica com 184px e "Tamanho da fonte" ocupa duas
- * linhas em vez de tres (altura do item 127px contra 163px), sem truncar nada —
- * a coluna do meio ainda fica com 812px, que sobra para os nomes de release.
- */
-html.no-css-grid .player-subtitle-rail > * {
-  flex-shrink: 0;
+/* Tizen 4 uses Chromium M56, which does not implement CSS Grid. Keep the
+   Android TV structures usable through flex fallbacks on that runtime only. */
+html.no-css-grid .settings-workspace {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: stretch;
+  gap: 32px;
 }
 
-html.no-css-grid .player-subtitle-overlay-grid > :nth-child(3) {
-  flex: 0 0 360px;
-  min-width: 360px;
-  max-width: 360px;
+html.no-css-grid .settings-sidebar-frame {
+  flex: 0 0 440px;
+  width: 440px;
 }
 
-html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dialog-step {
-  flex: 0 0 58px;
-  width: 58px;
-  min-width: 58px;
-  max-width: 58px;
+html.no-css-grid .settings-content-frame {
+  flex: 1 1 0;
+  width: auto;
 }
 
-html.no-css-grid .player-subtitle-modal .player-dialog-style-item > .player-dialog-item-center {
+html.no-css-grid.no-flex-gap .settings-workspace > * + * {
+  margin-left: 32px;
+}
+
+html.no-css-grid .settings-shell[data-settings-style="classic"] .settings-workspace {
+  gap: 28px;
+}
+
+html.no-css-grid.no-flex-gap
+  .settings-shell[data-settings-style="classic"]
+  .settings-workspace
+  > *
+  + * {
+  margin-left: 28px;
+}
+
+html.no-css-grid .settings-shell[data-settings-style="horizon"] .settings-workspace {
+  flex-direction: column;
+  gap: 20px;
+}
+
+html.no-css-grid .settings-shell[data-settings-style="horizon"] .settings-sidebar-frame {
+  flex: 0 0 116px;
+  width: auto;
+  height: 116px;
+}
+
+html.no-css-grid .settings-shell[data-settings-style="horizon"] .settings-content-frame {
+  flex: 1 1 0;
+  width: auto;
+  height: auto;
+}
+
+html.no-css-grid.no-flex-gap
+  .settings-shell[data-settings-style="horizon"]
+  .settings-workspace
+  > *
+  + * {
+  margin-top: 20px;
+  margin-left: 0;
+}
+
+html.no-css-grid .settings-trakt-panel {
+  display: flex;
+  flex-flow: row nowrap;
+  gap: 36px;
+}
+
+html.no-css-grid .settings-trakt-hero {
+  flex: 0 0 45%;
+  width: 45%;
+}
+
+html.no-css-grid .settings-trakt-card {
+  flex: 1 1 0;
+  width: auto;
+}
+
+html.no-css-grid.no-flex-gap .settings-trakt-panel > * + * {
+  margin-left: 36px;
+}
+
+html.no-css-grid .trakt-route-shell .settings-trakt-panel {
+  gap: 72px;
+}
+
+html.no-css-grid.no-flex-gap .trakt-route-shell .settings-trakt-panel > * + * {
+  margin-left: 72px;
+}
+
+html.no-css-grid .trakt-route-shell .settings-tracking-panel {
+  flex-direction: column;
+  gap: 28px;
+}
+
+html.no-css-grid .trakt-route-shell .settings-tracking-hero {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+}
+
+html.no-css-grid .trakt-route-shell .settings-tracking-panel > .settings-trakt-scroll-area {
+  flex: 1 1 0;
+  width: 100%;
+  height: auto;
+}
+
+html.no-css-grid.no-flex-gap
+  .trakt-route-shell
+  .settings-tracking-panel
+  > .settings-trakt-scroll-area {
+  margin-top: 28px;
+  margin-left: 0;
+}
+
+html.no-css-grid .settings-trakt-stats-row {
+  display: flex;
+  flex-flow: row nowrap;
+}
+
+html.no-css-grid .settings-trakt-stat {
+  flex: 0 0 25%;
+  width: 25%;
+}
+
+html.no-css-grid .settings-layout-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 24px;
+}
+
+html.no-css-grid .settings-layout-grid > .settings-layout-card {
+  flex: 0 0 calc((100% - 48px) / 3);
+  width: calc((100% - 48px) / 3);
+}
+
+html.no-css-grid.no-flex-gap .settings-layout-grid > .settings-layout-card {
+  margin-right: 24px;
+  margin-bottom: 24px;
+}
+
+html.no-css-grid.no-flex-gap .settings-layout-grid > .settings-layout-card:nth-child(3n) {
+  margin-right: 0;
+}
+
+html.no-css-grid .settings-layout-preview-grid-canvas {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: space-between;
+  gap: 0;
+}
+
+html.no-css-grid .settings-layout-preview-grid-cell {
+  flex: 0 0 var(--settings-layout-grid-card-width);
+  width: var(--settings-layout-grid-card-width);
+  height: var(--settings-layout-grid-card-height);
+  margin-bottom: var(--settings-layout-grid-gap);
+}
+
+html.no-css-grid .profile-editor-avatar-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 24px;
+}
+
+html.no-css-grid .profile-avatar-tile {
+  flex: 0 0 160px;
+  width: 160px;
+  height: 160px;
+  margin: 0;
+}
+
+html.no-css-grid.no-flex-gap .profile-editor-avatar-grid {
+  gap: 0;
+}
+
+html.no-css-grid.no-flex-gap .profile-editor-avatar-grid > .profile-avatar-tile {
+  margin: 0 24px 24px 0;
+}
+
+html.no-css-grid.no-flex-gap .profile-editor-avatar-grid > .profile-avatar-tile:nth-child(4n) {
+  margin-right: 0;
+}
+
+html.no-css-grid .settings-plugin-builder-row,
+html.no-css-grid .settings-text-dialog-actions {
+  display: flex;
+}
+
+html.no-css-grid .settings-plugin-input {
+  flex: 1 1 auto;
+}
+
+html.no-css-grid .settings-plugin-add {
+  flex: 0 0 180px;
+}
+
+html.no-css-grid .settings-text-dialog-actions > * {
+  flex: 1 1 0;
+}
+
+html.no-css-grid.no-flex-gap .settings-plugin-builder-row > * + * {
+  margin-left: 18px;
+}
+
+html.no-css-grid.no-flex-gap .settings-text-dialog-actions > * + * {
+  margin-left: 12px;
+}
+
+html.no-css-grid .home-screen-shell.home-layout-grid .home-grid-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 16px 12px;
+}
+
+html.no-css-grid.no-flex-gap .home-screen-shell.home-layout-grid .home-grid-track > * {
+  margin-right: 12px;
+  margin-bottom: 16px;
+}
+
+/* The player uses three Android TV rail columns; preserve those columns when
+   the legacy engine ignores the authored grid declarations. */
+html.no-css-grid #playerUiRoot {
+  --player-overlay-title-font: 56px;
+  --player-overlay-body-font: 32px;
+  --player-overlay-label-font: 28px;
+  --player-overlay-small-font: 26px;
+  --player-overlay-step-width: 112px;
+  --player-overlay-step-height: 80px;
+  --player-overlay-step-font: 48px;
+}
+
+html.no-css-grid .player-subtitle-overlay-grid {
+  display: flex;
+  flex-flow: row nowrap;
+  gap: 28px;
+  height: auto;
+}
+
+html.no-css-grid .player-subtitle-overlay-grid > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+html.no-css-grid .player-subtitle-language-rail {
+  flex-basis: 400px;
+  width: 400px;
+}
+
+html.no-css-grid .player-subtitle-options-rail {
+  flex-basis: 600px;
+  width: 600px;
+}
+
+html.no-css-grid .player-subtitle-style-rail {
+  flex-basis: 560px;
+  width: 560px;
+}
+
+html.no-css-grid .player-subtitle-rail {
+  gap: 8px;
+  padding: 16px 0;
+}
+
+html.no-css-grid.no-flex-gap .player-subtitle-overlay-grid > * + * {
+  margin-left: 28px;
+}
+
+html.no-css-grid .player-subtitle-language-rail .player-dialog-item {
+  padding: 16px 20px;
+}
+
+html.no-css-grid .player-subtitle-options-rail .player-dialog-item {
+  padding: 18px 24px;
+}
+
+html.no-css-grid .player-subtitle-language-rail .player-dialog-item-main {
+  gap: 10px;
+}
+
+html.no-css-grid.no-flex-gap .player-subtitle-language-rail .player-dialog-item-main > * + * {
+  margin-left: 10px;
+}
+
+html.no-css-grid .player-subtitle-option-copy {
   flex: 1 1 auto;
   min-width: 0;
+  gap: 6px;
+}
+
+html.no-css-grid .player-dialog-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  min-height: auto;
+  padding: 16px 24px;
+  border-radius: 24px;
+  border-width: 4px;
+}
+
+html.no-css-grid .player-dialog-item > .player-dialog-item-main,
+html.no-css-grid .player-dialog-item > .player-subtitle-option-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  order: 1;
+}
+
+html.no-css-grid .player-dialog-item > .player-dialog-item-check {
+  flex: 0 0 auto;
+  order: 2;
+  margin-left: auto;
+}
+
+html.no-css-grid .player-dialog-item > .player-dialog-item-sub {
+  flex: 0 0 100%;
+  order: 3;
+  margin-top: 2px;
+}
+
+html.no-css-grid .player-dialog-item > .player-dialog-item-sub:empty {
+  display: none;
+}
+
+html.no-css-grid .player-subtitle-option-copy .player-dialog-item-main,
+html.no-css-grid .player-subtitle-option-copy .player-dialog-item-sub {
+  flex: 0 0 auto;
+  grid-column: auto;
+  grid-row: auto;
+  margin-top: 0;
+}
+
+html.no-css-grid .player-subtitle-options-rail .player-dialog-item {
+  flex-wrap: nowrap;
+}
+
+html.no-css-grid .player-dialog-item-check {
+  font-size: 48px;
+}
+
+html.no-css-grid .player-dialog-style-item {
+  flex-wrap: nowrap;
+  column-gap: 14px;
+}
+
+html.no-css-grid .player-dialog-item-center {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html.no-css-grid .player-dialog-step {
+  flex: 0 0 112px;
+  width: 112px;
+  min-width: 112px;
+  height: 80px;
+  border-radius: 24px;
+  border-width: 4px;
+  font-size: 48px;
+}
+
+html.no-css-grid.no-flex-gap .player-dialog-style-item > .player-dialog-step-plus {
+  margin-left: 14px;
+}
+
+html.no-css-grid.no-flex-gap .player-dialog-style-item > .player-dialog-item-center {
+  margin-left: 14px;
+}
+
+html.no-css-grid.no-flex-gap .player-subtitle-option-copy > * + * {
+  margin-top: 6px;
+}
+
+html.no-css-grid.no-flex-gap .player-subtitle-style-rail > * + * {
+  margin-top: 20px;
+}
+
+html.no-css-grid .player-audio-overlay-grid {
+  display: flex;
+  flex-flow: row nowrap;
+  gap: 24px;
+}
+
+html.no-css-grid .player-audio-track-list {
+  flex: 0 0 888px;
+  width: 888px;
+}
+
+html.no-css-grid .player-audio-controls-list {
+  flex: 0 0 536px;
+  width: 536px;
+}
+
+html.no-css-grid.no-flex-gap .player-audio-overlay-grid > * + * {
+  margin-left: 24px;
+}
+
+html.no-css-grid.legacy-tizen .player-subtitle-overlay-grid {
+  height: auto;
 }

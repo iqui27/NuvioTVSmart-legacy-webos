@@ -32,6 +32,7 @@ const ACCOUNT_LOCAL_STORAGE_KEYS = new Set([
   "manualSyncCode",
   "pluginSources",
   "pluginsEnabled",
+  "pluginState:migrationComplete",
   "nuvioSyncBackoffState",
   "webos_last_resume_route"
 ]);

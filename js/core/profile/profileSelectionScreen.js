@@ -15,6 +15,9 @@ import { resolveExperienceRoute } from "./experienceModeRouting.js";
 import { Platform } from "../../platform/index.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../platform/legacyDom.js";
 import { getTvRuntimePerformanceProfile } from "../../platform/tvRuntimePerformance.js";
+import { PluginStore } from "../../data/local/pluginStore.js";
+import { PluginCodeStore } from "../../data/local/pluginCodeStore.js";
+import { PluginRuntime } from "../player/pluginRuntime.js";
 
 const PINNED_AVATAR_CATEGORIES = ["anime", "animation", "tv", "movie", "gaming"];
 const DEFAULT_PROFILE_COLOR = "#f5f5f5";
@@ -2277,6 +2280,8 @@ export const ProfileSelectionScreen = {
 
     const deleted = await ProfileManager.deleteProfile(profile.id);
     if (deleted !== false) {
+      PluginStore.clearProfile(profile.id);
+      PluginCodeStore.clearProfile(profile.id);
       await ProfileSyncService.deleteProfileData(profile.id);
       await ProfileSyncService.push();
       await this.refreshProfilePinStates();
@@ -2487,6 +2492,9 @@ export const ProfileSelectionScreen = {
       marcoAnterior = agora;
     };
     try {
+      // A provider started under the previous profile must not publish late
+      // results into the newly selected profile's stream screen.
+      PluginRuntime.cancelAll();
       await ProfileManager.setActiveProfile(profileId);
       marcar("setActiveProfile");
       StartupSyncService.enableProfileScopedSync();

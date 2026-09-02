@@ -6,6 +6,7 @@ import { build } from "esbuild";
 import { readAppMetadata, syncVersionFiles } from "./appMetadata.mjs";
 import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { runWebOsToolsBinary } from "./aresCli.mjs";
+import babel from "@babel/core";
 import { buildWebOsMediaRuntime } from "./webosMediaRuntime.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,10 +17,13 @@ const cacheDir = path.join(rootDir, ".cache");
 const stagingDir = path.join(cacheDir, "webos-package");
 const appStageDir = path.join(stagingDir, "app");
 const serviceStageDir = path.join(stagingDir, "space.nuvio.webos.service");
+const pluginServiceStageDir = path.join(stagingDir, "space.nuvio.webos.plugin.service");
 
 const appName = "Nuvio TV";
 const webOsServiceId = "space.nuvio.webos.service";
+const webOsPluginServiceId = "space.nuvio.webos.plugin.service";
 const webOsServiceSourceDir = path.join(rootDir, "services", "webos");
+const webOsPluginServiceSourceDir = path.join(rootDir, "services", "webos-plugin");
 const webOsRuntimeScriptPath = "assets/libs/webOSTV.js";
 
 // On-demand screen chunks emitted by scripts/build.mjs. They are fetched at
@@ -123,9 +127,9 @@ async function validateOpaquePng(filePath, label) {
   }
 }
 
-function validateWebOsServiceManifest(serviceManifest) {
-  if (String(serviceManifest?.id || "") !== webOsServiceId) {
-    throw new Error(`webOS services.json must use service id ${webOsServiceId}.`);
+function validateWebOsServiceManifest(serviceManifest, expectedId = webOsServiceId) {
+  if (String(serviceManifest?.id || "") !== expectedId) {
+    throw new Error(`webOS services.json must use service id ${expectedId}.`);
   }
 
   const services = Array.isArray(serviceManifest?.services) ? serviceManifest.services : [];
@@ -133,8 +137,8 @@ function validateWebOsServiceManifest(serviceManifest) {
     !services.length ||
     services.some(
       (service) =>
-        !String(service?.name || "").startsWith(`${webOsServiceId}.`) &&
-        String(service?.name || "") !== webOsServiceId
+        !String(service?.name || "").startsWith(`${expectedId}.`) &&
+        String(service?.name || "") !== expectedId
     )
   ) {
     throw new Error(
@@ -189,6 +193,7 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <script src="boot-guard.js"></script>
   <script src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
   <script>window.__NUVIO_PLATFORM__ = "webos";</script>
+  <script>window.__NUVIO_WEBOS_PLUGIN_SERVICE_ENABLED__ = true; window.__NUVIO_WEBOS_PLUGIN_SERVICE_ID__ = "${webOsPluginServiceId}";</script>
   <script src="nuvio.env.js"></script>
 ${webOsScriptTag}  <script>
     window.NuvioBootGuard.runCompatibilityGate(${compatibilityOptions}, function startNuvioApp() {
@@ -272,7 +277,7 @@ async function stageApp() {
   appInfo.version = version;
   appInfo.icon = "icon.png";
   appInfo.largeIcon = "largeIcon.png";
-  appInfo.services = [webOsServiceId];
+  appInfo.services = [webOsServiceId, webOsPluginServiceId];
   validateWebOsAppInfo(appInfo);
   await writeFile(appInfoPath, `${JSON.stringify(appInfo, null, 2)}\n`, "utf8");
 
@@ -394,6 +399,86 @@ async function assertServiceBundleIsLegacySafe(bundlePath) {
   }
 }
 
+async function stagePluginService() {
+  const packageJsonPath = path.join(webOsPluginServiceSourceDir, "package.json");
+  const servicesManifestPath = path.join(webOsPluginServiceSourceDir, "services.json");
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  const servicesManifest = JSON.parse(await readFile(servicesManifestPath, "utf8"));
+  validateWebOsServiceManifest(servicesManifest, webOsPluginServiceId);
+
+  await mkdir(path.join(pluginServiceStageDir, "src"), { recursive: true });
+  await Promise.all([
+    writeFile(
+      path.join(pluginServiceStageDir, "package.json"),
+      `${JSON.stringify(packageJson, null, 2)}\n`,
+      "utf8"
+    ),
+    writeFile(
+      path.join(pluginServiceStageDir, "services.json"),
+      `${JSON.stringify(servicesManifest, null, 2)}\n`,
+      "utf8"
+    )
+  ]);
+
+  // Same treatment as stageService, and for the same reason. Upstream targets
+  // `node0.12` here, which reads correctly but is the wrong knob: esbuild has no
+  // lowering path for that target and simply refuses, so packaging died with
+  // "Transforming destructuring to the configured target environment
+  // (node0.12) is not supported yet" on services/plugin-http.cjs. The explicit
+  // es2015 + feature-map combination is what actually produces ES5, and the
+  // prelude supplies the builtins V8 3.28 lacks.
+  const preludeSource = await readFile(
+    path.join(webOsServiceSourceDir, "src", "legacyNodePrelude.js"),
+    "utf8"
+  );
+
+  // esbuild is asked only to BUNDLE here, at a permissive target. It refuses to
+  // lower services/plugin-http.cjs to ES5 — the destructuring and default
+  // arguments at plugin-http.cjs:434 fail with "not supported yet" under both
+  // `node0.12` and `es2015 + overrides`, exactly as the EngineFS runtime did.
+  // Babel does the actual lowering afterwards, which is the same division of
+  // labour scripts/webosMediaRuntime.mjs settled on.
+  const pluginServiceOut = path.join(pluginServiceStageDir, "src", "index.js");
+  await build({
+    entryPoints: [path.join(webOsPluginServiceSourceDir, "src", "index.js")],
+    outfile: pluginServiceOut,
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: ["es2018"],
+    external: ["webos-service"],
+    logLevel: "silent"
+  });
+
+  const bundled = await readFile(pluginServiceOut, "utf8");
+  const lowered = await babel.transformAsync(bundled, {
+    filename: "webos-plugin-service.js",
+    sourceType: "script",
+    babelrc: false,
+    configFile: false,
+    compact: true,
+    comments: false,
+    generatorOpts: { compact: true },
+    presets: [
+      [
+        "@babel/preset-env",
+        {
+          targets: { node: compatibilityPolicy.webOsServiceNodeVersion },
+          bugfixes: true,
+          exclude: ["transform-typeof-symbol"],
+          modules: false
+        }
+      ]
+    ]
+  });
+  await writeFile(pluginServiceOut, `${preludeSource}\n${lowered.code}`, "utf8");
+
+  // Node 0.12 fails to PARSE ES6, so a regression here does not surface as a bad
+  // response — the plugin service never registers and every plugin call times
+  // out. Fail the build instead.
+  await assertServiceBundleIsLegacySafe(pluginServiceOut);
+}
+
 async function packageWebOs() {
   await syncVersionFiles();
   await assertDistExists();
@@ -401,11 +486,17 @@ async function packageWebOs() {
   console.log("staging webOS package files...");
   await rm(stagingDir, { recursive: true, force: true });
   await mkdir(stagingDir, { recursive: true });
-  await Promise.all([stageApp(), stageService()]);
+  await Promise.all([stageApp(), stageService(), stagePluginService()]);
 
   console.log("creating webOS IPK...");
   try {
-    await runWebOsToolsBinary("ares-package", [appStageDir, serviceStageDir, "--outdir", rootDir]);
+    await runWebOsToolsBinary("ares-package", [
+      appStageDir,
+      serviceStageDir,
+      pluginServiceStageDir,
+      "--outdir",
+      rootDir
+    ]);
   } catch (error) {
     const { version } = await readAppMetadata();
     const expectedIpk = path.join(rootDir, `space.nuvio.webos_${version}_all.ipk`);

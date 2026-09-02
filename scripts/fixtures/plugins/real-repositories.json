@@ -1,0 +1,96 @@
+{
+  "capturedAt": "2026-08-31",
+  "repositories": [
+    {
+      "name": "All-in-One-Nuvio",
+      "manifestUrl": "https://raw.githubusercontent.com/NuvioPlugin/All-in-One-Nuvio/main/manifest.json",
+      "manifestSha256": "eeb59ab0bf21c3a67ac742dc59491294db48de6ee1390daa2c9ed6a4047fe85d",
+      "scrapers": [
+        {
+          "id": "allanime",
+          "name": "AllAnime",
+          "filename": "providers/allanime.js",
+          "supportedTypes": ["movie", "tv"],
+          "contentLanguage": ["en", "ja"],
+          "formats": ["mp4", "mkv", "m3u8"],
+          "hasSettings": true
+        },
+        {
+          "id": "anikototv",
+          "name": "AnikotoTV",
+          "filename": "providers/anikototv.js",
+          "supportedTypes": ["movie", "tv", "anime"],
+          "contentLanguage": ["en", "ja"],
+          "formats": ["mp4"],
+          "hasSettings": true
+        },
+        {
+          "id": "anime-sama",
+          "name": "Anime-Sama",
+          "filename": "providers/anime-sama.js",
+          "supportedTypes": ["movie", "tv"],
+          "contentLanguage": ["fr"],
+          "formats": ["mp4", "mkv"],
+          "hasSettings": true
+        }
+      ]
+    },
+    {
+      "name": "Phisher's Repo",
+      "manifestUrl": "https://raw.githubusercontent.com/phisher98/phisher-nuvio-providers/main/manifest.json",
+      "manifestSha256": "2dffaee997ace5586b51f902386e3816ad83b89a5dc8b65046a8e4fe5c86af02",
+      "scrapers": [
+        {
+          "id": "MoviesDrive",
+          "name": "MoviesDrive",
+          "filename": "src/providers/moviesdrive.js",
+          "supportedTypes": ["movie", "tv"],
+          "contentLanguage": ["en"],
+          "formats": ["mp4", "mkv"]
+        },
+        {
+          "id": "AllWish",
+          "name": "AllWish",
+          "filename": "src/providers/allwish.js",
+          "supportedTypes": ["movie", "tv", "anime"],
+          "contentLanguage": ["en"],
+          "formats": ["mp4", "mkv"]
+        }
+      ]
+    },
+    {
+      "name": "Gowaru's Repo",
+      "manifestUrl": "https://raw.githubusercontent.com/Gowaru/gowaru-nuvio-providers/main/manifest.json",
+      "manifestSha256": "c063207a4facc7a5ff8710c9cfd5f58723e507c09e30352b3f732177b66cbe18",
+      "scrapers": [
+        {
+          "id": "anime-sama",
+          "name": "Anime-Sama",
+          "filename": "providers/anime-sama.js",
+          "supportedTypes": ["movie", "tv"],
+          "contentLanguage": ["fr"],
+          "formats": ["mp4", "mkv"],
+          "disabledPlatforms": []
+        },
+        {
+          "id": "papadustream",
+          "name": "Papadustream",
+          "filename": "providers/papadustream.js",
+          "supportedTypes": ["tv"],
+          "contentLanguage": ["fr", "en"],
+          "formats": ["m3u8"],
+          "disabledPlatforms": []
+        },
+        {
+          "id": "waveanime",
+          "name": "WaveAnime",
+          "filename": "providers/waveanime.js",
+          "supportedTypes": ["movie", "tv"],
+          "contentLanguage": ["fr"],
+          "formats": ["dash"],
+          "limited": true
+        }
+      ]
+    }
+  ]
+}

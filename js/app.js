@@ -27,6 +27,7 @@ import { getLatestAppUpdate } from "./core/update/appUpdateService.js";
 import { shouldShowUpdate } from "./core/update/updateBannerPolicy.js";
 import { showAppUpdatePrompt } from "./ui/components/appUpdatePrompt.js";
 import { resolveExperienceRoute } from "./core/profile/experienceModeRouting.js";
+import { PluginRuntime } from "./core/player/pluginRuntime.js";
 
 // These legacy Web-only overrides are no longer user settings. Navigation now
 // uses the stable grid algorithm and simulator detection automatically.
@@ -176,9 +177,11 @@ function applyPerformanceMode() {
   document.body.classList.toggle("legacy-webos38", legacyWebOs38);
   document.documentElement.classList.toggle("legacy-tizen", legacyTizen);
   document.body.classList.toggle("legacy-tizen", legacyTizen);
-  ["no-flex-gap", "no-aspect-ratio", "no-css-math", "no-backdrop-filter"].forEach((className) => {
-    document.body.classList.toggle(className, rootClasses.contains(className));
-  });
+  ["no-flex-gap", "no-css-grid", "no-aspect-ratio", "no-css-math", "no-backdrop-filter"].forEach(
+    (className) => {
+      document.body.classList.toggle(className, rootClasses.contains(className));
+    }
+  );
 }
 
 function isAddonRemoteMode() {
@@ -468,6 +471,19 @@ function setupProviderCredentialForegroundLifecycle() {
   window.addEventListener("focus", requestAfterBackground);
 }
 
+function setupPluginRuntimeLifecycle() {
+  const cancel = () => PluginRuntime.cancelAll();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") cancel();
+  });
+  document.addEventListener("webkitvisibilitychange", () => {
+    if (document.webkitHidden === true) cancel();
+  });
+  window.addEventListener("pagehide", cancel);
+  window.addEventListener("beforeunload", cancel);
+  document.addEventListener("nuvio:beforeExitApp", cancel);
+}
+
 async function bootstrapApp() {
   markBootStage("Rendering application shell");
   renderAppShell();
@@ -484,6 +500,7 @@ async function bootstrapApp() {
 
   FocusEngine.init();
   setupProviderCredentialForegroundLifecycle();
+  setupPluginRuntimeLifecycle();
   setupWebOsAppLifecycle();
 
   ThemeManager.apply();

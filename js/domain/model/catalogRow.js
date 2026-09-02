@@ -9,7 +9,8 @@ export function createCatalogRow({
   isLoading = false,
   hasMore = false,
   currentPage = 0,
-  supportsSkip = true
+  supportsSkip = false,
+  skipStep = 100
 }) {
   return {
     addonId,
@@ -22,6 +23,7 @@ export function createCatalogRow({
     isLoading,
     hasMore,
     currentPage,
-    supportsSkip
+    supportsSkip,
+    skipStep
   };
 }

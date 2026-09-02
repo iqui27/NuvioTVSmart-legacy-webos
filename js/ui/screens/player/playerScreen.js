@@ -31,6 +31,7 @@ import {
   resolveAspectRender
 } from "../../../core/player/playerAspect.js";
 import { buildClockFormatOptions, resolveSystemHour12 } from "../../../core/player/clockFormat.js";
+import { calculateRemainingPlaybackMilliseconds } from "../../../core/player/playbackEndTime.js";
 import { resolveSubtitleStyleControlAvailability } from "../../../core/player/subtitlePresentationCapabilities.js";
 import { shouldTreatAsNaturalPlaybackCompletion } from "../../../core/player/naturalPlaybackCompletion.js";
 import {
@@ -608,6 +609,13 @@ function cleanDisplayText(value) {
     .trim();
 }
 
+function normalizeWebOsHtmlSubtitleText(value) {
+  const text = String(value ?? "");
+  // LG webOS renders U+2026 at the mid-line in the HTML subtitle overlay. Keep the
+  // source cue unchanged and use the verified baseline-safe equivalent only here.
+  return Environment.isWebOS() ? text.replace(/\u2026/g, "...") : text;
+}
+
 function stableSubtitleTextKey(value = "") {
   const text = String(value ?? "");
   let hash = 2166136261;
@@ -816,6 +824,73 @@ function isSubRipSubtitleCodec(value) {
     "text/xsubrip",
     "application/xsubrip"
   ].includes(normalized);
+}
+
+const SUBTITLE_CODEC_DISPLAY_LABELS = new Map([
+  ["application/pgs", "PGS"],
+  ["hdmv/pgs", "PGS"],
+  ["hdmvpgs", "PGS"],
+  ["pgs", "PGS"],
+  ["application/dvbsubs", "DVB"],
+  ["application/dvbsubtitle", "DVB"],
+  ["dvb", "DVB"],
+  ["dvbsub", "DVB"],
+  ["dvbsubs", "DVB"],
+  ["application/ttml+xml", "TTML"],
+  ["application/ttml", "TTML"],
+  ["text/ttml", "TTML"],
+  ["ttml", "TTML"],
+  ["application/tx3g", "TX3G"],
+  ["text/tx3g", "TX3G"],
+  ["tx3g", "TX3G"],
+  ["application/xvobsub", "VobSub"],
+  ["vobsub", "VobSub"],
+  ["application/xwebvtt", "VTT"],
+  ["text/vtt", "VTT"],
+  ["text/webvtt", "VTT"],
+  ["vtt", "VTT"],
+  ["webvtt", "VTT"]
+]);
+
+function formatSubtitleCodecLabel(value) {
+  const raw = cleanDisplayText(value);
+  if (!raw) {
+    return "";
+  }
+  const normalized = raw.toLowerCase().replace(/[\s_-]+/g, "");
+  if (normalized === "text/utf8" || isSubRipSubtitleCodec(raw)) {
+    return "SRT";
+  }
+  if (
+    [
+      "stext/ass",
+      "stext/ssa",
+      "text/ass",
+      "text/ssa",
+      "text/xass",
+      "application/ass",
+      "application/ssa",
+      "application/xass",
+      "text/xssa",
+      "application/xssa",
+      "ass",
+      "ssa",
+      "advancedsubstationalpha",
+      "substationalpha"
+    ].includes(normalized)
+  ) {
+    return "SSA";
+  }
+  if (["application/tx3g", "text/tx3g", "tx3g", "movtext", "mpeg4timedtext"].includes(normalized)) {
+    return "TX3G";
+  }
+  return SUBTITLE_CODEC_DISPLAY_LABELS.get(normalized) || raw;
+}
+
+function getSubtitleCodecDisplayLabel(track = {}) {
+  return formatSubtitleCodecLabel(
+    track?.codec || track?.codecs || track?.codec_name || track?.format
+  );
 }
 
 function getSubRipSubtitleCodecValue(track = {}) {
@@ -1655,13 +1730,15 @@ function formatClock(date = new Date(), webOsLocaleInfo = null) {
   }
 }
 
-function formatEndsAt(currentSeconds, durationSeconds, webOsLocaleInfo = null) {
-  const current = Number(currentSeconds || 0);
-  const duration = Number(durationSeconds || 0);
-  if (!Number.isFinite(duration) || duration <= 0) {
+function formatEndsAt(currentSeconds, durationSeconds, webOsLocaleInfo = null, playbackSpeed = 1) {
+  const remainingMs = calculateRemainingPlaybackMilliseconds(
+    currentSeconds,
+    durationSeconds,
+    playbackSpeed
+  );
+  if (remainingMs == null) {
     return "--:--";
   }
-  const remainingMs = Math.max(0, (duration - current) * 1000);
   const endDate = new Date(Date.now() + remainingMs);
   return formatClock(endDate, webOsLocaleInfo);
 }
@@ -2063,6 +2140,7 @@ function formatSubtitleTrackDisplay(track = {}, index = 0) {
   const descriptors = getTrackDescriptorLabels(track).filter(
     (detail) => !isSubtitleLanguageOnlyDetail(detail, languageLabel, languageKey)
   );
+  pushUniqueText(descriptors, getSubtitleCodecDisplayLabel(track));
   const rawLabel = getMeaningfulTrackLabel(track);
   const label =
     languageKey !== SUBTITLE_LANGUAGE_UNKNOWN_KEY && languageLabel
@@ -2252,6 +2330,10 @@ function flattenStreamGroups(streamResult) {
       const streamOrigin = {
         ...(group.streamOrigin || {}),
         ...(stream.streamOrigin || {}),
+        kind:
+          group.streamOrigin?.kind ||
+          stream.streamOrigin?.kind ||
+          (group.sourceProviderId || stream.sourceProviderId ? "plugin" : "addon"),
         addonId:
           stream.addonId ||
           group.addonId ||
@@ -4724,8 +4806,9 @@ export const PlayerScreen = {
       })
       .filter((track) => {
         // Tizen uses this list only to enrich AVPlay's native entries. Keep
-        // every text stream so the metadata ordinal stays aligned with the
-        // TEXT track index returned by getTotalTrackInfo().
+        // every text stream; sourceTrackOrdinal remains the local text
+        // ordinal used by the extractor, while nativeTrackIndex must retain
+        // AVPlayStreamInfo.index for native selection.
         if (isTizenAvPlayMetadata) {
           return true;
         }
@@ -4741,10 +4824,15 @@ export const PlayerScreen = {
         const support = getEmbeddedSubtitleSupportState(track);
         const bitmapSubtitleFormat = getEmbeddedBitmapSubtitleFormat(track);
         const bitmapSubtitle = Boolean(bitmapSubtitleFormat);
-        const currentNativeTrackIndex = nativeTrackIndex;
+        const sequentialNativeTrackIndex = nativeTrackIndex;
         if (isTizenAvPlayMetadata || !bitmapSubtitle) {
           nativeTrackIndex += 1;
         }
+        const rawAvPlayTrackIndex = Number(track?.index);
+        const currentNativeTrackIndex =
+          isTizenAvPlayMetadata && Number.isFinite(rawAvPlayTrackIndex) && rawAvPlayTrackIndex >= 0
+            ? rawAvPlayTrackIndex
+            : sequentialNativeTrackIndex;
         const sourceTrackId = Number(track?.id);
         // Tizen's /tracks endpoint exposes id as a zero-based ordinal within
         // the media type; the Matroska fallback resolves that ordinal to the
@@ -8867,6 +8955,8 @@ export const PlayerScreen = {
 
   activateWebOsEmbeddedHtmlSubtitleOverlay(track, cues, selectedIndex, overlayId) {
     if (
+      this.webOsEmbeddedTextSubtitleUsingAss ||
+      this.webOsEmbeddedTextSubtitleUsingHtml ||
       !track ||
       !cues.length ||
       this.selectedEmbeddedSubtitleTrackIndex !== selectedIndex ||
@@ -8897,6 +8987,8 @@ export const PlayerScreen = {
   syncWebOsEmbeddedHtmlSubtitleOverlay(track = this.getSelectedWebOsEmbeddedTextTrack()) {
     if (
       !Environment.isWebOS() ||
+      this.webOsEmbeddedTextSubtitleUsingAss ||
+      this.webOsEmbeddedTextSubtitleUsingHtml ||
       !track ||
       this.selectedEmbeddedSubtitleTrackIndex < 0 ||
       track !== this.getSelectedWebOsEmbeddedTextTrack()
@@ -11398,14 +11490,26 @@ export const PlayerScreen = {
 
     const endsAt = slowSubsystemsDue ? uiRefs.endsAt : null;
     if (endsAt) {
-      const remainingMs = Math.max(0, (Number(duration || 0) - Number(current || 0)) * 1000);
-      const nextEndsAtMinuteBucket = duration > 0 ? Math.floor((now + remainingMs) / 60000) : -1;
+      const isLivePlayback =
+        typeof PlayerController.isLivePlaybackItemType === "function" &&
+        Boolean(PlayerController.isLivePlaybackItemType());
+      const playbackSpeed = this.getPlaybackSpeed();
+      // Keep this clock based on the full media duration. Outro intervals are
+      // handled independently by skip/autoplay, as they are on Android TV.
+      const remainingMs = isLivePlayback
+        ? null
+        : calculateRemainingPlaybackMilliseconds(current, duration, playbackSpeed);
+      const nextEndsAtMinuteBucket =
+        remainingMs == null ? -1 : Math.floor((Date.now() + remainingMs) / 60000);
+      endsAt.classList.toggle("hidden", isLivePlayback);
       if (uiState.endsAtMinuteBucket !== nextEndsAtMinuteBucket) {
-        const nextEndsAtText = t(
-          "player_ends_at",
-          [formatEndsAt(current, duration, this.webOsClockLocaleInfo)],
-          "Ends at %1$s"
-        );
+        const nextEndsAtText = isLivePlayback
+          ? ""
+          : t(
+              "player_ends_at",
+              [formatEndsAt(current, duration, this.webOsClockLocaleInfo, playbackSpeed)],
+              "Ends at %1$s"
+            );
         endsAt.textContent = nextEndsAtText;
         uiState.endsAtText = nextEndsAtText;
         uiState.endsAtMinuteBucket = nextEndsAtMinuteBucket;
@@ -14500,7 +14604,10 @@ export const PlayerScreen = {
       video,
       container,
       selectionToken,
-      isCurrentSelection
+      isCurrentSelection,
+      // webOS exposes requestVideoFrameCallback but its video pipeline does
+      // not fire it; make ass.js capture requestAnimationFrame instead.
+      forceRafFrameLoop: Environment.isWebOS()
     });
     if (!renderer || typeof renderer.init !== "function") {
       return { applied: false, fallbackVtt: convertAssBodyToVtt(body) };
@@ -15266,7 +15373,7 @@ export const PlayerScreen = {
             }
             const lineNode = document.createElement("span");
             lineNode.className = "player-html-subtitle-line";
-            lineNode.textContent = cleanLine;
+            lineNode.textContent = normalizeWebOsHtmlSubtitleText(cleanLine);
             cueNode.appendChild(lineNode);
           })
       );
@@ -16109,10 +16216,7 @@ export const PlayerScreen = {
         entry.label ||
         subtitleLabel(options.length);
       const metaParts = [];
-      pushUniqueText(
-        metaParts,
-        track?.codec || track?.codecs || track?.codec_name || track?.format
-      );
+      pushUniqueText(metaParts, getSubtitleCodecDisplayLabel(track));
       if (isForced) {
         pushUniqueText(metaParts, t("sub_forced_lang", {}, "Forced"));
       }
@@ -17674,10 +17778,19 @@ export const PlayerScreen = {
 
     if (Object.prototype.hasOwnProperty.call(entry, "avplaySubtitleTrackIndex")) {
       const targetTrackIndex = Number(entry.avplaySubtitleTrackIndex);
+      // Tizen exposes embedded text tracks through the AVPlay list above, so
+      // the UI entry does not carry embeddedSubtitleTrackIndex. Recover the
+      // local metadata here before selecting AVPlay; otherwise the Tizen
+      // extractor fallback is never activated for the normal UI path.
+      const tizenEmbeddedTrack = Environment.isTizen()
+        ? this.getEmbeddedSubtitleTrackByNativeIndex(targetTrackIndex)
+        : null;
+      const useTizenEmbeddedTextHtmlFallback =
+        isTizenEmbeddedTextSubtitleFallbackTrack(tizenEmbeddedTrack);
       const applied =
         typeof PlayerController.setAvPlaySubtitleTrack === "function"
           ? PlayerController.setAvPlaySubtitleTrack(targetTrackIndex, {
-              renderMode: this.subtitleRenderMode
+              renderMode: useTizenEmbeddedTextHtmlFallback ? "html" : this.subtitleRenderMode
             })
           : false;
       if (!applied) {
@@ -17690,6 +17803,11 @@ export const PlayerScreen = {
       this.resetSubtitleDelayAfterSelectionChange(previousSubtitleSelectionKey);
       this.invalidateTrackDialogCaches();
       this.refreshSubtitleCueStyles();
+      if (useTizenEmbeddedTextHtmlFallback) {
+        this.webOsEmbeddedTextSubtitleTrack = tizenEmbeddedTrack;
+        this.webOsEmbeddedTextSubtitleUsingHtml = false;
+        void this.loadWebOsEmbeddedTextSubtitleWindow(this.getPlaybackCurrentSeconds());
+      }
       this.renderControlButtons();
       this.renderSubtitleDialog();
       return;
@@ -20351,13 +20469,6 @@ export const PlayerScreen = {
     const rowGap = PARENTAL_GUIDE_ROW_GAP;
     const lineHeight = rowHeight * total + rowGap * Math.max(0, total - 1);
     const currentLineHeight = clamp(Number(this.parentalGuideLineProgress || 0), 0, lineHeight);
-    const rootStyle = getComputedStyle(document.documentElement);
-    // String(... || "") e obrigatorio: no Chromium 38 (webOS 3) custom property
-    // nao existe e getPropertyValue devolve NULL, nao string vazia. O .trim()
-    // direto derrubava a tela — reporte do webOS 3.9, com o player ja aberto:
-    // "TypeError: Cannot read property 'trim' of null".
-    const parentalAccent =
-      String(rootStyle.getPropertyValue("--secondary-color") || "").trim() || "#f5f5f5";
     overlay.style.animationDelay = this.parentalGuideExiting ? `${containerExitDelay}ms` : "0ms";
     overlay.style.setProperty("--parental-row-height", `${rowHeight}px`);
     overlay.style.setProperty("--parental-row-gap", `${rowGap}px`);
@@ -20365,7 +20476,6 @@ export const PlayerScreen = {
     overlay.style.setProperty("--parental-line-height", `${lineHeight}px`);
     overlay.style.setProperty("--parental-line-exit-delay", `${lineExitDelay}ms`);
     overlay.style.setProperty("--parental-container-exit-delay", `${containerExitDelay}ms`);
-    overlay.style.setProperty("--parental-accent", parentalAccent);
     overlay.innerHTML = `
       <div class="player-parental-line">
         <div class="player-parental-line-fill"></div>
@@ -20393,12 +20503,8 @@ export const PlayerScreen = {
     `;
 
     const line = overlay.querySelector(".player-parental-line");
-    const lineFill = overlay.querySelector(".player-parental-line-fill");
     if (line) {
       line.style.height = `${currentLineHeight.toFixed(2)}px`;
-    }
-    if (lineFill) {
-      lineFill.style.background = parentalAccent;
     }
   },
 

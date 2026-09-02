@@ -35,6 +35,14 @@ export const HOME_INITIAL_CATALOG_LOAD = 10;
 export const HOME_MAX_ITEMS_PER_ROW_DEFAULT = 15;
 export const HOME_MAX_ITEMS_PER_ROW_CONSTRAINED = 10;
 export const HOME_MAX_ITEMS_PER_ROW_LEGACY_TV = 8;
+// Android keeps up to 24 items in non-Modern catalog rows before reserving
+// the See All slot. Runtime-specific lower limits remain intentional below.
+export const HOME_MAX_ITEMS_PER_ROW_CLASSIC = 24;
+// Android GridHomeContent receives a safe upper bound from the pipeline and
+// trims it again using the actual number of adaptive columns.
+export const HOME_GRID_SAFE_MAX_COLUMNS = 8;
+export const HOME_GRID_DEFAULT_ROW_COUNT = 3;
+export const HOME_GRID_COMPACT_ROW_COUNT = 2;
 export const HOME_LOADING_ROW_ITEMS_DEFAULT = 10;
 export const HOME_LOADING_ROW_ITEMS_CONSTRAINED = 8;
 export const HOME_LOADING_ROW_ITEMS_LEGACY_TV = 6;

@@ -3,11 +3,22 @@ import { addonRepository } from "./addonRepository.js";
 import { StreamApi } from "../remote/api/streamApi.js";
 import { MetaApi } from "../remote/api/metaApi.js";
 import { PluginManager } from "../../core/player/pluginManager.js";
+import { mapPluginStreamGroup } from "../../core/player/pluginStreamMapping.js";
+import {
+  cleanLocalPluginVideoId,
+  isLocalPluginVideoId,
+  resolvePluginSeasonEpisode
+} from "../../core/player/pluginModels.js";
 import { TmdbService } from "../../core/tmdb/tmdbService.js";
 import { LocalDebridAvailabilityService } from "../../core/debrid/localDebridAvailabilityService.js";
 import { DebridStreamPresentation } from "../../core/debrid/directDebridStreamPresentation.js";
 
 const STREAM_SOURCE_REQUEST_TIMEOUT_MS = 60_000;
+
+function normalizeTmdbPluginType(type) {
+  const normalized = String(type || "").toLowerCase();
+  return ["series", "tv", "show"].includes(normalized) ? "tv" : normalized;
+}
 
 class StreamRepository {
   async getStreamsFromAddon(baseUrl, type, videoId) {
@@ -32,10 +43,38 @@ class StreamRepository {
 
     const onChunk = typeof options?.onChunk === "function" ? options.onChunk : null;
 
-    const notifyChunk = (group) => {
-      if (!onChunk || !group?.streams?.length) {
-        return;
+    // Android's stream flow is completion-ordered. Keep the first completion
+    // position for each logical provider and replace only its later merged
+    // snapshot, so the final non-progressive result has the same ordering as
+    // the chunks already delivered to the UI.
+    const emittedGroups = [];
+    const emittedGroupIndexes = new Map();
+    const streamGroupKey = (group) => {
+      const origin = group?.streamOrigin || {};
+      const pluginId = group?.sourceProviderId || origin.sourceProviderId;
+      if (pluginId) return `plugin:${pluginId}`;
+      const addonId = group?.addonId || origin.addonId;
+      if (addonId) return `addon:${addonId}`;
+      const addonBaseUrl = group?.addonBaseUrl || origin.addonBaseUrl;
+      if (addonBaseUrl) return `addon-url:${addonBaseUrl}`;
+      const name = group?.addonName || origin.addonName || "";
+      return `${origin.kind || "group"}:${name}`;
+    };
+    const recordEmittedGroup = (group) => {
+      if (!group?.streams?.length) return;
+      const key = streamGroupKey(group);
+      const previousIndex = emittedGroupIndexes.get(key);
+      if (previousIndex === undefined) {
+        emittedGroupIndexes.set(key, emittedGroups.length);
+        emittedGroups.push(group);
+      } else {
+        emittedGroups[previousIndex] = group;
       }
+    };
+    const notifyChunk = (group) => {
+      if (!group?.streams?.length) return;
+      recordEmittedGroup(group);
+      if (!onChunk) return;
       try {
         onChunk({
           status: "success",
@@ -57,14 +96,16 @@ class StreamRepository {
       }
     };
 
-    const prepareDebridGroup = async (group, shouldNotify = null) => {
+    const prepareDebridGroup = async (group, shouldNotify = null, { present = true } = {}) => {
       const checkingGroup =
         DebridStreamPresentation.apply(LocalDebridAvailabilityService.markChecking([group]))[0] ||
         group;
       const checkedGroup =
         (await LocalDebridAvailabilityService.annotateCachedAvailability([checkingGroup]))[0] ||
         checkingGroup;
-      const presentedGroup = DebridStreamPresentation.apply([checkedGroup])[0] || checkedGroup;
+      const presentedGroup = present
+        ? DebridStreamPresentation.apply([checkedGroup])[0] || checkedGroup
+        : checkedGroup;
       if (typeof shouldNotify !== "function" || shouldNotify()) {
         notifyChunk(presentedGroup);
       }
@@ -175,17 +216,79 @@ class StreamRepository {
     });
 
     let acceptPluginChunks = true;
+    const pluginAbortController =
+      typeof AbortController === "function" ? new AbortController() : null;
+    const pluginGroupsByName = new Map();
+    const pluginStreamKey = (stream, addonName) => {
+      const infoHash = String(stream?.infoHash || stream?.clientResolve?.infoHash || "")
+        .trim()
+        .toLowerCase();
+      if (infoHash) {
+        return `${infoHash}:${stream?.fileIdx ?? stream?.clientResolve?.fileIdx ?? ""}`;
+      }
+      const locator = stream?.url || stream?.externalUrl || stream?.ytId;
+      if (locator) return String(locator);
+      return `${addonName}:${stream?.name || ""}:${stream?.title || ""}`;
+    };
+    const mergePluginGroup = (group) => {
+      const addonName = String(group?.addonName || "Addon");
+      const previous = pluginGroupsByName.get(addonName);
+      if (!previous) {
+        const initial = { ...group, addonName };
+        pluginGroupsByName.set(addonName, initial);
+        return initial;
+      }
+      const streamsByKey = new Map();
+      [...(previous.streams || []), ...(group?.streams || [])].forEach((stream) => {
+        if (stream) streamsByKey.set(pluginStreamKey(stream, addonName), stream);
+      });
+      const merged = { ...previous, streams: [...streamsByKey.values()] };
+      pluginGroupsByName.set(addonName, merged);
+      return merged;
+    };
+    const abortPluginWork = () => {
+      acceptPluginChunks = false;
+      pluginAbortController?.abort();
+    };
+    if (options.signal?.aborted) abortPluginWork();
+    const forwardCallerAbort = () => abortPluginWork();
+    options.signal?.addEventListener?.("abort", forwardCallerAbort, { once: true });
     const pluginTask = (async () => {
       try {
-        const pluginStreams = await this.getPluginStreams(type, videoId, options);
-        const preparedPluginStreams = [];
-        for (const group of pluginStreams) {
-          if (!acceptPluginChunks) {
-            return [];
+        const progressivePluginGroups = [];
+        let progressiveWork = Promise.resolve();
+        const onPluginGroup = (group) => {
+          progressiveWork = progressiveWork.then(async () => {
+            if (!acceptPluginChunks) return;
+            const checked = await prepareDebridGroup(group, () => false, { present: false });
+            const merged = mergePluginGroup(checked);
+            const presented = DebridStreamPresentation.apply([merged])[0] || merged;
+            const existingIndex = progressivePluginGroups.findIndex(
+              (entry) => entry.addonName === presented.addonName
+            );
+            if (existingIndex >= 0) progressivePluginGroups[existingIndex] = presented;
+            else progressivePluginGroups.push(presented);
+            if (acceptPluginChunks && presented?.streams?.length) {
+              notifyChunk(presented);
+            }
+          });
+        };
+        const pluginStreams = await this.getPluginStreams(type, videoId, {
+          ...options,
+          signal: pluginAbortController?.signal || options.signal || null,
+          onPluginGroup
+        });
+        await progressiveWork;
+        // If the manager had no callback-capable result (for example a future
+        // compatibility implementation), retain the final groups as a safe
+        // fallback. Current manager results are already prepared above.
+        if (!progressivePluginGroups.length && acceptPluginChunks) {
+          for (const group of pluginStreams) {
+            if (!acceptPluginChunks) return [];
+            progressivePluginGroups.push(await prepareDebridGroup(group, () => acceptPluginChunks));
           }
-          preparedPluginStreams.push(await prepareDebridGroup(group, () => acceptPluginChunks));
         }
-        return preparedPluginStreams;
+        return acceptPluginChunks ? progressivePluginGroups : [];
       } catch (error) {
         console.warn("Plugin stream fetch failed", error);
         return [];
@@ -197,7 +300,7 @@ class StreamRepository {
     let pluginTimeoutId = 0;
     const pluginTimeout = new Promise((resolve) => {
       pluginTimeoutId = setTimeout(() => {
-        acceptPluginChunks = false;
+        abortPluginWork();
         resolve([]);
       }, STREAM_SOURCE_REQUEST_TIMEOUT_MS);
     });
@@ -207,54 +310,64 @@ class StreamRepository {
     const addonsWithStreams = settledResults
       .filter((result) => result.status === "fulfilled")
       .map((result) => result.value)
-      .filter(Boolean)
-      .sort(
-        (left, right) => Number(left.addonOrderIndex || 0) - Number(right.addonOrderIndex || 0)
-      );
+      .filter(Boolean);
     const pluginStreams = await pluginStreamsPromise;
     if (pluginTimeoutId) {
       clearTimeout(pluginTimeoutId);
     }
-    return { status: "success", data: [...addonsWithStreams, ...pluginStreams] };
+    options.signal?.removeEventListener?.("abort", forwardCallerAbort);
+    // Keep a compatibility fallback for a future source implementation that
+    // returns groups without calling notifyChunk. Current add-on and plugin
+    // paths both notify at completion, so this normally preserves the exact
+    // Android-like completion order above.
+    [...addonsWithStreams, ...pluginStreams].forEach(recordEmittedGroup);
+    return { status: "success", data: emittedGroups };
   }
 
   async getPluginStreams(type, videoId, options = {}) {
-    const mediaType = type === "series" ? "tv" : type;
-    const tmdbLookupId = String(options?.itemId || videoId || "").trim();
-    const tmdbId = await TmdbService.ensureTmdbId(tmdbLookupId, type);
-    if (!tmdbId) {
+    const rawVideoId = String(videoId || "").trim();
+    if (!PluginManager.hasCompatibleScrapers(type)) {
       return [];
     }
 
+    const localVideoId = isLocalPluginVideoId(rawVideoId);
+    const tmdbLookupId = localVideoId ? rawVideoId : String(options?.itemId || rawVideoId).trim();
+    // Android's plugin path does not apply the UI TMDB-enable gate here; an
+    // IMDb conversion may still be resolved when plugin discovery is active.
+    // Numeric IDs remain a no-network fast path in either case.
+    const tmdbId = await TmdbService.ensureTmdbId(tmdbLookupId, type, {
+      requireEnabled: false
+    });
+    const pluginRequest = tmdbId
+      ? {
+          tmdbId: String(tmdbId),
+          mediaType: normalizeTmdbPluginType(type)
+        }
+      : localVideoId
+        ? {
+            tmdbId: cleanLocalPluginVideoId(rawVideoId),
+            mediaType: String(type || "").toLowerCase()
+          }
+        : null;
+    if (!pluginRequest) {
+      return [];
+    }
+    const pluginEpisode = resolvePluginSeasonEpisode(
+      rawVideoId,
+      options?.season ?? null,
+      options?.episode ?? null
+    );
+
     const pluginResults = await PluginManager.executeScrapersStreaming({
-      tmdbId,
-      mediaType,
-      season: options?.season ?? null,
-      episode: options?.episode ?? null
+      tmdbId: pluginRequest.tmdbId,
+      mediaType: pluginRequest.mediaType,
+      season: pluginEpisode.season,
+      episode: pluginEpisode.episode,
+      signal: options?.signal || null,
+      onGroup: (result) => options?.onPluginGroup?.(mapPluginStreamGroup(result))
     });
 
-    return pluginResults.map((result) => ({
-      sourceProviderId: result.sourceId || result.sourceName || null,
-      addonName: result.sourceName,
-      addonLogo: null,
-      streamOrigin: {
-        kind: "plugin",
-        sourceProviderId: result.sourceId || result.sourceName || null,
-        addonName: result.sourceName || null
-      },
-      streams: (result.streams || []).map((stream) => ({
-        ...stream,
-        sourceProviderId: result.sourceId || result.sourceName || null,
-        addonName: result.sourceName,
-        addonLogo: null,
-        streamOrigin: {
-          ...(stream.streamOrigin || {}),
-          kind: "plugin",
-          sourceProviderId: result.sourceId || result.sourceName || null,
-          addonName: result.sourceName || null
-        }
-      }))
-    }));
+    return pluginResults.map(mapPluginStreamGroup);
   }
 
   buildStreamUrl(baseUrl, type, videoId) {

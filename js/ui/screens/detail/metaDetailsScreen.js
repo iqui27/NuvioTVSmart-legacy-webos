@@ -22,7 +22,11 @@ import {
   showStandardDetailRatings
 } from "../../../core/util/imdbRatingVisibility.js";
 import { imdbEpisodeRatingsRepository } from "../../../data/repository/imdbEpisodeRatingsRepository.js";
-import { normalizeEpisodeImdbRating, parseEpisodeRuntimeMinutes } from "./episodeCardMetadata.js";
+import {
+  formatHeroRuntime,
+  normalizeEpisodeImdbRating,
+  parseEpisodeRuntimeMinutes
+} from "./episodeCardMetadata.js";
 import { mdbListRepository } from "../../../data/repository/mdbListRepository.js";
 import { TmdbSettingsStore } from "../../../data/local/tmdbSettingsStore.js";
 import { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
@@ -80,6 +84,8 @@ const EPISODE_VIRTUALIZATION_OVERSCAN = 8;
 const EPISODE_VIRTUALIZATION_DEFAULT_CARD_WIDTH = 540;
 const EPISODE_VIRTUALIZATION_DEFAULT_GAP = 34;
 const RTL_DETAIL_LANGUAGES = new Set(["ar", "he"]);
+const SIMKL_DESTRUCTIVE_REMOVAL_MESSAGE =
+  "Removing this status will also clear watched history or a rating on Simkl. Confirm only if that is intended.";
 // Match Android TV's LazyRow behavior: one focus step per key event and only
 // throttle native repeat events. Do not schedule a second move after keydown;
 // Samsung remotes can deliver keyup late or not at all.
@@ -1710,6 +1716,8 @@ export const MetaDetailsScreen = {
     this.streamChooserLoadToken = 0;
     this.isLoadingDetail = true;
     this.detailLoadToken = (this.detailLoadToken || 0) + 1;
+    this.libraryMembershipMutationToken = 0;
+    this.libraryTogglePending = false;
     this.seriesInsightTab = "cast";
     this.movieInsightTab = "cast";
     this.selectedRatingSeason = 0;
@@ -1775,6 +1783,7 @@ export const MetaDetailsScreen = {
       this.isLoadingDetail = false;
       this.render(this.meta, this.pendingFocusRestore);
       const refreshToken = this.detailLoadToken;
+      void this.refreshLibraryMembership(refreshToken);
       void this.refreshEpisodePlaybackState()
         .then(() => {
           if (refreshToken !== this.detailLoadToken || !this.container) {
@@ -1989,6 +1998,7 @@ export const MetaDetailsScreen = {
     }
     this.render(meta);
     this.isLoadingDetail = false;
+    void this.refreshLibraryMembership(token);
     this.maybeAutoOpenContinueWatchingStream();
     void this.refreshTrailerSource(meta, token);
     void this.loadTraktComments({ force: true });
@@ -3194,7 +3204,7 @@ export const MetaDetailsScreen = {
             <div class="series-season-row" data-scroll-key="season-tabs">${this.renderSeasonButtons()}</div>
           </div>
           <div id="detailEpisodeTrackMount">
-            <div class="series-episode-track" data-scroll-key="episodes:${this.selectedSeason ?? 1}">${this.renderEpisodeCards()}</div>
+            <div class="series-episode-track${this.getSelectedSeasonEpisodes().length > EPISODE_VIRTUALIZATION_THRESHOLD ? " is-virtualized" : ""}" data-scroll-key="episodes:${this.selectedSeason ?? 1}">${this.renderEpisodeCards()}</div>
           </div>
           <div id="detailInsightSectionMount">${this.renderSeriesInsightSection()}</div>
           <div id="detailCommentsSectionMount">${this.renderStandaloneCommentsSection()}</div>
@@ -3343,7 +3353,7 @@ export const MetaDetailsScreen = {
         ? String(imdbValue).replace(",", ".")
         : "";
     const runtimeText =
-      String(meta?.runtime || "").trim() ||
+      formatHeroRuntime(meta?.runtime) ||
       formatRuntimeMinutes(
         meta?.runtimeMinutes || resolveEpisodeRuntimeForSeason(this.episodes, this.selectedSeason)
       );
@@ -3647,7 +3657,7 @@ export const MetaDetailsScreen = {
 
     const episodeMount = this.container.querySelector("#detailEpisodeTrackMount");
     if (isSeries && episodeMount) {
-      episodeMount.innerHTML = `<div class="series-episode-track" data-scroll-key="episodes:${this.selectedSeason ?? 1}">${this.renderEpisodeCards()}</div>`;
+      episodeMount.innerHTML = `<div class="series-episode-track${this.getSelectedSeasonEpisodes().length > EPISODE_VIRTUALIZATION_THRESHOLD ? " is-virtualized" : ""}" data-scroll-key="episodes:${this.selectedSeason ?? 1}">${this.renderEpisodeCards()}</div>`;
     }
 
     const insightMount = this.container.querySelector("#detailInsightSectionMount");
@@ -4226,11 +4236,22 @@ export const MetaDetailsScreen = {
       : currentFocusIndex >= 0
         ? currentFocusIndex
         : this.getRememberedEpisodeIndex(episodes);
+    const currentWindow = this.episodeVirtualWindow;
+    // Keep the rendered window stable while the focused card is still mounted.
+    // Rebuilding the whole rail for every repeat event makes large episode lists
+    // stall on TV runtimes under sustained fast navigation.
+    if (
+      currentWindow?.virtualized &&
+      currentWindow.season === Number(this.selectedSeason || 0) &&
+      focusIndex >= currentWindow.start &&
+      focusIndex <= currentWindow.end
+    ) {
+      return false;
+    }
     const nextWindow = this.getEpisodeVirtualWindowState(episodes, focusIndex);
     if (!nextWindow) {
       return false;
     }
-    const currentWindow = this.episodeVirtualWindow;
     if (
       currentWindow &&
       currentWindow.season === nextWindow.season &&
@@ -4513,6 +4534,33 @@ export const MetaDetailsScreen = {
       imdbRating: this.meta?.imdbRating == null ? null : Number(this.meta.imdbRating),
       genres: Array.isArray(this.meta?.genres) ? this.meta.genres : []
     };
+  },
+
+  async refreshLibraryMembership(token = this.detailLoadToken) {
+    const mutationToken = this.libraryMembershipMutationToken || 0;
+    const item = this.getCurrentLibraryItem();
+    if (!item.itemId) {
+      return false;
+    }
+    const snapshot = await libraryRepository.getMembershipSnapshot(item).catch((error) => {
+      console.warn("Detail library membership refresh failed", error);
+      return null;
+    });
+    if (
+      token !== this.detailLoadToken ||
+      mutationToken !== (this.libraryMembershipMutationToken || 0) ||
+      !this.container ||
+      !snapshot
+    ) {
+      return false;
+    }
+    const isSavedInLibrary = Object.values(snapshot.listMembership || {}).some(Boolean);
+    if (this.isSavedInLibrary === isSavedInLibrary) {
+      return true;
+    }
+    this.isSavedInLibrary = isSavedInLibrary;
+    this.syncDetailActionButtons();
+    return true;
   },
 
   getLibraryListMenuOptions() {
@@ -4857,27 +4905,41 @@ export const MetaDetailsScreen = {
     return true;
   },
 
-  async openLibraryListMenu() {
+  async openLibraryListMenu({
+    membershipOverride = null,
+    sourceMode = null,
+    destructiveRemovalRequired = false,
+    error = ""
+  } = {}) {
     const item = this.getCurrentLibraryItem();
     if (!item.itemId) {
       return false;
     }
-    const tabs = await libraryRepository.getListTabs().catch(() => []);
+    const resolvedSourceMode =
+      sourceMode || (await libraryRepository.getSourceMode().catch(() => LibrarySourceMode.LOCAL));
+    const tabs = await libraryRepository
+      .getListTabs({ sourceMode: resolvedSourceMode })
+      .catch(() => []);
     const resolvedTabs =
       Array.isArray(tabs) && tabs.length
         ? tabs.filter((tab) => supportsMembershipFor(tab, item.itemType))
         : [{ key: "local", title: t("detail.library", {}, "Library"), type: "local" }];
     const snapshot = await libraryRepository
-      .getMembershipSnapshot(item)
+      .getMembershipSnapshot(item, { sourceMode: resolvedSourceMode })
       .catch(() => ({ listMembership: {} }));
+    const membership =
+      membershipOverride && typeof membershipOverride === "object"
+        ? membershipOverride
+        : snapshot?.listMembership || {};
     this.libraryListMenu = {
       item,
-      sourceMode: await libraryRepository.getSourceMode().catch(() => LibrarySourceMode.LOCAL),
+      sourceMode: resolvedSourceMode,
       tabs: resolvedTabs,
       membership: Object.fromEntries(
-        resolvedTabs.map((tab) => [tab.key, Boolean(snapshot?.listMembership?.[tab.key])])
+        resolvedTabs.map((tab) => [tab.key, Boolean(membership[tab.key])])
       ),
-      error: ""
+      destructiveRemovalRequired: Boolean(destructiveRemovalRequired),
+      error: String(error || "")
     };
     this.heroPlayMenu = null;
     return this.mountLibraryListDialog();
@@ -4926,15 +4988,41 @@ export const MetaDetailsScreen = {
   },
 
   async toggleLibraryFromHero() {
-    await savedLibraryRepository.toggle({
-      contentId: this.params?.itemId,
-      contentType: this.params?.itemType || "movie",
-      title: this.meta?.name || this.params?.fallbackTitle || this.params?.itemId || "Untitled",
-      poster: this.meta?.poster || null,
-      background: this.meta?.background || null
-    });
-    this.isSavedInLibrary = !this.isSavedInLibrary;
-    this.syncDetailActionButtons();
+    if (this.libraryTogglePending) {
+      return false;
+    }
+    const detailToken = this.detailLoadToken;
+    const mutationToken = (this.libraryMembershipMutationToken || 0) + 1;
+    this.libraryMembershipMutationToken = mutationToken;
+    this.libraryTogglePending = true;
+    try {
+      const result = await libraryRepository.toggleDefault(this.getCurrentLibraryItem());
+      if (
+        detailToken !== this.detailLoadToken ||
+        mutationToken !== (this.libraryMembershipMutationToken || 0)
+      ) {
+        return false;
+      }
+      if (result?.requiresRemovalConfirmation) {
+        await this.openLibraryListMenu({
+          membershipOverride: result.desiredMembership,
+          sourceMode: result.sourceMode,
+          destructiveRemovalRequired: true,
+          error: SIMKL_DESTRUCTIVE_REMOVAL_MESSAGE
+        });
+        return true;
+      }
+      this.isSavedInLibrary = Boolean(result?.isSavedInLibrary);
+      this.syncDetailActionButtons();
+      return true;
+    } finally {
+      if (
+        detailToken === this.detailLoadToken &&
+        mutationToken === (this.libraryMembershipMutationToken || 0)
+      ) {
+        this.libraryTogglePending = false;
+      }
+    }
   },
 
   cancelPendingPosterHold() {
@@ -5559,6 +5647,7 @@ export const MetaDetailsScreen = {
       return true;
     }
     if (action === "saveLibraryLists" || action === "confirmDestructiveSimklRemoval") {
+      this.libraryMembershipMutationToken = (this.libraryMembershipMutationToken || 0) + 1;
       try {
         await libraryRepository.applyMembershipChanges(
           this.libraryListMenu.item,
@@ -5566,7 +5655,8 @@ export const MetaDetailsScreen = {
             desiredMembership: this.libraryListMenu.membership || {}
           },
           {
-            destructiveRemovalConfirmed: action === "confirmDestructiveSimklRemoval"
+            destructiveRemovalConfirmed: action === "confirmDestructiveSimklRemoval",
+            sourceMode: this.libraryListMenu.sourceMode
           }
         );
         this.isSavedInLibrary = Object.values(this.libraryListMenu.membership || {}).some(Boolean);
@@ -5577,7 +5667,7 @@ export const MetaDetailsScreen = {
         this.libraryListMenu.destructiveRemovalRequired =
           error?.code === "SIMKL_DESTRUCTIVE_REMOVAL_REQUIRED";
         this.libraryListMenu.error = this.libraryListMenu.destructiveRemovalRequired
-          ? "Removing this status will also clear watched history or a rating on Simkl. Confirm only if that is intended."
+          ? SIMKL_DESTRUCTIVE_REMOVAL_MESSAGE
           : t("detail_lists_save_failed", {}, "Could not save list changes.");
         this.mountLibraryListDialog();
       }

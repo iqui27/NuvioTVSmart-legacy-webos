@@ -10,6 +10,7 @@ import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { TmdbService } from "../../../core/tmdb/tmdbService.js";
 import { TmdbSettingsStore } from "../../../data/local/tmdbSettingsStore.js";
 import { TmdbMetadataService } from "../../../core/tmdb/tmdbMetadataService.js";
+import { catalogSkipStep, catalogSupportsExtra } from "../../../core/addons/homeCatalogs.js";
 import { toTraktImageUrl } from "../../../core/trakt/traktImageUrl.js";
 import { TMDB_API_KEY, TRAKT_API_URL, TRAKT_CLIENT_ID } from "../../../config.js";
 import {
@@ -257,6 +258,8 @@ function buildFolderSourceRows(tabs = []) {
           data: {
             items: Array.isArray(tab.items) ? tab.items : [],
             hasMore: Boolean(tab.hasMore),
+            supportsSkip: tab.supportsSkip !== false,
+            skipStep: Number(tab.skipStep || 100),
             currentPage: Math.max(0, Number(tab.page || 1) - 1),
             nextSkip: Math.max(0, Number(tab.nextSkip || 0))
           }
@@ -433,26 +436,65 @@ async function fetchJson(url, options = {}) {
 
 async function fetchAddonSourceItems(source = {}, page = 1, skipOverride = null) {
   const addons = await addonRepository.getInstalledAddons();
-  const addon = findAddonForSource(source, addons);
-  const addonBaseUrl = firstNonEmpty(addon?.baseUrl, source.addonBaseUrl);
+  let effectiveAddon = findAddonForSource(source, addons);
+  const extraArgs = source.genre ? { genre: source.genre } : {};
+  const sourceCatalogId = String(source.catalogId || "");
+  const sourceCatalogIdBase = sourceCatalogId.split(",")[0].trim();
+  const sourceTypeValue = String(source.type || source.apiType || "");
+  const findCatalog = (candidateAddon, allowBaseId = false) => {
+    const catalogs = candidateAddon?.catalogs || [];
+    return (
+      catalogs.find(
+        (entry) =>
+          String(entry?.id || "") === sourceCatalogId &&
+          String(entry?.apiType || "") === sourceTypeValue
+      ) ||
+      (allowBaseId && sourceCatalogIdBase && sourceCatalogIdBase !== sourceCatalogId
+        ? catalogs.find(
+            (entry) =>
+              String(entry?.id || "") === sourceCatalogIdBase &&
+              String(entry?.apiType || "") === sourceTypeValue
+          )
+        : null)
+    );
+  };
+  let catalog = findCatalog(effectiveAddon, true) || null;
+  if (!catalog) {
+    for (const candidate of addons) {
+      const match = findCatalog(candidate);
+      if (match) {
+        effectiveAddon = candidate;
+        catalog = match;
+        break;
+      }
+    }
+  }
+  const addonBaseUrl = firstNonEmpty(effectiveAddon?.baseUrl, source.addonBaseUrl);
   if (!addonBaseUrl) {
     throw new Error("Addon not found");
   }
-  const extraArgs = source.genre ? { genre: source.genre } : {};
+  const supportsSkip = catalogSupportsExtra(catalog, "skip");
+  const skipStep = catalogSkipStep(catalog);
   const requestedSkip = skipOverride == null ? Number.NaN : Number(skipOverride);
   const skip = Number.isFinite(requestedSkip)
     ? Math.max(0, Math.trunc(requestedSkip))
-    : Math.max(0, (page - 1) * 100);
+    : Math.max(0, (page - 1) * skipStep);
   const result = await catalogRepository.getCatalog({
     addonBaseUrl,
-    addonId: firstNonEmpty(addon?.id, source.addonId, addonBaseUrl),
-    addonName: firstNonEmpty(addon?.displayName, addon?.name, source.addonName, "Addon"),
+    addonId: firstNonEmpty(effectiveAddon?.id, source.addonId, addonBaseUrl),
+    addonName: firstNonEmpty(
+      effectiveAddon?.displayName,
+      effectiveAddon?.name,
+      source.addonName,
+      "Addon"
+    ),
     catalogId: source.catalogId,
     catalogName: buildAddonTabLabel(source, addons),
     type: source.type,
     skip,
+    skipStep,
     extraArgs,
-    supportsSkip: true
+    supportsSkip
   });
   if (result?.status !== "success") {
     throw new Error(String(result?.message || "Could not load catalog"));
@@ -464,6 +506,8 @@ async function fetchAddonSourceItems(source = {}, page = 1, skipOverride = null)
   return {
     items,
     hasMore: Boolean(result.data?.hasMore),
+    supportsSkip: Boolean(result.data?.supportsSkip),
+    skipStep: Number(result.data?.skipStep || skipStep),
     page,
     nextSkip: Number.isFinite(reportedNextSkip)
       ? Math.max(0, Math.trunc(reportedNextSkip))
@@ -899,7 +943,12 @@ export const FolderDetailScreen = {
             page: Math.max(1, Number(restored.page || 1)),
             nextSkip: Number.isFinite(Number(restored.nextSkip))
               ? Math.max(0, Math.trunc(Number(restored.nextSkip)))
-              : Math.max(0, (Math.max(1, Number(restored.page || 1)) - 1) * 100),
+              : Math.max(
+                  0,
+                  (Math.max(1, Number(restored.page || 1)) - 1) *
+                    Number(restored.skipStep || tab.skipStep || 100)
+                ),
+            skipStep: Number(restored.skipStep || tab.skipStep || 100),
             loading: false,
             error: String(restored.error || ""),
             restoreNeedsReload: Boolean(restored.restoreNeedsReload)
@@ -994,6 +1043,7 @@ export const FolderDetailScreen = {
       hasMore: false,
       page: 1,
       nextSkip: 0,
+      skipStep: 100,
       loading: false,
       error: ""
     }));
@@ -1009,6 +1059,7 @@ export const FolderDetailScreen = {
               hasMore: false,
               page: 1,
               nextSkip: 0,
+              skipStep: 100,
               loading: true,
               error: ""
             },
@@ -1081,6 +1132,8 @@ export const FolderDetailScreen = {
         ...this.tabs[tabIndex],
         items: append ? [...existing, ...incoming] : incoming,
         hasMore: Boolean(result.hasMore && incoming.length),
+        supportsSkip: result.supportsSkip !== false,
+        skipStep: Number(result.skipStep || this.tabs[tabIndex].skipStep || 100),
         page: Number(result.page || nextPage),
         nextSkip: Number.isFinite(Number(result.nextSkip))
           ? Math.max(0, Math.trunc(Number(result.nextSkip)))
@@ -1676,6 +1729,8 @@ export const FolderDetailScreen = {
         ...this.tabs[tabIndex],
         items: merged,
         hasMore,
+        supportsSkip: result.supportsSkip !== false,
+        skipStep: Number(result.skipStep || tab.skipStep || 100),
         page: Number(result.page || nextPage),
         nextSkip: Number.isFinite(Number(result.nextSkip))
           ? Math.max(0, Math.trunc(Number(result.nextSkip)))
@@ -1687,6 +1742,8 @@ export const FolderDetailScreen = {
       if (rowData?.result?.data) {
         rowData.result.data.items = merged;
         rowData.result.data.hasMore = hasMore;
+        rowData.result.data.supportsSkip = result.supportsSkip !== false;
+        rowData.result.data.skipStep = Number(result.skipStep || tab.skipStep || 100);
         rowData.result.data.currentPage = Number(result.page || nextPage);
         rowData.result.data.nextSkip = Number.isFinite(Number(result.nextSkip))
           ? Math.max(0, Math.trunc(Number(result.nextSkip)))

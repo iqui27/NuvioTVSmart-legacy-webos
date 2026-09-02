@@ -1,0 +1,30 @@
+{
+  "id": "space.nuvio.webos.plugin.service",
+  "description": "Network boundary for Nuvio Web TV JavaScript plugins",
+  "services": [
+    {
+      "name": "space.nuvio.webos.plugin.service",
+      "description": "Validates and fetches Android-compatible HTTP(S) provider responses for JS plugins",
+      "commands": [
+        { "name": "ping", "description": "Report plugin service health", "public": true },
+        {
+          "name": "capabilities",
+          "description": "Report the versioned plugin protocol capabilities",
+          "public": true
+        },
+        {
+          "name": "fetch",
+          "description": "Fetch one bounded HTTP(S) provider response",
+          "public": true
+        },
+        { "name": "cancel", "description": "Cancel one provider request", "public": true },
+        {
+          "name": "diagnostics",
+          "description": "Report redacted plugin service diagnostics",
+          "public": true
+        },
+        { "name": "cacheClear", "description": "Clear plugin network cache", "public": true }
+      ]
+    }
+  ]
+}

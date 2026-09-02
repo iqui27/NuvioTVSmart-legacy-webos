@@ -850,7 +850,12 @@ class AddonRepository {
       id: catalog.id,
       name: catalog.name || catalog.id,
       apiType: (catalog.type || "").trim(),
-      extra: this.mapCatalogExtra(catalog)
+      extra: this.mapCatalogExtra(catalog),
+      pageSize: Number.isFinite(Number(catalog.pageSize)) ? Number(catalog.pageSize) : null,
+      showInHome: catalog.showInHome === true,
+      hasExplicitShowInHome: catalog.showInHome !== null && catalog.showInHome !== undefined,
+      extraSupported: Array.isArray(catalog.extraSupported) ? [...catalog.extraSupported] : [],
+      extraRequired: Array.isArray(catalog.extraRequired) ? [...catalog.extraRequired] : []
     }));
 
     return {
@@ -870,22 +875,44 @@ class AddonRepository {
   }
 
   mapCatalogExtra(catalog = {}) {
-    if (Array.isArray(catalog.extra)) {
-      return catalog.extra.map((entry) => ({
-        name: entry.name,
-        isRequired: Boolean(entry.isRequired),
-        options: Array.isArray(entry.options) ? entry.options : null
-      }));
-    }
-    // Legacy manifest format: extraSupported/extraRequired as plain name arrays.
-    const required = Array.isArray(catalog.extraRequired) ? catalog.extraRequired : [];
-    const supported = Array.isArray(catalog.extraSupported) ? catalog.extraSupported : [];
-    const names = supported.concat(required.filter((name) => supported.indexOf(name) === -1));
-    return names.map((name) => ({
-      name: String(name),
-      isRequired: required.indexOf(name) !== -1,
-      options: null
-    }));
+    const extras = [];
+    const isManifestBoolean = (value) =>
+      value === true ||
+      (typeof value === "string" && value.trim().toLowerCase() === "true") ||
+      (typeof value === "number" && value !== 0);
+    const addExtra = (name, isRequired = false, options = null) => {
+      const normalizedName = String(name || "").trim();
+      if (!normalizedName) {
+        return;
+      }
+      const existing = extras.find(
+        (entry) => entry.name.toLowerCase() === normalizedName.toLowerCase()
+      );
+      if (existing) {
+        existing.isRequired = existing.isRequired || isManifestBoolean(isRequired);
+        if (!existing.options && Array.isArray(options)) {
+          existing.options = options;
+        }
+        return;
+      }
+      extras.push({
+        // Android normalizes full-form extra names before exposing the manifest
+        // to the UI; keep the same canonical representation here.
+        name: normalizedName.toLowerCase(),
+        isRequired: isManifestBoolean(isRequired),
+        options: Array.isArray(options) ? options : null
+      });
+    };
+
+    (Array.isArray(catalog.extra) ? catalog.extra : []).forEach((entry) => {
+      const name = typeof entry === "string" ? entry : entry?.name;
+      addExtra(name, entry?.isRequired, entry?.options);
+    });
+
+    // Keep legacy extraSupported/extraRequired separate. Android checks those
+    // arrays through supportsExtra(), while required-search detection only
+    // applies to the full-form `extra` declaration.
+    return extras;
   }
 
   parseResources(resources, defaultTypes) {

@@ -1215,6 +1215,47 @@ async function buildAssSubtitleLibrary() {
   });
 }
 
+async function buildPluginRuntimeAssets() {
+  console.log("building isolated JavaScript plugin runtime...");
+  await mkdir(path.join(distDir, "assets", "libs"), { recursive: true });
+  await mkdir(path.join(distDir, "assets", "runtime"), { recursive: true });
+  const cryptoJsSource = await readFile(
+    path.join(rootDir, "node_modules", "crypto-js", "crypto-js.js"),
+    "utf8"
+  );
+  await build({
+    entryPoints: [
+      path.join(rootDir, "node_modules", "quickjs-emscripten", "dist", "index.global.js")
+    ],
+    outfile: path.join(distDir, "assets", "libs", "quickjs-emscripten.global.js"),
+    bundle: false,
+    target: [`chrome${compatibilityPolicy.chromiumVersion}`],
+    minify: !debugBundle,
+    legalComments: "none"
+  });
+  await build({
+    entryPoints: [path.join(rootDir, "js", "core", "player", "pluginWorker.js")],
+    outfile: path.join(distDir, "assets", "runtime", "plugin-worker.js"),
+    bundle: true,
+    platform: "browser",
+    format: "iife",
+    target: [`chrome${compatibilityPolicy.chromiumVersion}`],
+    minify: !debugBundle,
+    legalComments: "none",
+    define: {
+      __NUVIO_CRYPTO_JS_SOURCE__: JSON.stringify(cryptoJsSource)
+    }
+  });
+  await cp(
+    path.join(rootDir, "node_modules", "quickjs-emscripten", "LICENSE"),
+    path.join(distDir, "assets", "libs", "quickjs-emscripten.LICENSE")
+  );
+  await cp(
+    path.join(rootDir, "node_modules", "crypto-js", "LICENSE"),
+    path.join(distDir, "assets", "libs", "crypto-js.LICENSE")
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Screen chunks (bundle split stage 1b)
 //
@@ -1717,6 +1758,7 @@ async function runBuild() {
       )
     ]);
     await buildAssSubtitleLibrary();
+    await buildPluginRuntimeAssets();
     await cp(
       path.join(rootDir, "node_modules", "libbitsub", "pkg", "libbitsub_bg.wasm"),
       path.join(distDir, "assets", "libs", "libbitsub_bg.wasm")

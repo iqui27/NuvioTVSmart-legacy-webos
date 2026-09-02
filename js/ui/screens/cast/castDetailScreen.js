@@ -89,7 +89,55 @@ function uniqueCredits(items = []) {
 }
 
 export const CastDetailScreen = {
-  async mount(params = {}) {
+  getRouteStateKey(params = {}) {
+    const castId = String(params?.castId || "").trim();
+    const castName = String(params?.castName || "").trim();
+    const identity = castId ? `id:${castId}` : castName ? `name:${castName}` : "";
+    return identity ? `castDetail:${identity}` : null;
+  },
+
+  captureRouteState() {
+    const focused = this.container?.querySelector(".cast-credit-card.focusable.focused");
+    if (focused) {
+      this.rememberFocusedCard(focused);
+    }
+    return {
+      params: this.params ? { ...this.params } : {},
+      person: this.person ? { ...this.person } : null,
+      credits: Array.isArray(this.credits) ? this.credits.map((item) => ({ ...item })) : [],
+      sectionFocusIndexByKey: { ...(this.sectionFocusIndexByKey || {}) },
+      focusedSectionKey: String(this.lastFocusedSectionKey || ""),
+      focusedItemId: String(this.lastFocusedItemId || "")
+    };
+  },
+
+  hydrateFromRouteState(restoredState = null, params = {}) {
+    const snapshot = restoredState && typeof restoredState === "object" ? restoredState : null;
+    const currentKey = this.getRouteStateKey(params);
+    const snapshotKey = this.getRouteStateKey(snapshot?.params);
+    if (
+      !currentKey ||
+      currentKey !== snapshotKey ||
+      !snapshot?.person ||
+      typeof snapshot.person !== "object" ||
+      !Array.isArray(snapshot.credits)
+    ) {
+      return false;
+    }
+    this.params = params || {};
+    this.person = { ...snapshot.person };
+    this.credits = snapshot.credits.map((item) => ({ ...item }));
+    this.sectionFocusIndexByKey =
+      snapshot.sectionFocusIndexByKey && typeof snapshot.sectionFocusIndexByKey === "object"
+        ? { ...snapshot.sectionFocusIndexByKey }
+        : {};
+    this.lastFocusedSectionKey = String(snapshot.focusedSectionKey || "");
+    this.lastFocusedItemId = String(snapshot.focusedItemId || "");
+    this.pendingRestoreFocus = true;
+    return true;
+  },
+
+  async mount(params = {}, navigationContext = {}) {
     this.container = document.getElementById("castDetail");
     ScreenUtils.show(this.container);
     this.params = params || {};
@@ -97,10 +145,21 @@ export const CastDetailScreen = {
     this.person = null;
     this.credits = [];
     this.sectionFocusIndexByKey = {};
+    this.lastFocusedSectionKey = "";
+    this.lastFocusedItemId = "";
+    this.pendingRestoreFocus = false;
     this.posterOptionsController = null;
     this.posterOptionsFocusRestore = null;
     this.pendingPosterHoldTarget = null;
     this.pendingPosterHoldTimer = null;
+
+    if (
+      navigationContext?.isBackNavigation &&
+      this.hydrateFromRouteState(navigationContext?.restoredState || null, params)
+    ) {
+      this.render();
+      return;
+    }
 
     this.renderLoading();
     await this.loadCastDetails();
@@ -332,6 +391,12 @@ export const CastDetailScreen = {
     `;
 
     ScreenUtils.indexFocusables(this.container);
+    if (this.pendingRestoreFocus) {
+      this.pendingRestoreFocus = false;
+      if (this.restoreFocusedCard()) {
+        return;
+      }
+    }
     ScreenUtils.setInitialFocus(this.container, ".cast-credit-card.focusable");
     const initial = this.container.querySelector(".cast-credit-card.focusable.focused");
     if (initial) {
@@ -360,6 +425,8 @@ export const CastDetailScreen = {
     if (index >= 0) {
       this.sectionFocusIndexByKey[sectionKey] = index;
     }
+    this.lastFocusedSectionKey = sectionKey;
+    this.lastFocusedItemId = String(node.dataset.itemId || "");
   },
 
   focusNode(node, { instant = false } = {}) {
@@ -382,6 +449,19 @@ export const CastDetailScreen = {
     return true;
   },
 
+  restoreFocusedCard() {
+    const cards = this.getCreditCardNodes();
+    const target =
+      cards.find((node) => {
+        const section = node.closest(".cast-credit-section");
+        return (
+          String(section?.dataset?.creditSection || "") === this.lastFocusedSectionKey &&
+          String(node.dataset.itemId || "") === this.lastFocusedItemId
+        );
+      }) || cards[0];
+    return target ? this.focusNode(target, { instant: true }) : false;
+  },
+
   handleDpad(event) {
     const direction = getDirection(event);
     if (!direction) {
@@ -401,11 +481,11 @@ export const CastDetailScreen = {
 
     if (direction === "left" || direction === "right") {
       const nextIndex = currentIndex + (direction === "left" ? -1 : 1);
+      event?.preventDefault?.();
       if (currentCards[nextIndex]) {
-        event?.preventDefault?.();
         this.focusNode(currentCards[nextIndex]);
       }
-      return Boolean(currentCards[nextIndex]);
+      return true;
     }
 
     const sections = Array.from(this.container?.querySelectorAll(".cast-credit-section") || []);
@@ -558,6 +638,7 @@ export const CastDetailScreen = {
     if (!item?.id) {
       return false;
     }
+    this.rememberFocusedCard(node);
     this.posterOptionsFocusRestore = String(item.id || "").trim();
     if (!this.posterOptionsController) {
       this.posterOptionsController = new PosterOptionsDialogController({
@@ -608,6 +689,7 @@ export const CastDetailScreen = {
   },
 
   openDetailFromNode(node) {
+    this.rememberFocusedCard(node);
     Router.navigate("detail", {
       itemId: node.dataset.itemId,
       itemType: node.dataset.itemType || "movie",

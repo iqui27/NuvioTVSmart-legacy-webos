@@ -1,155 +1,242 @@
-import { LocalStore } from "../storage/localStore.js";
-import { ProfileManager } from "../profile/profileManager.js";
+import { TMDB_API_KEY } from "../../config.js";
+import { PluginServiceClient } from "../../platform/pluginServiceClient.js";
+import { PLUGIN_QUOTAS } from "./pluginPolicy.js";
+import { PluginStore } from "../../data/local/pluginStore.js";
 
-const KEY = "pluginSources";
+const activeWorkers = new Set();
+const activeCancellers = new Map();
+let runtimeTestPromise = null;
 
-/**
- * Repositorios de plugin sao POR PERFIL, e nao havia nada disso aqui: a lista
- * vivia num `LocalStore.get("pluginSources")` cru, ou seja, uma unica lista global
- * que todos os perfis enxergavam. Relatado por um testador -- ele ligou plugins num
- * perfil secundario e viu os repositorios do perfil principal, exatamente como
- * tinha acontecido antes com os addons.
- *
- * Um repositorio de plugin e "coisa instalada", nao preferencia: perfil novo comeca
- * VAZIO em vez de herdar o principal. (O oposto vale para tema, layout e ajustes de
- * player, que usam createProfileScopedStore e herdam de proposito.)
- *
- * MIGRACAO: uma lista antiga em formato de array pertence a quem a instalou, que so
- * pode ser o perfil principal — ela vai para o "1" e os outros perfis nascem sem
- * nada. Perfis ja contaminados nao tem como ser separados: o dado foi gravado numa
- * lista so, sem dono.
- */
-function lerEnvelope() {
-  const bruto = LocalStore.get(KEY, null);
-  if (bruto && typeof bruto === "object" && !Array.isArray(bruto) && bruto.__profileScoped) {
-    return { __profileScoped: true, profiles: { ...(bruto.profiles || {}) } };
+function workerUrl() {
+  if (globalThis.__NUVIO_PLUGIN_WORKER_URL__) {
+    return String(globalThis.__NUVIO_PLUGIN_WORKER_URL__);
   }
-  const envelope = { __profileScoped: true, profiles: {} };
-  if (Array.isArray(bruto) && bruto.length) {
-    envelope.profiles["1"] = bruto;
-    LocalStore.set(KEY, envelope);
+  try {
+    return new URL("assets/runtime/plugin-worker.js", document.baseURI || location.href).toString();
+  } catch (_) {
+    return "assets/runtime/plugin-worker.js";
   }
-  return envelope;
 }
 
-function perfilAtual() {
-  return String(ProfileManager.getActiveProfileId() ?? "1").trim() || "1";
+function byteLength(value) {
+  const input = String(value || "");
+  return typeof TextEncoder === "function"
+    ? new TextEncoder().encode(input).byteLength
+    : unescape(encodeURIComponent(input)).length;
 }
 
-function lerFontesDoPerfil() {
-  const envelope = lerEnvelope();
-  const atual = envelope.profiles[perfilAtual()];
-  return Array.isArray(atual) ? atual : [];
-}
-
-function gravarFontesDoPerfil(sources) {
-  const envelope = lerEnvelope();
-  envelope.profiles[perfilAtual()] = Array.isArray(sources) ? sources : [];
-  LocalStore.set(KEY, envelope);
-}
-
-function normalizeSources(input) {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-  return input
-    .map((source) => ({
-      id: source.id || `plugin_${Math.random().toString(36).slice(2, 10)}`,
-      name: String(source.name || "Custom Source").trim(),
-      urlTemplate: String(source.urlTemplate || "").trim(),
-      enabled: source.enabled !== false
-    }))
-    .filter((source) => Boolean(source.urlTemplate));
-}
-
-function applyTemplate(template, vars) {
-  let output = template;
-  Object.entries(vars).forEach(([key, value]) => {
-    const token = `{${key}}`;
-    output = output.split(token).join(String(value ?? ""));
-  });
-  return output;
+function defaultArgs({ tmdbId, mediaType, season = null, episode = null } = {}) {
+  return {
+    tmdbId: String(tmdbId || ""),
+    mediaType: String(mediaType || ""),
+    season: season == null ? null : Number(season),
+    episode: episode == null ? null : Number(episode)
+  };
 }
 
 export const PluginRuntime = {
   listSources() {
-    return normalizeSources(lerFontesDoPerfil());
+    return PluginStore.get().legacySources;
   },
 
   saveSources(sources) {
-    const normalized = normalizeSources(sources);
-    if (JSON.stringify(this.listSources()) === JSON.stringify(normalized)) {
-      return false;
-    }
-    gravarFontesDoPerfil(normalized);
-    return true;
+    const normalized = Array.isArray(sources) ? sources : [];
+    const current = PluginStore.get();
+    const next = PluginStore.replace({ ...current, legacySources: normalized, syncDirty: true });
+    return JSON.stringify(current.legacySources) !== JSON.stringify(next.legacySources);
   },
 
   addSource(source) {
     const current = this.listSources();
-    const normalizedUrl = String(source?.urlTemplate || "").trim();
-    if (!normalizedUrl || current.some((entry) => entry.urlTemplate === normalizedUrl)) {
-      return false;
-    }
-    current.push({ ...source, urlTemplate: normalizedUrl });
-    return this.saveSources(current);
+    const url = String(source?.urlTemplate || source?.url || "").trim();
+    if (!url || current.some((entry) => entry.urlTemplate === url)) return false;
+    return this.saveSources([...current, { ...source, urlTemplate: url, enabled: false }]);
   },
 
   removeSource(sourceId) {
-    const next = this.listSources().filter((source) => source.id !== sourceId);
-    return this.saveSources(next);
+    return this.saveSources(this.listSources().filter((source) => source.id !== sourceId));
   },
 
   setSourceEnabled(sourceId, enabled) {
-    const current = this.listSources();
-    const normalizedEnabled = Boolean(enabled);
-    if (!current.some((source) => source.id === sourceId)) {
-      return false;
-    }
-    if (
-      current.some(
-        (source) => source.id === sourceId && Boolean(source.enabled) === normalizedEnabled
+    return this.saveSources(
+      this.listSources().map((source) =>
+        source.id === sourceId ? { ...source, enabled: Boolean(enabled) } : source
       )
-    ) {
-      return false;
-    }
-    const next = current.map((source) => {
-      if (source.id !== sourceId) {
-        return source;
-      }
-      return { ...source, enabled: normalizedEnabled };
-    });
-    return this.saveSources(next);
+    );
   },
 
-  execute({ tmdbId, mediaType, season = null, episode = null } = {}) {
-    const vars = {
-      tmdbId: tmdbId || "",
-      mediaType: mediaType || "",
-      season: season ?? "",
-      episode: episode ?? ""
+  // URL-template sources are retained for migration and display only. They
+  // deliberately have no execution path on Web TV.
+  execute() {
+    return [];
+  },
+
+  async selfTest({ quota = PLUGIN_QUOTAS.limited } = {}) {
+    if (typeof Worker !== "function") throw new Error("Worker API unavailable");
+    if (typeof WebAssembly !== "object") throw new Error("WebAssembly API unavailable");
+    if (!runtimeTestPromise) {
+      runtimeTestPromise = this.executePlugin({
+        code: "module.exports.getStreams = function(){ return []; };",
+        filename: "runtime-self-test.js",
+        scraperId: "runtime-self-test",
+        args: { tmdbId: "", mediaType: "movie", season: null, episode: null },
+        quota,
+        skipService: true
+      }).catch((error) => {
+        runtimeTestPromise = null;
+        throw error;
+      });
+    }
+    return runtimeTestPromise;
+  },
+
+  async executePlugin({
+    code,
+    filename = "plugin.js",
+    scraperId = "plugin",
+    profileId = "",
+    repositoryId = "",
+    settings = {},
+    args = {},
+    quota = PLUGIN_QUOTAS.limited,
+    timeoutMs = quota.globalTimeoutMs || 60000,
+    skipService = false,
+    signal = null
+  } = {}) {
+    if (byteLength(code) > Number(quota.maxCodeBytes || PLUGIN_QUOTAS.limited.maxCodeBytes)) {
+      throw new Error("Plugin code exceeds the platform quota");
+    }
+    if (!skipService) await PluginServiceClient.ensureReady();
+    if (typeof Worker !== "function") throw new Error("Worker API unavailable");
+
+    const worker = new Worker(workerUrl());
+    activeWorkers.add(worker);
+    const executionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const pendingRequestIds = new Set();
+    let timeoutId = 0;
+    let settled = false;
+    let abortListener = null;
+
+    const terminate = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (abortListener) signal?.removeEventListener?.("abort", abortListener);
+      pendingRequestIds.forEach((requestId) => void PluginServiceClient.cancel(requestId));
+      pendingRequestIds.clear();
+      activeWorkers.delete(worker);
+      activeCancellers.delete(worker);
+      try {
+        worker.terminate();
+      } catch (_) {}
     };
 
-    return this.listSources()
-      .filter((source) => source.enabled)
-      .map((source) => {
-        const url = applyTemplate(source.urlTemplate, vars).trim();
-        if (!url) {
-          return null;
+    return new Promise((resolve, reject) => {
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        terminate();
+        if (error) reject(error);
+        else resolve(value);
+      };
+      activeCancellers.set(worker, () => finish(new Error("Plugin execution cancelled")));
+      abortListener = () => finish(new Error("Plugin execution cancelled"));
+      if (signal?.aborted) {
+        finish(new Error("Plugin execution cancelled"));
+        return;
+      }
+      signal?.addEventListener?.("abort", abortListener, { once: true });
+      timeoutId = setTimeout(() => finish(new Error("Plugin execution timed out")), timeoutMs);
+      worker.onerror = (event) =>
+        finish(new Error(String(event?.message || "Plugin worker failed")));
+      worker.onmessage = (event) => {
+        const message = event?.data || {};
+        if (message.type === "fetch") {
+          const requestId = String(message.requestId || "");
+          pendingRequestIds.add(requestId);
+          PluginServiceClient.fetch({
+            ...(message.payload || {}),
+            requestId,
+            executionId,
+            profileId: String(profileId || ""),
+            repositoryId: String(repositoryId || ""),
+            scraperId: String(scraperId || ""),
+            deadline: Date.now() + Number(quota.providerTimeoutMs || 30000),
+            timeoutMs: Number(quota.providerTimeoutMs || 30000),
+            maxBodyBytes: Number(quota.maxFetchBytes || 1024 * 1024),
+            maxResponseBytes: Number(quota.maxFetchBytes || 1024 * 1024),
+            // The Android runner resolves transport failures as status-0
+            // response objects. Management requests keep their normal
+            // throwing behavior because they are outside the plugin contract.
+            androidResponseContract: true,
+            signal
+          })
+            .then((payload) => {
+              pendingRequestIds.delete(requestId);
+              if (!settled) worker.postMessage({ type: "fetchResult", requestId, payload });
+            })
+            .catch((error) => {
+              pendingRequestIds.delete(requestId);
+              if (!settled)
+                worker.postMessage({
+                  type: "fetchResult",
+                  requestId,
+                  error: String(error?.message || error)
+                });
+            });
+          return;
         }
-        return {
-          sourceId: source.id,
-          sourceName: source.name,
-          streams: [
-            {
-              name: `${source.name} Source`,
-              title: `${source.name} Stream`,
-              url,
-              description: `Generated by template: ${source.urlTemplate}`
-            }
-          ]
-        };
-      })
-      .filter(Boolean);
+        if (message.type === "cancel") {
+          const requestId = String(message.requestId || "");
+          if (requestId && pendingRequestIds.has(requestId)) {
+            void PluginServiceClient.cancel(requestId);
+          }
+          return;
+        }
+        if (message.type === "result") {
+          finish(null, Array.isArray(message.results) ? message.results : []);
+          return;
+        }
+        if (message.type === "error")
+          finish(new Error(String(message.error || "Plugin execution failed")));
+      };
+      try {
+        worker.postMessage({
+          type: "execute",
+          executionId,
+          code: String(code || ""),
+          filename,
+          scraperId,
+          settings: settings && typeof settings === "object" ? settings : {},
+          profileId: String(profileId || ""),
+          repositoryId: String(repositoryId || ""),
+          tmdbApiKey: TMDB_API_KEY,
+          args: defaultArgs(args),
+          quota,
+          timeoutMs,
+          deadline: Date.now() + Number(timeoutMs || 60000)
+        });
+      } catch (error) {
+        finish(error);
+      }
+    });
+  },
+
+  cancelAll() {
+    [...activeCancellers.values()].forEach((cancel) => {
+      try {
+        cancel();
+      } catch (_) {}
+    });
+    activeWorkers.forEach((worker) => {
+      try {
+        worker.terminate();
+      } catch (_) {}
+    });
+    activeCancellers.clear();
+    activeWorkers.clear();
+    runtimeTestPromise = null;
+  },
+
+  getActiveWorkerCount() {
+    return activeWorkers.size;
   }
 };

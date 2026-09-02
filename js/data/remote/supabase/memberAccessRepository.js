@@ -151,7 +151,8 @@ export const MemberAccessRepository = {
       hydrateCachedAccess();
     }
 
-    const isFresh = currentFetchedAt > 0 && Date.now() - currentFetchedAt < STALE_AFTER_MS;
+    const ageMs = Date.now() - currentFetchedAt;
+    const isFresh = currentFetchedAt > 0 && ageMs >= 0 && ageMs < STALE_AFTER_MS;
     if (!force && isFresh) {
       return currentAccess;
     }

@@ -38,17 +38,27 @@ function toLegacyRgbChannels(hex, fallback = "255, 255, 255") {
  *
  * colorMap keys:
  *   bg, bgElevated, cardBg, secondary, onSecondary,
- *   focusColor, focusBg, text, textSecondary, textTertiary, border
+ *   focusColor, focusBg, text, textSecondary, textTertiary, border, playerAccent
  *
  * @param {{ bg:string, bgElevated:string, cardBg:string, secondary:string,
  *           onSecondary:string, focusColor:string, focusBg:string,
  *           text:string, textSecondary:string, textTertiary:string,
- *           border:string }} colorMap
+ *           border:string, playerAccent:string }} colorMap
  * @returns {string}
  */
 export function buildLegacyThemeCss(colorMap) {
-  const { bg, bgElevated, cardBg, secondary, onSecondary, focusColor, focusBg, text, border } =
-    colorMap;
+  const {
+    bg,
+    bgElevated,
+    cardBg,
+    secondary,
+    onSecondary,
+    focusColor,
+    focusBg,
+    text,
+    border,
+    playerAccent = secondary
+  } = colorMap;
 
   return [
     // 1. Base document surfaces
@@ -86,7 +96,13 @@ export function buildLegacyThemeCss(colorMap) {
       ` background: ${focusBg}; }`,
     `.modern-sidebar-nav-item.selected .modern-sidebar-nav-icon-circle,` +
       ` .modern-sidebar-nav-item.selected.focused .modern-sidebar-nav-icon-circle {` +
-      ` background: ${secondary}; color: ${onSecondary}; }`,
+      ` background: ${playerAccent}; color: ${onSecondary}; }`,
+
+    `.modern-sidebar-pill-icon-wrap {` + ` background: ${playerAccent}; color: ${onSecondary}; }`,
+
+    `.player-progress-fill, .player-parental-line-fill,` +
+      ` .library-watched-badge, .title-watched-badge,` +
+      ` .series-episode-status.complete { background: ${playerAccent}; }`,
 
     // 7. Focus rings — structures copied verbatim from components.css,
     //    only the color token values are substituted.
@@ -177,6 +193,7 @@ export const ThemeManager = {
       "--secondary-color-rgb": toRgbChannels(colors["--secondary-color"], "245 245 245"),
       "--focus-color-rgb": toRgbChannels(colors["--focus-color"], "255 255 255"),
       "--player-secondary": colors["--secondary-color"],
+      "--player-accent-gradient": colors["--accent-gradient"] || colors["--secondary-color"],
       "--player-on-secondary": colors["--on-secondary"],
       "--player-focus-ring": colors["--focus-color"],
       "--player-focus-background": colors["--focus-bg"],
@@ -210,7 +227,8 @@ export const ThemeManager = {
         text: colors["--text-color"],
         textSecondary: colors["--text-secondary"],
         textTertiary: colors["--text-tertiary"],
-        border: colors["--border-color"]
+        border: colors["--border-color"],
+        playerAccent: colors["--accent-gradient"] || colors["--secondary-color"]
       };
       injectLegacyTheme(buildLegacyThemeCss(colorMap));
     }

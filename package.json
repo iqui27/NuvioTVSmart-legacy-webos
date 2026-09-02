@@ -2,37 +2,32 @@
   "name": "nuvio-tv-smart",
   "private": true,
   "type": "module",
-  "version": "1.0.1",
-  "license": "GPL-3.0",
-  "author": "iqui27",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/iqui27/NuvioTVSmart-legacy-webos.git"
-  },
-  "homepage": "https://github.com/NuvioMedia/NuvioTVSmart",
+  "version": "1.0.2",
   "scripts": {
     "build": "node ./scripts/build.mjs",
-    "prepare": "husky || true",
     "build:on-release": "node ./scripts/release-build-poller.mjs",
-    "install:webos": "node ./scripts/ares-install-webos.mjs",
+    "check:legacy-css": "node ./scripts/checkLegacyCss.mjs",
+    "check:legacy-regex": "node scripts/checkLegacyRegex.mjs",
+    "check:no-undef": "node scripts/checkNoUndef.mjs",
+    "check:source": "node scripts/checkSourceIntegrity.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "inspect:webos": "node ./scripts/ares-inspect-webos.mjs",
-    "logs:webos": "node ./scripts/ares-logs-webos.mjs",
-    "media:webos-sim": "node --require ./scripts/localhost-listen-patch.cjs ./services/webos/runtime/media-http.cjs",
+    "install:webos": "node ./scripts/ares-install-webos.mjs",
     "lint": "npm run lint:home:incremental",
     "lint:home:incremental": "eslint \"js/ui/screens/home/**/*.js\" \"eslint.config.mjs\"",
+    "logs:webos": "node ./scripts/ares-logs-webos.mjs",
+    "media:webos-sim": "node --require ./scripts/localhost-listen-patch.cjs ./services/webos/runtime/media-http.cjs",
     "package:tizen": "npm run build && node ./scripts/package-tizen.mjs",
     "package:tizen:store": "npm run build && node ./scripts/package-tizen.mjs --store",
     "package:webos": "npm run build && node ./scripts/package-webos.mjs",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "prepare": "husky || true",
     "serve": "node ./scripts/serve.mjs",
-    "check:legacy-css": "node ./scripts/checkLegacyCss.mjs",
     "sync": "node ./scripts/sync-wrapper.mjs",
     "sync:tizen": "node ./scripts/sync-wrapper.mjs --tizen",
     "sync:webos": "node ./scripts/sync-wrapper.mjs --webos",
-    "check:legacy-regex": "node scripts/checkLegacyRegex.mjs",
-    "check:no-undef": "node scripts/checkNoUndef.mjs",
-    "check:source": "node scripts/checkSourceIntegrity.mjs"
+    "test": "npm run test:plugins",
+    "test:plugins": "npm run build && node ./scripts/test-plugin-system.mjs && node ./scripts/test-plugin-localization.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
@@ -58,12 +53,12 @@
   },
   "dependencies": {
     "assjs": "0.1.10",
+    "cheerio": "^1.0.0",
+    "crypto-js": "^4.2.0",
     "dashjs": "4.7.4",
     "hls.js": "1.5.20",
     "jszip": "^3.10.1",
-    "libbitsub": "^1.10.1"
-  },
-  "bugs": {
-    "url": "https://github.com/iqui27/NuvioTVSmart-legacy-webos/issues"
+    "libbitsub": "^1.10.1",
+    "quickjs-emscripten": "^0.32.0"
   }
 }

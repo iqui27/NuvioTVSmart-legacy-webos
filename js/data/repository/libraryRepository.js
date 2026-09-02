@@ -38,6 +38,7 @@ export const LibraryListType = {
 
 const REMOTE_STORE_KEY = "libraryTraktState";
 const WATCHLIST_KEY = "watchlist";
+const SIMKL_DEFAULT_LIST_KEY = "simkl:status:plantowatch";
 const PERSONAL_KEY_PREFIX = "personal:";
 const TRAKT_PAGE_LIMIT = 100;
 const TRAKT_LIST_FETCH_CONCURRENCY = 3;
@@ -747,21 +748,72 @@ class LibraryRepository {
     return hydrateEntries(items, options);
   }
 
-  async getMembershipSnapshot(item) {
-    const sourceMode = await this.getSourceMode();
-    if (sourceMode === LibrarySourceMode.LOCAL) {
+  async getMembershipSnapshot(item, { sourceMode = null } = {}) {
+    const resolvedSourceMode = sourceMode || (await this.getSourceMode());
+    if (resolvedSourceMode === LibrarySourceMode.LOCAL) {
       const exists = await savedLibraryRepository.isSaved(item.itemId || item.id || "");
       return { listMembership: { local: exists } };
     }
-    if (sourceMode === LibrarySourceMode.SIMKL) {
+    if (resolvedSourceMode === LibrarySourceMode.SIMKL) {
       return SimklSyncService.getMembershipSnapshot(item);
     }
-    const [entries, listTabs] = await Promise.all([this.getItems(), this.getListTabs()]);
+    const [entries, listTabs] = await Promise.all([
+      this.getItems({ sourceMode: resolvedSourceMode }),
+      this.getListTabs({ sourceMode: resolvedSourceMode })
+    ]);
     return membershipMapFromEntries(entries, listTabs)(item);
   }
 
-  async applyMembershipChanges(item, changes, options = {}) {
+  async toggleDefault(item, options = {}) {
     const sourceMode = await this.getSourceMode();
+    const snapshot = await this.getMembershipSnapshot(item, { sourceMode });
+    const currentMembership = snapshot?.listMembership || {};
+    let desiredMembership;
+
+    if (sourceMode === LibrarySourceMode.TRAKT) {
+      desiredMembership = {
+        ...currentMembership,
+        [WATCHLIST_KEY]: currentMembership[WATCHLIST_KEY] !== true
+      };
+    } else if (sourceMode === LibrarySourceMode.SIMKL) {
+      const hasMembership = Object.values(currentMembership).some(Boolean);
+      desiredMembership = Object.fromEntries(
+        Object.keys(currentMembership).map((key) => [
+          key,
+          !hasMembership && key === SIMKL_DEFAULT_LIST_KEY
+        ])
+      );
+      if (!Object.keys(desiredMembership).length && !hasMembership) {
+        desiredMembership = { [SIMKL_DEFAULT_LIST_KEY]: true };
+      }
+    } else {
+      desiredMembership = { local: currentMembership.local !== true };
+    }
+
+    try {
+      await this.applyMembershipChanges(item, { desiredMembership }, { ...options, sourceMode });
+    } catch (error) {
+      if (error?.code === "SIMKL_DESTRUCTIVE_REMOVAL_REQUIRED") {
+        return {
+          sourceMode,
+          desiredMembership,
+          isSavedInLibrary: true,
+          requiresRemovalConfirmation: true
+        };
+      }
+      throw error;
+    }
+
+    return {
+      sourceMode,
+      desiredMembership,
+      isSavedInLibrary: Object.values(desiredMembership).some(Boolean),
+      requiresRemovalConfirmation: false
+    };
+  }
+
+  async applyMembershipChanges(item, changes, options = {}) {
+    const sourceMode = options?.sourceMode || (await this.getSourceMode());
     if (sourceMode === LibrarySourceMode.LOCAL) {
       const shouldSave = Object.values(changes?.desiredMembership || {}).some(Boolean);
       if (shouldSave) {
@@ -777,7 +829,7 @@ class LibraryRepository {
     }
 
     const desiredMembership = changes?.desiredMembership || {};
-    const currentSnapshot = await this.getMembershipSnapshot(item);
+    const currentSnapshot = await this.getMembershipSnapshot(item, { sourceMode });
     let remoteState = await readRemoteState();
 
     for (const [listKey, desired] of Object.entries(desiredMembership)) {

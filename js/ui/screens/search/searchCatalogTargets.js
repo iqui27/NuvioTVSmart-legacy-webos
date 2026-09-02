@@ -1,18 +1,6 @@
-export function catalogSupportsExtra(catalog = {}, name = "") {
-  const target = String(name || "")
-    .trim()
-    .toLowerCase();
-  if (!target) return false;
-  return (
-    Array.isArray(catalog.extra) &&
-    catalog.extra.some(
-      (entry) =>
-        String(entry?.name || "")
-          .trim()
-          .toLowerCase() === target
-    )
-  );
-}
+import { catalogSkipStep, catalogSupportsExtra } from "../../../core/addons/homeCatalogs.js";
+
+export { catalogSkipStep, catalogSupportsExtra };
 
 export function catalogHasUnsupportedRequiredExtra(catalog = {}) {
   return (
@@ -39,7 +27,8 @@ export function buildSearchTargets(addons = []) {
         catalogId: catalog.id,
         catalogName: catalog.name,
         type: catalog.apiType,
-        supportsSkip: catalogSupportsExtra(catalog, "skip")
+        supportsSkip: catalogSupportsExtra(catalog, "skip"),
+        skipStep: catalogSkipStep(catalog)
       });
     });
   });

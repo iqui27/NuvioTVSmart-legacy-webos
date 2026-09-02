@@ -9,6 +9,7 @@ import { HomeCatalogStore } from "../../../data/local/homeCatalogStore.js";
 import { accentColorForTheme, ThemeStore } from "../../../data/local/themeStore.js";
 import { MemberAccessRepository } from "../../../data/remote/supabase/memberAccessRepository.js";
 import { ThemeManager } from "../../theme/themeManager.js";
+import { ThemeColors } from "../../theme/themeColors.js";
 import { availableThemeIds, resolveThemeName } from "../../theme/themeAccess.js";
 import { renderMemberBrandWordmark } from "../../components/memberBrandWordmark.js";
 import { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
@@ -2308,6 +2309,7 @@ export const SettingsScreen = {
     ]);
     const activeProfileId = ProfileManager.getActiveProfileId();
     const pluginSources = PluginManager.listPluginSources();
+    const pluginSummary = PluginManager.getSummary();
     const storedTheme = ThemeStore.get();
     const resolvedThemeName = resolveThemeName(storedTheme.themeName, memberAccess);
     ThemeManager.apply({ enforceAccess: true, access: memberAccess });
@@ -2318,6 +2320,7 @@ export const SettingsScreen = {
       activeProfileId,
       accountEmail: getSessionEmail(),
       pluginSources,
+      pluginSummary,
       pluginsEnabled: PluginManager.pluginsEnabled,
       theme: {
         ...storedTheme,
@@ -2409,7 +2412,6 @@ export const SettingsScreen = {
           ${renderSectionNavIcon(item.id)}
           <span class="settings-nav-label-wrap">
             <span class="settings-nav-label">${escapeHtml(translateSectionCopy(item).label)}</span>
-
           </span>
         </span>
         ${iconSvg(ROW_ICONS.chevron, "settings-nav-chevron")}
@@ -2501,12 +2503,13 @@ export const SettingsScreen = {
   renderThemeCard(theme, selected, focusKey) {
     const selectedClass = selected ? " is-selected" : "";
     const swatchClass = theme.id === "WHITE" ? " settings-theme-swatch-light" : "";
+    const swatchBackground = ThemeColors.getPalette(theme.id)["--accent-gradient"] || theme.color;
     return `
       <button class="settings-theme-card settings-content-focusable focusable${selectedClass}"
               data-zone="content"
               ${this.registerAction(focusKey, this.actionMap.get(focusKey))}>
         <span class="settings-theme-swatch-wrap">
-          <span class="settings-theme-swatch${swatchClass}" style="background:${escapeHtml(theme.color)};">
+          <span class="settings-theme-swatch${swatchClass}" style="background:${escapeHtml(swatchBackground)};">
             ${selected ? `<span class="settings-theme-check-wrap" style="color:${escapeHtml(theme.onColor || "#fff")};">${iconSvg(ROW_ICONS.check, "settings-theme-check")}</span>` : ""}
           </span>
         </span>
@@ -4347,95 +4350,38 @@ export const SettingsScreen = {
     `;
   },
 
-  renderPluginsSection() {
-    const repositorios = PluginManager.listarRepositorios();
-    const ligado = PluginManager.pluginsEnabled;
-
-    // O scraper e baixado em runtime e NAO passa pelo Babel do build: chega no
-    // aparelho como o autor escreveu. Num motor antigo ele e convertido aqui
-    // mesmo, o que custa tempo na PRIMEIRA busca — medido na C9: 1,7s para
-    // carregar o conversor mais 1,7 a 2,4s por provedor de 30-40KB, e o
-    // resultado fica em cache. Dizer isso antes evita que a espera pareca
-    // travamento.
-    const avisoMotor = motorEntendeEs2015()
-      ? ""
-      : `<div class="settings-group-card">
-           <div class="settings-empty-state">
-             <p>${escapeHtml(
-               t(
-                 "plugins_engine_converts",
-                 {},
-                 "This TV's engine is older than most providers expect, so they are converted on the TV the first time you search. Expect a wait of a few seconds per provider on that first search only — the result is kept. Very large providers are skipped and reported."
-               )
-             )}</p>
-           </div>
-         </div>`;
-    // A contagem de fornecedores exige baixar o manifesto, entao ela chega
-    // depois: desenha "carregando", busca em segundo plano e redesenha uma vez.
-    if (!this.pluginProviders) {
-      this.pluginProviders = {};
-      void PluginManager.listarFornecedores()
-        .then((resultados) => {
-          resultados.forEach(({ source, manifesto }) => {
-            this.pluginProviders[source.id] = manifesto ? manifesto.scrapers : null;
-          });
-          if (this.activeSection === "plugins") {
-            void this.render();
-          }
-        })
-        .catch(() => {});
-    }
-
-    this.actionMap.set("plugins:toggle", async () => {
-      PluginManager.setPluginsEnabled(!PluginManager.pluginsEnabled);
-      await this.render();
+  renderPluginsSection(model = {}) {
+    const summary = model.pluginSummary || PluginManager.getSummary();
+    const runtime = summary.runtime || {};
+    this.actionMap.set("plugins:open", async () => {
+      await Router.navigate("plugins");
     });
-
-    const listaHtml = repositorios.length
-      ? repositorios
-          .map((repo) => {
-            const fornecedores = (this.pluginProviders || {})[repo.id];
-            const detalhe = Array.isArray(fornecedores)
-              ? `${fornecedores.length} ${t("plugins_providers", {}, "providers")}`
-              : fornecedores === null
-                ? t("plugins_provider_error", {}, "could not be read")
-                : t("plugins_loading", {}, "loading...");
-            return `
-              <div class="settings-stack-row">
-                <span class="settings-row-copy">
-                  <span class="settings-row-title">${escapeHtml(repo.name)}</span>
-                  <span class="settings-row-subtitle">${escapeHtml(detalhe)}</span>
-                </span>
-              </div>`;
-          })
-          .join("")
-      : `<div class="settings-empty-state">
-           <p>${escapeHtml(t("plugins_empty", {}, "No plugin repositories. Add them from the phone or desktop app while signed in to the same account, and they sync to this TV."))}</p>
-         </div>`;
-
     return `
       ${this.renderSectionHeader(SECTION_META.find((item) => item.id === "plugins"))}
       <div class="settings-group-card">
         <div class="settings-stack">
-          ${this.renderToggleRow({
-            focusKey: "plugins:toggle",
-            title: t("plugins_enable_title", {}, "Use plugin providers"),
-            // O aviso fica na tela, nao so no codigo: quem liga isto passa a
-            // executar JavaScript baixado de repositorios de terceiros, que
-            // muda quando o autor quiser.
+          ${this.renderActionRow({
+            focusKey: "plugins:open",
+            title: t("plugin_title", {}, "Plugins"),
             subtitle: t(
-              "plugins_enable_subtitle",
+              "settings.plugins.openSubtitle",
               {},
-              "Runs code downloaded from the repositories in your account. Only enable repositories you trust."
+              "Manage executable Nuvio JS providers and preserved external metadata"
             ),
-            checked: ligado,
-            disabled: !repositorios.length
+            value: `${Number(summary.repositories?.length || 0)} · ${Number(summary.scrapers?.length || 0)}`,
+            icon: "chevron"
           })}
+          <div class="settings-subsection-card">
+            <div class="settings-group-heading">
+              <div>
+                <div class="settings-group-title">${escapeHtml(t("plugin_runtime_heading", {}, "TV plugin runtime"))}</div>
+                <div class="settings-group-subtitle">${escapeHtml(runtime.executable ? t("plugin_runtime_ready", {}, "Runtime ready") : runtime.reason || t("plugin_runtime_unsupported", {}, "Execution unavailable on this TV runtime"))}</div>
+              </div>
+              <span class="settings-row-value">${escapeHtml(t("plugin_providers_count", { count: Number(summary.scrapers?.length || 0) }, `${Number(summary.scrapers?.length || 0)} providers`))}</span>
+            </div>
+          </div>
+          <p class="settings-row-subtitle">${escapeHtml(t("plugin_runtime_tv_only", {}, "Only Nuvio JS repositories execute. CloudStream DEX and legacy URL-template sources are retained for display but never executed or converted."))}</p>
         </div>
-      </div>
-      ${avisoMotor}
-      <div class="settings-group-card">
-        <div class="settings-stack">${listaHtml}</div>
       </div>
     `;
   },
@@ -5973,10 +5919,12 @@ export const SettingsScreen = {
       });
     });
     this.actionMap.set("playback:autoStreamPlugins", () => {
-      const options = PluginManager.listPluginSources()
-        .filter((source) => source?.enabled !== false)
-        .map((source) => String(source?.name || "").trim())
+      const options = (PluginManager.pluginsEnabled ? PluginManager.listScrapers() : [])
+        .filter((scraper) => scraper?.type === "NUVIO_JS" && scraper?.enabled !== false)
+        .map((scraper) => String(scraper?.name || "").trim())
         .filter(Boolean)
+        .filter((name, index, names) => names.indexOf(name) === index)
+        .sort((left, right) => left.localeCompare(right))
         .map((name) => ({ id: name, label: name }));
       this.openMultiChoiceDialog({
         title: t("autoplay_allowed_plugins", {}, "Allowed Plugins"),
@@ -7352,7 +7300,7 @@ export const SettingsScreen = {
     if (section.id === "appearance") return this.renderAppearanceSection(model);
     if (section.id === "layout") return this.renderLayoutSection(model);
     if (section.id === "contentDiscovery") return this.renderContentDiscoverySection();
-    if (section.id === "plugins") return this.renderPluginsSection();
+    if (section.id === "plugins") return this.renderPluginsSection(model);
     if (section.id === "integration") return this.renderIntegrationSection(model);
     if (section.id === "streams") return this.renderStreamsSection(model);
     if (section.id === "playback") return this.renderPlaybackSection(model);
