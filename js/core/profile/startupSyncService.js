@@ -106,6 +106,23 @@ function reconcileTraktCredentialDetached(profileId) {
     });
 }
 
+// Upstream 1.0.4 made the warm cycle pull the whole plugin surface, so a
+// repository added or removed on Android is not stale for the six-hour warm
+// TTL. We want the refresh, not the wait: awaiting it here would put a network
+// round trip back in front of the first paint, which is the cost the warm path
+// exists to avoid. Detached, like the Trakt reconcile above -- the plugins
+// screen reads whatever has landed by the time it opens.
+function refreshPluginSurfaceDetached(profileId) {
+  if (isSyncBackoffActive()) {
+    return;
+  }
+  Promise.resolve()
+    .then(() => PluginSyncService.pull(profileId))
+    .catch((error) => {
+      console.warn("Warm plugin surface refresh failed on startup", error);
+    });
+}
+
 function runSurface(label, task) {
   if (isSyncBackoffActive()) {
     return Promise.resolve({ ok: false, deferred: true });
@@ -467,6 +484,7 @@ export const StartupSyncService = {
       // Boot warm: o pull completo e dispensado, mas a credencial Trakt ainda
       // precisa de copia na nuvem. Ver reconcileTraktCredentialDetached.
       reconcileTraktCredentialDetached(profileId);
+      refreshPluginSurfaceDetached(profileId);
       this.lastPullCompleted = true;
       return true;
     }

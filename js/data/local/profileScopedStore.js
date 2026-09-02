@@ -86,13 +86,13 @@ function readRawStoredValue(key) {
   }
 }
 
-function readEnvelope(key, normalize) {
+function readEnvelope(key, normalize, legacyProfileIds = null) {
   const rawString = readRawStoredValue(key);
   const cached = envelopeCache.get(key);
   if (cached && cached.raw === rawString) {
     return cached.envelope;
   }
-  const envelope = readEnvelopeUncached(key, normalize);
+  const envelope = readEnvelopeUncached(key, normalize, legacyProfileIds);
   envelopeCache.set(key, {
     // Re-read: the uncached path can write a migrated or renormalized envelope,
     // which changes the string this entry has to be keyed on.
@@ -102,7 +102,7 @@ function readEnvelope(key, normalize) {
   return envelope;
 }
 
-function readEnvelopeUncached(key, normalize) {
+function readEnvelopeUncached(key, normalize, legacyProfileIds = null) {
   const raw = LocalStore.get(key, null);
   if (isProfileScopedEnvelope(raw)) {
     const next = {
@@ -119,7 +119,13 @@ function readEnvelopeUncached(key, normalize) {
     return createEmptyEnvelope();
   }
 
-  const profileIds = getKnownProfileIds();
+  // A store may declare which profiles a pre-envelope value belonged to.
+  // pluginStore does: its legacy value is the primary profile's alone, so
+  // copying it into every known profile would hand one profile's plugins to
+  // all of them.
+  const profileIds = Array.isArray(legacyProfileIds)
+    ? Array.from(new Set(legacyProfileIds.map((profileId) => normalizeProfileId(profileId))))
+    : getKnownProfileIds();
   const normalizedLegacy = normalize(cloneValue(raw) || {});
   const migrated = createEmptyEnvelope();
   profileIds.forEach((profileId) => {
@@ -178,14 +184,14 @@ export function hasProfileSettingsCloudSyncPending(profileId = null) {
   return Object.prototype.hasOwnProperty.call(pending, normalizedProfileId);
 }
 
-function ensureProfileValue(key, envelope, normalize, profileId) {
+function ensureProfileValue(key, envelope, normalize, profileId, seedFromPrimary = true) {
   const normalizedProfileId = normalizeProfileId(profileId);
   if (Object.prototype.hasOwnProperty.call(envelope.profiles, normalizedProfileId)) {
     return envelope.profiles[normalizedProfileId];
   }
 
   const primaryValue = envelope.profiles["1"];
-  const seed = primaryValue != null ? cloneValue(primaryValue) : normalize({});
+  const seed = seedFromPrimary && primaryValue != null ? cloneValue(primaryValue) : normalize({});
   envelope.profiles[normalizedProfileId] = normalize(seed || {});
   persistEnvelope(key, envelope);
   return envelope.profiles[normalizedProfileId];
@@ -234,7 +240,13 @@ export function queueProfileSettingsCloudSync(
   scheduledSettingsSyncTimers.set(normalizedProfileId, timerId);
 }
 
-export function createProfileScopedStore({ key, normalize, merge }) {
+export function createProfileScopedStore({
+  key,
+  normalize,
+  merge,
+  seedFromPrimary = true,
+  legacyProfileIds = null
+}) {
   const mergeValues =
     typeof merge === "function"
       ? merge
@@ -242,8 +254,8 @@ export function createProfileScopedStore({ key, normalize, merge }) {
 
   return {
     getForProfile(profileId) {
-      const envelope = readEnvelope(key, normalize);
-      return cloneValue(ensureProfileValue(key, envelope, normalize, profileId));
+      const envelope = readEnvelope(key, normalize, legacyProfileIds);
+      return cloneValue(ensureProfileValue(key, envelope, normalize, profileId, seedFromPrimary));
     },
 
     get() {
@@ -251,7 +263,7 @@ export function createProfileScopedStore({ key, normalize, merge }) {
     },
 
     replaceForProfile(profileId, nextValue, { silentSync = false } = {}) {
-      const envelope = readEnvelope(key, normalize);
+      const envelope = readEnvelope(key, normalize, legacyProfileIds);
       const normalizedProfileId = normalizeProfileId(profileId);
       envelope.profiles[normalizedProfileId] = normalize(cloneValue(nextValue) || {});
       persistEnvelope(key, envelope);
@@ -271,7 +283,7 @@ export function createProfileScopedStore({ key, normalize, merge }) {
     },
 
     clearProfile(profileId, { silentSync = false } = {}) {
-      const envelope = readEnvelope(key, normalize);
+      const envelope = readEnvelope(key, normalize, legacyProfileIds);
       const normalizedProfileId = normalizeProfileId(profileId);
       delete envelope.profiles[normalizedProfileId];
       persistEnvelope(key, envelope);
