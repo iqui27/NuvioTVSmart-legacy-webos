@@ -152,6 +152,7 @@ import {
   getContinueWatchingRenderItems,
   shouldAppendContinueWatchingItems
 } from "./continueWatchingRenderWindow.js";
+import { shouldProtectContinueWatchingDisplay } from "./continueWatchingLoadPolicy.js";
 import {
   buildHeroBackdropSources,
   buildImageFallbackErrorHandler,
@@ -759,7 +760,12 @@ function shouldEnrichModernHero(hero) {
     return false;
   }
   const settings = TmdbSettingsStore.get();
-  return Boolean(settings.enabled && settings.modernHomeEnabled);
+  const tmdbEnabledForCurrentLayout = settings.enabled && settings.modernHomeEnabled;
+  const externalMetaEnabled = LayoutPreferences.get()?.preferExternalMetaAddonDetail !== false;
+  // Keep the two enrichment sources independent, as in Android's focused
+  // pipeline: TMDB is optional, while external addon metadata is enabled by
+  // default and supplies the Home hero's runtime/rating fields.
+  return Boolean(tmdbEnabledForCurrentLayout || externalMetaEnabled);
 }
 
 const HERO_IMAGE_PRELOAD_CACHE_LIMIT = 32;
@@ -4828,7 +4834,9 @@ export const HomeScreen = {
         : HOME_LEGACY_HERO_BACKDROP_CROSSFADE_MS;
     const heroTransitionMode = getTvHeroTransitionMode();
 
-    const backdrop = heroNode.querySelector(".home-hero-backdrop");
+    const backdrop = heroNode.querySelector(
+      ".home-hero-backdrop:not(.home-hero-backdrop-transition-ghost)"
+    );
     if (backdrop) {
       const src = display.backdrop || "";
       if (backdrop instanceof HTMLImageElement) {
@@ -4851,7 +4859,9 @@ export const HomeScreen = {
       }
     }
 
-    const logoNode = heroNode.querySelector(".home-hero-logo");
+    const logoNode = heroNode.querySelector(
+      ".home-hero-logo:not(.home-hero-logo-transition-ghost)"
+    );
     const brandNode = heroNode.querySelector(".home-hero-brand");
     if (display.logo) {
       if (logoNode) {
@@ -9452,16 +9462,21 @@ export const HomeScreen = {
       }
     });
 
+    const continueWatchingSourceKey = watchProgressRepository.getContinueWatchingSourceKey();
+    const continueWatchingSource = watchProgressRepository.getContinueWatchingSource();
+    const startupSyncPendingAtLoad =
+      continueWatchingSource === WatchProgressSource.NUVIO_SYNC &&
+      StartupSyncService.isCurrentProfilePullPending();
     const preserveContinueWatching = Boolean(background && this.continueWatchingDisplay?.length);
     const hydratedFromSnapshot = Boolean(
       !background &&
       this.continueWatchingHydratedFromSnapshot &&
       this.continueWatchingDisplay?.length
     );
+    const hasExistingContinueWatchingDisplay = Boolean(
+      (preserveContinueWatching || hydratedFromSnapshot) && this.continueWatchingDisplay?.length
+    );
     const suppressContinueWatchingLoading = preserveContinueWatching || hydratedFromSnapshot;
-    const previousContinueWatchingSignature = preserveContinueWatching
-      ? buildContinueWatchingSignature(this.continueWatchingDisplay)
-      : "";
     const waitForInitialContinueWatching = Boolean(!background && !hydratedFromSnapshot);
     let initialContinueWatchingReleased = false;
     const releaseInitialHomeAfterContinueWatching = () => {
@@ -9796,6 +9811,20 @@ export const HomeScreen = {
         if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
           return;
         }
+        if (watchProgressRepository.getContinueWatchingSourceKey() !== continueWatchingSourceKey) {
+          return;
+        }
+        const sourceLoadState = watchProgressRepository.getContinueWatchingRemoteProgressState();
+        const startupSyncPending =
+          continueWatchingSource === WatchProgressSource.NUVIO_SYNC &&
+          (startupSyncPendingAtLoad || StartupSyncService.isCurrentProfilePullPending());
+        const hasLoadedRemoteProgress = Boolean(
+          !progressAllError &&
+          !recentProgressError &&
+          !startupSyncPending &&
+          sourceLoadState?.sourceKey === continueWatchingSourceKey &&
+          sourceLoadState.loaded === true
+        );
         this.allProgress = Array.isArray(allProgress) ? allProgress : [];
         this.continueWatching = Array.isArray(continueWatching) ? continueWatching : [];
         this.watchedItems = await watchedItemsPromise;
@@ -9851,15 +9880,21 @@ export const HomeScreen = {
             this.continueWatchingLoading = false;
             return;
           }
-          if (preserveContinueWatching) {
-            const nextSignature = "";
-            if (nextSignature === previousContinueWatchingSignature) {
-              this.continueWatchingLoading = false;
-              return;
-            }
+          if (
+            shouldProtectContinueWatchingDisplay({
+              existingCount: hasExistingContinueWatchingDisplay
+                ? this.continueWatchingDisplay.length
+                : 0,
+              nextCount: 0,
+              hasLoadedRemoteProgress
+            })
+          ) {
+            this.continueWatchingLoading = false;
+            return;
           }
           this.continueWatchingLoading = false;
           this.continueWatchingDisplay = [];
+          this.clearContinueWatchingSnapshot();
           if (
             !releaseInitialHomeAfterContinueWatching() &&
             (previousLoadingState || previousDisplaySignature)
@@ -9895,16 +9930,25 @@ export const HomeScreen = {
               : nextDisplayLoose.length >= nextDisplayFallback.length
                 ? nextDisplayLoose
                 : nextDisplayFallback;
-          const nextSignature = preserveContinueWatching
-            ? buildContinueWatchingSignature(nextDisplay)
-            : "";
-          if (preserveContinueWatching && nextSignature === previousContinueWatchingSignature) {
+          if (
+            shouldProtectContinueWatchingDisplay({
+              existingCount: hasExistingContinueWatchingDisplay
+                ? this.continueWatchingDisplay.length
+                : 0,
+              nextCount: nextDisplay.length,
+              hasLoadedRemoteProgress
+            })
+          ) {
             this.continueWatchingLoading = false;
             return;
           }
           this.continueWatchingDisplay = nextDisplay;
           this.continueWatchingLoading = false;
-          this.persistContinueWatchingSnapshot();
+          if (nextDisplay.length) {
+            this.persistContinueWatchingSnapshot();
+          } else {
+            this.clearContinueWatchingSnapshot();
+          }
           if (
             this.layoutMode === "modern" &&
             this.layoutPrefs?.continueWatchingEnabled !== false &&
@@ -10723,7 +10767,7 @@ export const HomeScreen = {
       this.setupGridStickyHeader(showHeroSection);
     }
     this.startHeroRotation();
-    if (this.layoutMode === "modern" && heroItem) {
+    if (this.layoutMode === "modern" && heroItem && shouldEnrichModernHero(heroItem)) {
       void this.enrichCurrentHeroAsync(heroItem);
     }
     this.homeRouteEnterPending = false;
@@ -12196,6 +12240,12 @@ export const HomeScreen = {
     }
     if (this.posterHoldMenu) {
       this.closePosterHoldMenu();
+      return true;
+    }
+    // NuvioDialog clears the Home hold state before its exit animation removes
+    // the modal marker. Consume a paired Tizen Back event instead of opening
+    // Home's sidebar as a second action.
+    if (globalThis?.document?.body?.classList?.contains("nuvio-modal-open")) {
       return true;
     }
     if (this.layoutMode === "modern") {

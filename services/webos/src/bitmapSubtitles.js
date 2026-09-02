@@ -1126,11 +1126,7 @@ function normalizeTextSubtitlePayload(track, payload) {
     !hasShortAssTiming &&
     fields.length >= 9 &&
     /^-?\d+$/.test(String(fields[0] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[1] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[4] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[5] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[6] || "").trim()) &&
-    String(fields[7] || "").trim() === "";
+    /^-?\d+$/.test(String(fields[1] || "").trim());
   if (hasLayeredAssTiming) {
     text = textAfterCommaCount(assEvent, 9) || "";
   } else if (hasShortAssTiming) {
