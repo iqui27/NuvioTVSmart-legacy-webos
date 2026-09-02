@@ -1,9 +1,38 @@
 var http = require("http");
-var https = require("https");
-var dns = require("dns");
-var net = require("net");
-var urlModule = require("url");
-var zlib = require("zlib");
+var https = null;
+var dns = null;
+var net = null;
+var urlModule = null;
+var zlib = null;
+
+function loadRuntimeModule(name) {
+  return require(name);
+}
+
+function getUrlModule() {
+  if (!urlModule) urlModule = loadRuntimeModule("url");
+  return urlModule;
+}
+
+function getNetModule() {
+  if (!net) net = loadRuntimeModule("net");
+  return net;
+}
+
+function getDnsModule() {
+  if (!dns) dns = loadRuntimeModule("dns");
+  return dns;
+}
+
+function getHttpsModule() {
+  if (!https) https = loadRuntimeModule("https");
+  return https;
+}
+
+function getZlibModule() {
+  if (!zlib) zlib = loadRuntimeModule("zlib");
+  return zlib;
+}
 
 var MAX_REQUEST_BYTES = 1024 * 1024;
 var MAX_SERVICE_REQUEST_BYTES = MAX_REQUEST_BYTES + 64 * 1024;
@@ -21,7 +50,7 @@ var CIRCUIT_OPEN_MS = 30000;
 function parseUrl(value) {
   var parsed;
   try {
-    parsed = new urlModule.URL(String(value || ""));
+    parsed = new (getUrlModule().URL)(String(value || ""));
   } catch (_) {
     return null;
   }
@@ -117,10 +146,19 @@ function validatePayload(payload) {
 }
 
 function lookupHost(parsed, callback) {
+  var netModule;
+  var dnsModule;
+  try {
+    netModule = getNetModule();
+    dnsModule = getDnsModule();
+  } catch (error) {
+    callback(error);
+    return;
+  }
   var host = String(parsed.hostname || "")
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
-  if (net.isIP(host)) {
+  if (netModule.isIP(host)) {
     callback(null, host);
     return;
   }
@@ -131,7 +169,7 @@ function lookupHost(parsed, callback) {
     callback(error || null, address || null);
   }
   try {
-    dns.lookup(host, { all: true, verbatim: true }, function (error, addresses) {
+    dnsModule.lookup(host, { all: true, verbatim: true }, function (error, addresses) {
       if (error) {
         finish(error);
         return;
@@ -142,9 +180,9 @@ function lookupHost(parsed, callback) {
           return entry && entry.address;
         })
         .sort(function (left, right) {
-          return net.isIPv4(left.address) === net.isIPv4(right.address)
+          return netModule.isIPv4(left.address) === netModule.isIPv4(right.address)
             ? 0
-            : net.isIPv4(left.address)
+            : netModule.isIPv4(left.address)
               ? -1
               : 1;
         });
@@ -156,7 +194,7 @@ function lookupHost(parsed, callback) {
     });
   } catch (_) {
     try {
-      dns.lookup(host, function (error, address) {
+      dnsModule.lookup(host, function (error, address) {
         finish(error || null, address);
       });
     } catch (error) {
@@ -217,7 +255,13 @@ function performFetch(payload, callback, redirects) {
       finish(lookupError);
       return;
     }
-    var transport = parsed.protocol === "https:" ? https : http;
+    var transport;
+    try {
+      transport = parsed.protocol === "https:" ? getHttpsModule() : http;
+    } catch (error) {
+      finish(error);
+      return;
+    }
     var requestHeaders = Object.assign({}, validation.headers);
     if (["POST", "PUT"].indexOf(validation.method) >= 0) {
       // The Android body is a known UTF-8 byte array. OkHttp's bridge uses the
@@ -294,7 +338,7 @@ function performFetch(payload, callback, redirects) {
         }
         var nextUrl;
         try {
-          nextUrl = new urlModule.URL(location, validation.url).toString();
+          nextUrl = new (getUrlModule().URL)(location, validation.url).toString();
         } catch (_) {
           responseDone(new Error("Invalid redirect URL"));
           return;
@@ -348,10 +392,16 @@ function performFetch(payload, callback, redirects) {
         delete headers["content-encoding"];
         delete headers["content-length"];
       }
-      if (encoding === "gzip") {
-        stream = response.pipe(zlib.createGunzip());
-      } else if (encoding === "deflate") {
-        stream = response.pipe(zlib.createInflate());
+      try {
+        if (encoding === "gzip") {
+          stream = response.pipe(getZlibModule().createGunzip());
+        } else if (encoding === "deflate") {
+          stream = response.pipe(getZlibModule().createInflate());
+        }
+      } catch (error) {
+        responseDone(error);
+        response.resume();
+        return;
       }
       var chunks = [];
       var length = 0;
@@ -440,6 +490,17 @@ function once(callback) {
     wrapped.registerRequest = callback.registerRequest;
   }
   return wrapped;
+}
+
+function memoryUsage() {
+  try {
+    if (typeof process !== "undefined" && process && typeof process.memoryUsage === "function") {
+      return process.memoryUsage();
+    }
+  } catch (_) {
+    // Some lightweight Web Service runtimes do not expose process memory APIs.
+  }
+  return {};
 }
 
 function createPluginHttpServer({ port = 2711, logger = console } = {}) {
@@ -548,7 +609,7 @@ function createPluginHttpServer({ port = 2711, logger = console } = {}) {
       return;
     }
     if (request.url === "/health" && request.method === "GET") {
-      var memory = typeof process.memoryUsage === "function" ? process.memoryUsage() : {};
+      var memory = memoryUsage();
       send(response, 200, {
         returnValue: true,
         service: "nuvio-plugin-network",
@@ -590,7 +651,7 @@ function createPluginHttpServer({ port = 2711, logger = console } = {}) {
         returnValue: true,
         protocolVersion: PLUGIN_PROTOCOL_VERSION,
         activeRequests: Object.keys(activeRequests).length,
-        memory: typeof process.memoryUsage === "function" ? process.memoryUsage() : {}
+        memory: memoryUsage()
       });
       return;
     }
