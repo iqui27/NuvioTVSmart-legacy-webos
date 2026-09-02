@@ -4,7 +4,6 @@ import { TizenCapabilities } from "../../platform/tizen/tizenCapabilities.js";
 export const PLUGIN_QUOTAS = Object.freeze({
   modern: Object.freeze({
     maxConcurrent: 2,
-    maxQueued: 1,
     maxManifestBytes: 256 * 1024,
     maxCodeBytes: 2 * 1024 * 1024,
     maxCacheBytes: 16 * 1024 * 1024,
@@ -19,7 +18,6 @@ export const PLUGIN_QUOTAS = Object.freeze({
   }),
   limited: Object.freeze({
     maxConcurrent: 1,
-    maxQueued: 1,
     maxManifestBytes: 128 * 1024,
     maxCodeBytes: 1024 * 1024,
     maxCacheBytes: 8 * 1024 * 1024,

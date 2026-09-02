@@ -42,7 +42,13 @@ export const PluginRuntime = {
   saveSources(sources) {
     const normalized = Array.isArray(sources) ? sources : [];
     const current = PluginStore.get();
-    const next = PluginStore.replace({ ...current, legacySources: normalized, syncDirty: true });
+    // Legacy URL-template sources are retained for migration/display only and
+    // are not part of Android's remote `plugins` repository payload.
+    const next = PluginStore.replace({
+      ...current,
+      legacySources: normalized,
+      syncDirty: current.syncDirty
+    });
     return JSON.stringify(current.legacySources) !== JSON.stringify(next.legacySources);
   },
 

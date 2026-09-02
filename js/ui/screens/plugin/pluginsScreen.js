@@ -3,6 +3,7 @@ import { Router } from "../../navigation/router.js";
 import { Platform } from "../../../platform/index.js";
 import { I18n } from "../../../i18n/index.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
+import { PluginSyncService } from "../../../core/profile/pluginSyncService.js";
 import {
   isExternalDexRepository,
   isVideoEasyScraper,
@@ -45,27 +46,37 @@ function repositoryTypeLabel(type) {
   return t("plugin_type_unknown", {}, "Unknown type · disabled");
 }
 
-function button({ focusKey, action, label, icon = "", disabled = false, destructive = false }) {
+function button({
+  focusKey,
+  action,
+  label,
+  icon = "",
+  disabled = false,
+  destructive = false,
+  focusableWhileBusy = false
+}) {
+  const nativeDisabled = disabled && !focusableWhileBusy;
   return `
     <button class="plugins-action plugins-focusable focusable${destructive ? " is-destructive" : ""}${disabled ? " is-disabled" : ""}"
             data-focus-key="${escapeHtml(focusKey)}"
             data-action="${escapeHtml(action)}"
             aria-disabled="${disabled ? "true" : "false"}"
-            ${disabled ? "disabled" : ""}>
+            ${nativeDisabled ? "disabled" : ""}>
       ${icon ? `<span class="material-icons" aria-hidden="true">${escapeHtml(icon)}</span>` : ""}
       <span>${escapeHtml(label)}</span>
     </button>
   `;
 }
 
-function toggleButton({ focusKey, action, checked, disabled = false }) {
+function toggleButton({ focusKey, action, checked, disabled = false, focusableWhileBusy = false }) {
+  const nativeDisabled = disabled && !focusableWhileBusy;
   return `
     <button class="plugins-toggle plugins-focusable focusable${disabled ? " is-disabled" : ""}"
             data-focus-key="${escapeHtml(focusKey)}"
             data-action="${escapeHtml(action)}"
             aria-pressed="${checked ? "true" : "false"}"
             aria-disabled="${disabled ? "true" : "false"}"
-            ${disabled ? "disabled" : ""}>
+            ${nativeDisabled ? "disabled" : ""}>
       <span class="plugins-toggle-pill${checked ? " is-checked" : ""}"><span></span></span>
     </button>
   `;
@@ -97,7 +108,9 @@ export const PluginsScreen = {
   async mount() {
     this.container = document.getElementById("plugins");
     ScreenUtils.show(this.container);
-    this.focusKey = this.focusKey || "add:input";
+    // Never focus the text field on route entry: webOS opens the virtual
+    // keyboard as soon as an input receives focus.
+    this.focusKey = !this.focusKey || this.focusKey === "add:input" ? "add:submit" : this.focusKey;
     this.addDraft = this.addDraft || "";
     this.routeEnterPending = true;
     this.busy = false;
@@ -108,9 +121,49 @@ export const PluginsScreen = {
     this.diagnosticsProviderId = null;
     this.testAbortController = null;
     this.pendingScraperEnable = null;
+    this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
+    const runtimeProbeGeneration = this.runtimeProbeGeneration;
+    this.pluginSyncGeneration = Number(this.pluginSyncGeneration || 0) + 1;
+    const pluginSyncGeneration = this.pluginSyncGeneration;
     this.bindEvents();
-    await this.probeRuntime();
     this.render();
+    // Match Android's initial-state rendering: runtime capabilities only gate
+    // executable actions and must not delay the management screen itself.
+    void this.probeRuntime().then(() => {
+      if (
+        runtimeProbeGeneration !== this.runtimeProbeGeneration ||
+        Router.getCurrent() !== "plugins" ||
+        this.hasActiveTextInput()
+      ) {
+        return;
+      }
+      this.render();
+    });
+    // The Android plugin surface is refreshed when its management flow is
+    // entered. Do the scoped pull here as well, so a repository added/removed
+    // on another device is visible without waiting for the next full startup.
+    void this.pullRemotePlugins(pluginSyncGeneration);
+  },
+
+  hasActiveTextInput() {
+    const active = document.activeElement;
+    return Boolean(
+      active && this.container?.contains?.(active) && active.matches?.("input, textarea")
+    );
+  },
+
+  async pullRemotePlugins(generation) {
+    await PluginSyncService.pull();
+    if (
+      generation !== this.pluginSyncGeneration ||
+      Router.getCurrent() !== "plugins" ||
+      this.hasActiveTextInput()
+    ) {
+      return;
+    }
+    if (PluginSyncService.getLastPullStatus?.() === "ok") {
+      this.render();
+    }
   },
 
   async probeRuntime() {
@@ -128,9 +181,30 @@ export const PluginsScreen = {
       const input = event.target?.closest?.("[data-action='repository-input']");
       if (input) this.addDraft = String(input.value || "");
     });
+    this.container.addEventListener("focusin", (event) => {
+      const target = event.target?.closest?.(".plugins-focusable");
+      if (!target || !this.container.contains(target)) return;
+      this.container.querySelectorAll(".plugins-focusable.focused").forEach((node) => {
+        if (node !== target) node.classList.remove("focused");
+      });
+      target.classList.add("focused");
+      this.rememberFocusedTarget(target);
+      this.ensureMainVisibility(target);
+    });
     this.container.addEventListener("click", (event) => {
       const target = event.target?.closest?.("[data-action]");
-      if (!target || !this.container.contains(target) || target.disabled) return;
+      if (
+        !target ||
+        !this.container.contains(target) ||
+        target.disabled ||
+        target.getAttribute?.("aria-disabled") === "true"
+      ) {
+        return;
+      }
+      if (target.dataset.action === "repository-input") {
+        this.focusKey = String(target.dataset.focusKey || "add:input");
+        return;
+      }
       event.preventDefault();
       this.focusKey = String(target.dataset.focusKey || this.focusKey || "");
       this.applyFocus();
@@ -253,7 +327,8 @@ export const PluginsScreen = {
                 action: `test-scraper:${provider.id}`,
                 label: t("plugin_test_btn", {}, "Test"),
                 icon: "play_arrow",
-                disabled: !testable
+                disabled: !testable,
+                focusableWhileBusy: this.busy
               })}
               ${
                 model.readOnly
@@ -262,7 +337,8 @@ export const PluginsScreen = {
                       focusKey: `scraper:${provider.id}`,
                       action: `toggle-scraper:${provider.id}`,
                       checked: enabled,
-                      disabled: toggleDisabled
+                      disabled: toggleDisabled,
+                      focusableWhileBusy: this.busy
                     })
               }
             </div>`
@@ -380,8 +456,13 @@ export const PluginsScreen = {
     ).length;
     const providerCount = Math.max(Number(repository.scraperCount) || 0, providers.length);
     const updated = dateLabel(repository.lastUpdated);
+    // Opaque/read-only rows have no actionable descendant. Keep the row in the
+    // D-pad focus graph so the scroll container can reveal it without enabling
+    // an unsafe repository mutation.
+    const focusProxy = model.readOnly || repository.type === PLUGIN_REPOSITORY_TYPES.UNKNOWN;
     return `
-      <article class="plugins-repository-card${executable ? (runtimeUnavailable ? " is-runtime-unavailable" : "") : " is-metadata-only"}">
+      <article class="plugins-repository-card${executable ? (runtimeUnavailable ? " is-runtime-unavailable" : "") : " is-metadata-only"}${focusProxy ? " plugins-repository-focus-proxy plugins-focusable focusable" : ""}"
+               ${focusProxy ? `data-focus-key="${escapeHtml(`repository:${repository.id}`)}" tabindex="0"` : ""}>
         <div class="plugins-repository-header">
           <div class="plugins-repository-copy">
             <h2>${escapeHtml(repository.name)}</h2>
@@ -430,7 +511,8 @@ export const PluginsScreen = {
                       ? t("plugin_disable_all", {}, "Disable all")
                       : t("plugin_enable_all", {}, "Enable all"),
                     icon: allEnabled ? "visibility_off" : "visibility",
-                    disabled: !editable || runtimeUnavailable
+                    disabled: !editable || runtimeUnavailable,
+                    focusableWhileBusy: this.busy
                   })
                 : ""
             }
@@ -441,22 +523,20 @@ export const PluginsScreen = {
                     action: `refresh:${repository.id}`,
                     label: t("settings.plugins.refreshRepository", {}, "Refresh repository"),
                     icon: "refresh",
-                    disabled: !editable
+                    disabled: !editable,
+                    focusableWhileBusy: this.busy
                   })
                 : ""
             }
-            ${
-              externalDex
-                ? ""
-                : button({
-                    focusKey: `remove:${repository.id}`,
-                    action: `remove:${repository.id}`,
-                    label: t("settings.plugins.removeRepository", {}, "Remove repository"),
-                    icon: "delete",
-                    disabled: !editable || repository.type === PLUGIN_REPOSITORY_TYPES.UNKNOWN,
-                    destructive: true
-                  })
-            }
+            ${button({
+              focusKey: `remove:${repository.id}`,
+              action: `remove:${repository.id}`,
+              label: t("settings.plugins.removeRepository", {}, "Remove repository"),
+              icon: "delete",
+              disabled: !editable || repository.type === PLUGIN_REPOSITORY_TYPES.UNKNOWN,
+              focusableWhileBusy: this.busy,
+              destructive: true
+            })}
           </div>`
           }
         </div>
@@ -576,29 +656,81 @@ export const PluginsScreen = {
     this.applyFocus();
   },
 
+  rememberFocusedTarget(target = null) {
+    const focused = target || this.container?.querySelector?.(".plugins-focusable.focused");
+    if (!focused || !this.container?.contains?.(focused)) return null;
+    this.focusKey = String(focused.dataset.focusKey || this.focusKey || "");
+    return focused;
+  },
+
+  ensureMainVisibility(target) {
+    const container = this.container?.querySelector?.(".plugins-main");
+    if (!container || !target || target.closest?.(".plugins-confirm-dialog")) return;
+    const providerRow = target.closest?.(".plugins-provider-row");
+    const testResult =
+      target.dataset?.action?.startsWith("test-scraper:") &&
+      providerRow?.nextElementSibling?.classList?.contains("plugins-test-result")
+        ? providerRow.nextElementSibling
+        : null;
+    const anchor =
+      testResult ||
+      target.closest?.(
+        ".plugins-provider-row, .plugins-test-result, .plugins-repository-card, .plugins-settings-card, .plugins-section-label"
+      ) ||
+      target;
+    const pad = 56;
+    const containerRect = container.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    const anchorTop = anchorRect.top - containerRect.top + container.scrollTop;
+    const anchorBottom = anchorRect.bottom - containerRect.top + container.scrollTop;
+    const viewTop = container.scrollTop;
+    const viewBottom = viewTop + container.clientHeight;
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+
+    if (anchorBottom > viewBottom - pad) {
+      container.scrollTop = Math.min(
+        maxScrollTop,
+        Math.max(0, anchorBottom - container.clientHeight + pad)
+      );
+    } else if (anchorTop < viewTop + pad) {
+      container.scrollTop = Math.max(0, anchorTop - pad);
+    }
+  },
+
   applyFocus() {
     const focusables = Array.from(this.container?.querySelectorAll?.(".plugins-focusable") || []);
     focusables.forEach((node) => node.classList.remove("focused"));
-    if (!focusables.length) return;
+    const enabledFocusables = focusables.filter((node) => !node.disabled);
+    const nonTextFocusables = enabledFocusables.filter(
+      (node) => !node.matches?.("input, textarea")
+    );
+    if (!enabledFocusables.length) return;
     const target =
-      focusables.find((node) => node.dataset.focusKey === this.focusKey && !node.disabled) ||
-      focusables.find((node) => !node.disabled) ||
-      focusables[0];
+      enabledFocusables.find((node) => node.dataset.focusKey === this.focusKey) ||
+      nonTextFocusables[0] ||
+      enabledFocusables[0];
     if (!target) return;
-    this.focusKey = String(target.dataset.focusKey || this.focusKey || "");
     target.classList.add("focused");
+    this.rememberFocusedTarget(target);
     try {
       target.focus({ preventScroll: true });
     } catch (_) {
       target.focus();
     }
-    try {
-      target.scrollIntoView({ block: "nearest", inline: "nearest" });
-    } catch (_) {}
+    this.ensureMainVisibility(target);
   },
 
   async activateTarget(target) {
     const action = String(target?.dataset?.action || "");
+    if (
+      !action ||
+      action === "repository-input" ||
+      this.busy ||
+      target?.disabled ||
+      target?.getAttribute?.("aria-disabled") === "true"
+    ) {
+      return;
+    }
     if (action === "dismiss-risky-scraper") {
       this.pendingScraperEnable = null;
       this.render();
@@ -611,7 +743,6 @@ export const PluginsScreen = {
       this.render();
       return;
     }
-    if (!action || action === "repository-input" || this.busy) return;
     if (action === "toggle-global") {
       PluginManager.setPluginsEnabled(!this.model.pluginsEnabled);
       this.render();
@@ -662,7 +793,7 @@ export const PluginsScreen = {
       return;
     }
     if (kind === "remove") {
-      if (PluginManager.removeRepository(id)) {
+      if (await PluginManager.removeRepository(id)) {
         this.setStatus(t("plugin_repo_removed", {}, "Repository removed."), "success");
       }
       this.render();
@@ -778,7 +909,7 @@ export const PluginsScreen = {
       if (code === 13) {
         event?.preventDefault?.();
         const current = this.container?.querySelector?.(
-          ".plugins-confirm-dialog .plugins-focusable.focused"
+          ".plugins-confirm-dialog .plugins-focusable:not([disabled]).focused"
         );
         if (current) await this.activateTarget(current);
         return;
@@ -788,7 +919,7 @@ export const PluginsScreen = {
         ScreenUtils.handleDpadNavigation(
           event,
           this.container,
-          ".plugins-confirm-dialog .plugins-focusable"
+          ".plugins-confirm-dialog .plugins-focusable:not([disabled])"
         );
       }
       return;
@@ -802,14 +933,26 @@ export const PluginsScreen = {
     if (code === 13) {
       event?.preventDefault?.();
       const current = this.container?.querySelector?.(".plugins-focusable.focused");
-      if (current) await this.activateTarget(current);
+      if (current) {
+        this.rememberFocusedTarget(current);
+        await this.activateTarget(current);
+      }
       return;
     }
     if (event?.target?.matches?.("input") && (code === 37 || code === 39)) {
       return;
     }
     if ([38, 40, 37, 39].includes(code)) {
-      ScreenUtils.handleDpadNavigation(event, this.container, ".plugins-focusable");
+      if (
+        ScreenUtils.handleDpadNavigation(
+          event,
+          this.container,
+          ".plugins-focusable:not([disabled])"
+        )
+      ) {
+        const target = this.rememberFocusedTarget();
+        if (target) this.ensureMainVisibility(target);
+      }
     }
   },
 
@@ -824,6 +967,8 @@ export const PluginsScreen = {
 
   cleanup() {
     this.routeEnterPending = false;
+    this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
+    this.pluginSyncGeneration = Number(this.pluginSyncGeneration || 0) + 1;
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.statusTimer = 0;
     this.testAbortController?.abort?.();

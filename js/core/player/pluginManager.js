@@ -33,14 +33,67 @@ const singleFlight = new PluginExecutionFlight();
 const queuedExecutions = [];
 let runningExecutions = 0;
 let runtimeReadyPromise = null;
+let reconcileTail = Promise.resolve();
 export const ANDROID_PLUGIN_MANAGEMENT_USER_AGENT = "NuvioTV/1.0";
 
-function currentState() {
-  return normalizePluginState(PluginStore.get());
+function withReconcileLock(task) {
+  const previous = reconcileTail;
+  let current = null;
+  current = previous
+    .catch(() => {})
+    .then(task)
+    .finally(() => {
+      if (reconcileTail === current) {
+        reconcileTail = Promise.resolve();
+      }
+    });
+  reconcileTail = current;
+  return current;
 }
 
-function canEdit() {
-  return PluginStore.canEdit();
+function currentState(profileId = null) {
+  return normalizePluginState(profileId == null ? PluginStore.get() : PluginStore.get(profileId));
+}
+
+function canEdit(profileId = null) {
+  return PluginStore.canEdit(profileId == null ? undefined : profileId);
+}
+
+function cloudRepositoryFingerprint(state) {
+  return JSON.stringify({
+    repositories: (state.repositories || []).map((repository) => ({
+      url: isExternalDexRepository(repository)
+        ? canonicalizePluginUrl(repository.url)
+        : canonicalizePluginUrl(repository.url, { manifest: true }),
+      enabled: repository.enabled !== false,
+      type: isExternalDexRepository(repository)
+        ? PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
+        : normalizePluginRepositoryType(repository.type)
+    })),
+    unknownRemoteRows: state.unknownRemoteRows || []
+  });
+}
+
+function mergeLocalOnlyChanges(initialState, reconciledState, currentStateValue) {
+  const initialScrapers = new Map((initialState.scrapers || []).map((entry) => [entry.id, entry]));
+  const currentScrapers = new Map(
+    (currentStateValue.scrapers || []).map((entry) => [entry.id, entry])
+  );
+  const scrapers = (reconciledState.scrapers || []).map((entry) => {
+    const initial = initialScrapers.get(entry.id);
+    const current = currentScrapers.get(entry.id);
+    return initial && current && current.enabled !== initial.enabled
+      ? { ...entry, enabled: current.enabled }
+      : entry;
+  });
+  return {
+    ...reconciledState,
+    settings: currentStateValue.settings,
+    legacySources: currentStateValue.legacySources,
+    runtime: currentStateValue.runtime,
+    scrapers,
+    syncDirty: currentStateValue.syncDirty
+  };
 }
 
 function platformId() {
@@ -204,33 +257,35 @@ export function resultToStream(result = {}, scraper = {}) {
   };
 }
 
-function mergeRepositoryScrapers(state, repository, manifest) {
+async function mergeRepositoryScrapers(state, repository, manifest, profileId = null) {
   const previous = state.scrapers.filter((entry) => entry.repositoryId === repository.id);
   const previousByKey = new Map(
     previous.map((entry) => [`${entry.manifestId || entry.filename}`, entry])
   );
-  const scrapers = manifest.scrapers.map((entry) => {
-    const id = scraperIdForManifest(repository.id, entry.id, entry.filename);
-    const old = previousByKey.get(`${entry.id}`) || previousByKey.get(`${entry.filename}`) || {};
-    return {
-      ...entry,
-      id,
-      repositoryId: repository.id,
-      manifestId: entry.id,
-      type: PLUGIN_REPOSITORY_TYPES.NUVIO_JS,
-      // Android keeps an existing user choice, but newly discovered
-      // VideoEasy providers start disabled until the user confirms the risk.
-      enabled:
-        old.enabled !== undefined
-          ? old.enabled
-          : entry.enabled !== false && !isVideoEasyScraper(entry.id, entry.name, entry.filename),
-      manifestEnabled: entry.enabled !== false,
-      codeAvailable: Boolean(PluginCodeStore.get(id)),
-      codeUrl: resolvePluginUrl(entry.codeUrl || entry.filename, repository.url),
-      supportedPlatforms: entry.supportedPlatforms || [],
-      disabledPlatforms: entry.disabledPlatforms || []
-    };
-  });
+  const scrapers = await Promise.all(
+    manifest.scrapers.map(async (entry) => {
+      const id = scraperIdForManifest(repository.id, entry.id, entry.filename);
+      const old = previousByKey.get(`${entry.id}`) || previousByKey.get(`${entry.filename}`) || {};
+      return {
+        ...entry,
+        id,
+        repositoryId: repository.id,
+        manifestId: entry.id,
+        type: PLUGIN_REPOSITORY_TYPES.NUVIO_JS,
+        // Android keeps an existing user choice, but newly discovered
+        // VideoEasy providers start disabled until the user confirms the risk.
+        enabled:
+          old.enabled !== undefined
+            ? old.enabled
+            : entry.enabled !== false && !isVideoEasyScraper(entry.id, entry.name, entry.filename),
+        manifestEnabled: entry.enabled !== false,
+        codeAvailable: Boolean(await PluginCodeStore.get(id, profileId)),
+        codeUrl: resolvePluginUrl(entry.codeUrl || entry.filename, repository.url),
+        supportedPlatforms: entry.supportedPlatforms || [],
+        disabledPlatforms: entry.disabledPlatforms || []
+      };
+    })
+  );
   return {
     ...state,
     repositories: [
@@ -302,6 +357,18 @@ function repositoryIdentity(url) {
   return (
     isJsonEndpoint(normalized) ? normalized : canonicalizePluginUrl(normalized, { manifest: true })
   ).toLowerCase();
+}
+
+function remoteRepositoryTypeHint(remote = {}) {
+  const url = canonicalizePluginUrl(remote?.url || remote?.url_template || remote?.urlTemplate);
+  if (/\.cs3(?:$|[?#])/i.test(url)) {
+    return PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX;
+  }
+  const declaredType = remote?.repoType ?? remote?.repo_type ?? remote?.type;
+  const hasExplicitType = remote?.repoTypeDeclared === true || declaredType != null;
+  return hasExplicitType
+    ? normalizePluginRepositoryType(declaredType, PLUGIN_REPOSITORY_TYPES.UNKNOWN)
+    : null;
 }
 
 async function fetchRepositoryDocument(url, quota) {
@@ -495,8 +562,8 @@ async function classifyRemoteRepository(remote, quota) {
   return { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
 }
 
-async function downloadCode(scraper, repository, quota) {
-  const existing = PluginCodeStore.get(scraper.id);
+async function downloadCode(scraper, repository, quota, profileId = null) {
+  const existing = await PluginCodeStore.get(scraper.id, profileId);
   try {
     const response = await PluginServiceClient.fetch({
       url: scraper.codeUrl,
@@ -511,12 +578,12 @@ async function downloadCode(scraper, repository, quota) {
     if (!response.ok || response.truncated || !response.body.trim())
       throw new Error(`HTTP ${response.status || 0}`);
     if (
-      !PluginCodeStore.save(
+      !(await PluginCodeStore.save(
         scraper.id,
         response.body,
         { url: scraper.codeUrl, version: scraper.version },
-        { maxBytes: quota.maxCacheBytes }
-      )
+        { maxBytes: quota.maxCacheBytes, profile: profileId }
+      ))
     ) {
       throw new Error("Plugin code cache quota exceeded");
     }
@@ -527,19 +594,26 @@ async function downloadCode(scraper, repository, quota) {
   }
 }
 
-async function hydrateJsRepository(state, repository, manifest, { markDirty = false } = {}) {
+async function hydrateJsRepository(
+  state,
+  repository,
+  manifest,
+  { markDirty = false, profileId = null } = {}
+) {
   const quota = quotaFor();
   const previousIds = state.scrapers
     .filter((entry) => entry.repositoryId === repository.id)
     .map((entry) => entry.id);
-  let next = mergeRepositoryScrapers(state, repository, manifest);
+  let next = await mergeRepositoryScrapers(state, repository, manifest, profileId);
   const nextIds = new Set(
     next.scrapers.filter((entry) => entry.repositoryId === repository.id).map((entry) => entry.id)
   );
-  previousIds.filter((id) => !nextIds.has(id)).forEach((id) => PluginCodeStore.remove(id));
+  await Promise.all(
+    previousIds.filter((id) => !nextIds.has(id)).map((id) => PluginCodeStore.remove(id, profileId))
+  );
   const hydrated = [];
   for (const scraper of next.scrapers.filter((entry) => entry.repositoryId === repository.id)) {
-    const codeAvailable = await downloadCode(scraper, repository, quota);
+    const codeAvailable = await downloadCode(scraper, repository, quota, profileId);
     hydrated.push({ ...scraper, codeAvailable });
   }
   next = {
@@ -593,19 +667,27 @@ function externalScrapers(repository, metadata) {
   });
 }
 
-function clearRepositoryExecution(state, repositoryId) {
-  state.scrapers
-    .filter((entry) => entry.repositoryId === repositoryId)
-    .map((entry) => entry.id)
-    .forEach((id) => PluginCodeStore.remove(id));
+async function clearRepositoryExecution(state, repositoryId, profileId = null) {
+  await Promise.all(
+    state.scrapers
+      .filter((entry) => entry.repositoryId === repositoryId)
+      .map((entry) => PluginCodeStore.remove(entry.id, profileId))
+  );
   return {
     ...state,
     scrapers: state.scrapers.filter((entry) => entry.repositoryId !== repositoryId)
   };
 }
 
-function replaceRepositoryAsNonExecutable(state, existing, remote, detected, metadata = null) {
-  const cleaned = clearRepositoryExecution(state, existing.id);
+async function replaceRepositoryAsNonExecutable(
+  state,
+  existing,
+  remote,
+  detected,
+  metadata = null,
+  profileId = null
+) {
+  const cleaned = await clearRepositoryExecution(state, existing.id, profileId);
   const type =
     detected.type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
       ? PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
@@ -637,13 +719,13 @@ function replaceRepositoryAsNonExecutable(state, existing, remote, detected, met
   };
 }
 
-async function hydrateDetectedJsRepository(state, existing, remote, detected) {
+async function hydrateDetectedJsRepository(state, existing, remote, detected, profileId = null) {
   const quota = quotaFor();
   const manifestUrl = canonicalizePluginUrl(detected.url || remote.url, { manifest: true });
   const manifest =
     detected.manifest || normalizePluginManifest(await fetchJson(manifestUrl, quota), manifestUrl);
   if (!manifest) throw new Error("JS repository manifest is invalid");
-  const cleaned = clearRepositoryExecution(state, existing.id);
+  const cleaned = await clearRepositoryExecution(state, existing.id, profileId);
   return hydrateJsRepository(
     cleaned,
     {
@@ -653,7 +735,8 @@ async function hydrateDetectedJsRepository(state, existing, remote, detected) {
       description: manifest.description,
       type: PLUGIN_REPOSITORY_TYPES.NUVIO_JS
     },
-    manifest
+    manifest,
+    { profileId }
   );
 }
 
@@ -678,7 +761,10 @@ function createRemoteStub(remote = {}) {
     ),
     url,
     description: String(remote.description || ""),
-    enabled: remote.enabled !== false,
+    // Android creates a newly discovered repository enabled regardless of the
+    // cloud row's historical enabled flag; that field is sent on push but is
+    // not applied by its pull/reconcile path.
+    enabled: true,
     type,
     lastUpdated: 0,
     scraperCount: 0,
@@ -689,9 +775,27 @@ function createRemoteStub(remote = {}) {
 async function runWithPool(task, quota, signal) {
   if (signal?.aborted) return [];
   if (runningExecutions >= quota.maxConcurrent) {
-    if (queuedExecutions.length >= quota.maxQueued) return [];
+    // Match Android's semaphore behavior: limit active workers without dropping
+    // eligible providers when a source request starts a large scraper batch.
     return new Promise((resolve) => {
-      queuedExecutions.push({ task, resolve, signal });
+      const queued = {
+        task,
+        quota,
+        resolve,
+        signal,
+        onAbort: null
+      };
+      const cancel = () => {
+        const index = queuedExecutions.indexOf(queued);
+        if (index < 0) return;
+        queuedExecutions.splice(index, 1);
+        signal?.removeEventListener?.("abort", queued.onAbort);
+        resolve([]);
+      };
+      queued.onAbort = cancel;
+      queuedExecutions.push(queued);
+      signal?.addEventListener?.("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
     });
   }
   runningExecutions += 1;
@@ -701,9 +805,14 @@ async function runWithPool(task, quota, signal) {
     runningExecutions = Math.max(0, runningExecutions - 1);
     const next = queuedExecutions.shift();
     if (next) {
-      runWithPool(next.task, quota, next.signal)
-        .then(next.resolve)
-        .catch(() => next.resolve([]));
+      next.signal?.removeEventListener?.("abort", next.onAbort);
+      if (next.signal?.aborted) {
+        next.resolve([]);
+      } else {
+        runWithPool(next.task, next.quota, next.signal)
+          .then(next.resolve)
+          .catch(() => next.resolve([]));
+      }
     }
   }
 }
@@ -716,10 +825,15 @@ async function executeOne(
   signal,
   { throwOnError = false, mapResults = true } = {}
 ) {
-  const code = PluginCodeStore.get(scraper.id);
-  if (!code?.code) return [];
   const executionProfileId = getEffectivePluginProfileId();
-  const executionSettings = currentState().settings.scraperSettings?.[scraper.id] || {};
+  let code = await PluginCodeStore.get(scraper.id, executionProfileId);
+  if (!code?.code && scraper.codeUrl) {
+    await downloadCode(scraper, repository, quota, executionProfileId);
+    code = await PluginCodeStore.get(scraper.id, executionProfileId);
+  }
+  if (!code?.code) return [];
+  const executionSettings =
+    currentState(executionProfileId).settings.scraperSettings?.[scraper.id] || {};
   const key = `${executionProfileId}:${repository.id}:${scraper.id}:${args.tmdbId}:${args.mediaType}:${args.season}:${args.episode}`;
   const promise = singleFlight
     .run(
@@ -871,7 +985,10 @@ export const PluginManager = {
     PluginStore.replace({
       ...state,
       settings: { ...state.settings, pluginsEnabled: Boolean(enabled) },
-      syncDirty: true
+      // Android keeps this setting local; it is not part of the remote
+      // `plugins` repository payload. Preserve a repository mutation that may
+      // already be waiting to be pushed.
+      syncDirty: state.syncDirty
     });
     return true;
   },
@@ -882,13 +999,21 @@ export const PluginManager = {
     PluginStore.replace({
       ...state,
       settings: { ...state.settings, groupStreamsByRepository: Boolean(enabled) },
-      syncDirty: true
+      // Android keeps this setting local; it is not part of the remote
+      // `plugins` repository payload. Preserve a repository mutation that may
+      // already be waiting to be pushed.
+      syncDirty: state.syncDirty
     });
     return true;
   },
 
   async addRepository(input) {
     if (!canEdit()) throw new Error("Plugin settings are read-only for this profile");
+    // Repository loading is asynchronous. Keep the operation bound to the
+    // effective profile that authorized it so a profile switch while the
+    // manifest/code is downloading cannot write the result into the new
+    // active profile.
+    const targetProfileId = getEffectivePluginProfileId();
     const rawInput = String(input || "").trim();
     const rawUrl = isPluginShortCode(rawInput)
       ? await resolvePluginShortCode(rawInput)
@@ -905,23 +1030,26 @@ export const PluginManager = {
         repoType: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX,
         name: rawUrl.split("/").pop() || "CloudStream extension"
       });
-      const state = currentState();
+      const state = currentState(targetProfileId);
       const repositoryKey = repositoryIdentity(repository.url);
       if (!state.repositories.some((entry) => repositoryIdentity(entry.url) === repositoryKey)) {
-        PluginStore.replace({
-          ...state,
-          repositories: [...state.repositories, repository],
-          syncDirty: true
-        });
+        PluginStore.replace(
+          {
+            ...state,
+            repositories: [...state.repositories, repository],
+            syncDirty: true
+          },
+          targetProfileId
+        );
       }
       return repository;
     }
     const normalizedUrl = canonicalizePluginUrl(rawUrl);
     const validation = validatePluginUrl(normalizedUrl);
     if (!validation.ok) throw new Error(validation.reason);
-    const state = currentState();
+    const initialState = currentState(targetProfileId);
     const identity = repositoryIdentity(normalizedUrl);
-    const existing = state.repositories.find(
+    const existing = initialState.repositories.find(
       (entry) => identity && repositoryIdentity(entry.url) === identity
     );
     if (existing) return existing;
@@ -934,6 +1062,17 @@ export const PluginManager = {
     const sourceUrl = loaded.sourceUrl;
     const manifest = normalizePluginManifest(document, sourceUrl);
     const external = await loadExternalMetadata(document, sourceUrl, quota);
+    // Re-read after the network work. A pull or another UI action may have
+    // changed the repository list while the document was loading; never let
+    // this add operation replace that newer state with its old snapshot.
+    const state = currentState(targetProfileId);
+    const sourceIdentity = repositoryIdentity(sourceUrl);
+    const existingAfterLoad = state.repositories.find(
+      (entry) =>
+        (identity && repositoryIdentity(entry.url) === identity) ||
+        (sourceIdentity && repositoryIdentity(entry.url) === sourceIdentity)
+    );
+    if (existingAfterLoad) return existingAfterLoad;
     const saveExternalRepository = () => {
       const repository = createRemoteStub({
         url: canonicalizePluginUrl(rawUrl),
@@ -959,7 +1098,7 @@ export const PluginManager = {
         ],
         syncDirty: true
       };
-      PluginStore.replace(next);
+      PluginStore.replace(next, targetProfileId);
       return repository;
     };
     // Android tries a specific external .json feed before treating it as a
@@ -980,8 +1119,38 @@ export const PluginManager = {
             ?.enabled !== false,
         type: PLUGIN_REPOSITORY_TYPES.NUVIO_JS
       };
-      const next = await hydrateJsRepository(state, repository, manifest, { markDirty: true });
-      PluginStore.replace(next);
+      const hydrationRevision = PluginStore.getRevision(targetProfileId);
+      const next = await hydrateJsRepository(state, repository, manifest, {
+        markDirty: true,
+        profileId: targetProfileId
+      });
+      const currentAfterHydration = currentState(targetProfileId);
+      if (PluginStore.getRevision(targetProfileId) !== hydrationRevision) {
+        const concurrentRepository = currentAfterHydration.repositories.find(
+          (entry) => repositoryIdentity(entry.url) === repositoryIdentity(repository.url)
+        );
+        if (concurrentRepository) return concurrentRepository;
+        const hydratedScrapers = next.scrapers.filter(
+          (entry) => entry.repositoryId === repository.id
+        );
+        const merged = {
+          ...currentAfterHydration,
+          repositories: [
+            ...currentAfterHydration.repositories.filter((entry) => entry.id !== repository.id),
+            next.repositories.find((entry) => entry.id === repository.id) || repository
+          ],
+          scrapers: [
+            ...currentAfterHydration.scrapers.filter(
+              (entry) => entry.repositoryId !== repository.id
+            ),
+            ...hydratedScrapers
+          ],
+          syncDirty: true
+        };
+        PluginStore.replace(merged, targetProfileId);
+        return merged.repositories.find((entry) => entry.id === repository.id);
+      }
+      PluginStore.replace(next, targetProfileId);
       return repository;
     }
     if (external) return saveExternalRepository();
@@ -990,9 +1159,11 @@ export const PluginManager = {
 
   async refreshRepository(repositoryId) {
     if (!canEdit()) throw new Error("Plugin settings are read-only for this profile");
-    const state = currentState();
+    const targetProfileId = getEffectivePluginProfileId();
+    const state = currentState(targetProfileId);
     const repository = state.repositories.find((entry) => entry.id === repositoryId);
     if (!repository) throw new Error("Repository not found");
+    const refreshRevision = PluginStore.getRevision(targetProfileId);
     if (!isExecutablePluginRepository(repository)) {
       if (
         repository.type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX &&
@@ -1002,7 +1173,7 @@ export const PluginManager = {
         const external = await loadExternalMetadata(loaded.document, loaded.sourceUrl, quotaFor());
         if (!external) throw new Error("CloudStream repository metadata is invalid");
         const scrapers = externalScrapers(repository, external);
-        PluginStore.replace({
+        const refreshedState = {
           ...state,
           repositories: state.repositories.map((entry) =>
             entry.id === repository.id
@@ -1020,8 +1191,28 @@ export const PluginManager = {
             ...state.scrapers.filter((entry) => entry.repositoryId !== repository.id),
             ...scrapers
           ],
-          syncDirty: true
-        });
+          // Refresh updates local metadata/provider cache only. Android does
+          // not enqueue a repository push for this operation.
+          syncDirty: state.syncDirty
+        };
+        const currentAfterRefresh = currentState(targetProfileId);
+        if (PluginStore.getRevision(targetProfileId) !== refreshRevision) {
+          if (!currentAfterRefresh.repositories.some((entry) => entry.id === repository.id)) {
+            return { ok: false, reason: "Repository was removed during refresh" };
+          }
+          if (
+            currentAfterRefresh.syncDirty ||
+            cloudRepositoryFingerprint(currentAfterRefresh) !== cloudRepositoryFingerprint(state)
+          ) {
+            return { ok: true, preservedLocalChanges: true, metadataOnly: true };
+          }
+          PluginStore.replace(
+            mergeLocalOnlyChanges(state, refreshedState, currentAfterRefresh),
+            targetProfileId
+          );
+        } else {
+          PluginStore.replace(refreshedState, targetProfileId);
+        }
         return { ok: true, metadataOnly: true };
       }
       return { ok: false, reason: "CloudStream/DEX repositories are metadata-only on Web TV" };
@@ -1033,32 +1224,65 @@ export const PluginManager = {
       state,
       { ...repository, url: manifestUrl, name: manifest.name },
       manifest,
-      { markDirty: true }
+      // Refresh updates local metadata/provider cache only. Android does not
+      // enqueue a repository push for this operation.
+      { markDirty: false, profileId: targetProfileId }
     );
-    PluginStore.replace(next);
+    const currentAfterRefresh = currentState(targetProfileId);
+    if (PluginStore.getRevision(targetProfileId) !== refreshRevision) {
+      if (!currentAfterRefresh.repositories.some((entry) => entry.id === repository.id)) {
+        return { ok: false, reason: "Repository was removed during refresh" };
+      }
+      if (
+        currentAfterRefresh.syncDirty ||
+        cloudRepositoryFingerprint(currentAfterRefresh) !== cloudRepositoryFingerprint(state)
+      ) {
+        return { ok: true, preservedLocalChanges: true };
+      }
+      PluginStore.replace(mergeLocalOnlyChanges(state, next, currentAfterRefresh), targetProfileId);
+    } else {
+      PluginStore.replace(next, targetProfileId);
+    }
     return { ok: true };
   },
 
-  removeRepository(repositoryId) {
+  async removeRepository(repositoryId) {
     if (!canEdit()) return false;
-    const state = currentState();
+    const targetProfileId = getEffectivePluginProfileId();
+    const state = currentState(targetProfileId);
     const repository = state.repositories.find((entry) => entry.id === repositoryId);
-    if (
-      !repository ||
-      repository.type === PLUGIN_REPOSITORY_TYPES.UNKNOWN ||
-      isExternalDexRepository(repository)
-    )
-      return false;
-    const scraperIds = state.scrapers
-      .filter((entry) => entry.repositoryId === repositoryId)
-      .map((entry) => entry.id);
-    scraperIds.forEach((id) => PluginCodeStore.remove(id));
-    PluginStore.replace({
-      ...state,
-      repositories: state.repositories.filter((entry) => entry.id !== repositoryId),
-      scrapers: state.scrapers.filter((entry) => entry.repositoryId !== repositoryId),
-      syncDirty: true
-    });
+    if (!repository || repository.type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) return false;
+    const removedCacheIds = new Set();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = currentState(targetProfileId);
+      if (!current.repositories.some((entry) => entry.id === repositoryId)) return true;
+      const scraperIds = current.scrapers
+        .filter((entry) => entry.repositoryId === repositoryId)
+        .map((entry) => entry.id)
+        .filter((id) => !removedCacheIds.has(id));
+      if (!scraperIds.length) break;
+      await Promise.all(
+        scraperIds.map(async (id) => {
+          await PluginCodeStore.remove(id, targetProfileId);
+          removedCacheIds.add(id);
+        })
+      );
+    }
+    const latestState = currentState(targetProfileId);
+    if (!latestState.repositories.some((entry) => entry.id === repositoryId)) return true;
+    PluginStore.replace(
+      {
+        ...latestState,
+        repositories: latestState.repositories.filter((entry) => entry.id !== repositoryId),
+        scrapers: latestState.scrapers.filter((entry) => entry.repositoryId !== repositoryId),
+        syncDirty: true
+      },
+      targetProfileId
+    );
+    // Android permits removing DEX repositories and pushes user-initiated
+    // removals immediately so a subsequent pull cannot re-add them before the
+    // debounced add/update sync runs.
+    PluginStore.flushCloudSync(targetProfileId);
     return true;
   },
 
@@ -1066,7 +1290,7 @@ export const PluginManager = {
     if (!canEdit()) return false;
     const state = currentState();
     const repository = state.repositories.find((entry) => entry.id === repositoryId);
-    if (!repository || isExternalDexRepository(repository)) return false;
+    if (!repository) return false;
     PluginStore.replace({
       ...state,
       repositories: state.repositories.map((entry) =>
@@ -1095,7 +1319,8 @@ export const PluginManager = {
       scrapers: state.scrapers.map((entry) =>
         entry.id === scraperId ? { ...entry, enabled: Boolean(enabled) } : entry
       ),
-      syncDirty: true
+      // Scraper enablement is local-only on Android and has no remote row.
+      syncDirty: state.syncDirty
     });
     return true;
   },
@@ -1117,181 +1342,260 @@ export const PluginManager = {
           ? { ...entry, enabled: Boolean(enabled) }
           : entry
       ),
-      syncDirty: true
+      // Scraper enablement is local-only on Android and has no remote row.
+      syncDirty: state.syncDirty
     });
     return true;
   },
 
-  async reconcileWithRemoteRepoUrls(remotePlugins = [], { removeMissingLocal = true } = {}) {
-    const incoming = (Array.isArray(remotePlugins) ? remotePlugins : [])
-      .map((entry) => (typeof entry === "string" ? { url: entry } : entry || {}))
-      .map((entry) => ({
-        ...entry,
-        url: canonicalizePluginUrl(entry.url || entry.url_template || entry.urlTemplate)
-      }))
-      .filter((entry) => entry.url)
-      .filter(
-        (entry, index, values) =>
-          values.findIndex(
-            (candidate) => repositoryIdentity(candidate.url) === repositoryIdentity(entry.url)
-          ) === index
+  async reconcileWithRemoteRepoUrls(
+    remotePlugins = [],
+    {
+      removeMissingLocal = true,
+      authoritativeSnapshot = false,
+      expectedRevision = null,
+      profileId = null
+    } = {}
+  ) {
+    return withReconcileLock(async () => {
+      const targetProfileId = getEffectivePluginProfileId(
+        profileId == null ? undefined : profileId
       );
-    const state = currentState();
-    if (!incoming.length) return state;
-    let next = { ...state };
-    const unknownRemoteRows = [];
-    for (const remote of incoming) {
-      const detected = await classifyRemoteRepository(remote, quotaFor());
-      const type = detected.type;
-      const detectedRemote = { ...remote, url: detected.url || remote.url, repoType: type };
-      const remoteIdentity = repositoryIdentity(remote.url);
-      const detectedIdentity = repositoryIdentity(detectedRemote.url);
-      const existing = next.repositories.find((entry) => {
-        const localIdentity = repositoryIdentity(entry.url);
-        return (
-          localIdentity && (localIdentity === remoteIdentity || localIdentity === detectedIdentity)
+      const incoming = (Array.isArray(remotePlugins) ? remotePlugins : [])
+        .map((entry) => (typeof entry === "string" ? { url: entry } : entry || {}))
+        .map((entry) => ({
+          ...entry,
+          url: canonicalizePluginUrl(entry.url || entry.url_template || entry.urlTemplate)
+        }))
+        .filter((entry) => entry.url)
+        .filter(
+          (entry, index, values) =>
+            values.findIndex(
+              (candidate) => repositoryIdentity(candidate.url) === repositoryIdentity(entry.url)
+            ) === index
         );
-      });
-      if (existing) {
-        if (type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
-          unknownRemoteRows.push(remote.raw || remote);
-          continue;
-        }
+      const state = currentState(targetProfileId);
+      let reconciliationRevision = PluginStore.getRevision(targetProfileId);
+      const reconcileRevisionChanges = () => {
+        const current = currentState(targetProfileId);
+        const currentRevision = PluginStore.getRevision(targetProfileId);
+        if (currentRevision === reconciliationRevision) return true;
         if (
-          type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX ||
-          type === PLUGIN_REPOSITORY_TYPES.LEGACY
+          current.syncDirty ||
+          cloudRepositoryFingerprint(current) !== cloudRepositoryFingerprint(state)
         ) {
-          // A typed DEX row is opaque to Web. A normal pull contains only the
-          // repository row, not the Android-side binary metadata, so keeping
-          // the local DEX entry byte-for-byte is safer than rebuilding it and
-          // accidentally dropping its preserved scraper metadata or flag.
-          if (
-            type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX &&
-            existing.type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX &&
-            !detected.metadata
-          ) {
+          next = current;
+          return false;
+        }
+        next = mergeLocalOnlyChanges(state, next, current);
+        reconciliationRevision = currentRevision;
+        return true;
+      };
+      if (expectedRevision != null && reconciliationRevision !== Number(expectedRevision)) {
+        return state;
+      }
+      // Match Android's empty-snapshot guard: an empty successful response is
+      // not evidence that the local profile should be cleared.
+      if (!incoming.length) return state;
+      let next = { ...state };
+      const unknownRemoteRows = [];
+      for (const remote of incoming) {
+        const remoteIdentity = repositoryIdentity(remote.url);
+        const existingByRemoteIdentity = next.repositories.find(
+          (entry) => repositoryIdentity(entry.url) === remoteIdentity
+        );
+        // Android trusts the typed row for repositories it already knows. Do
+        // the same so every pull does not re-download each manifest just to
+        // rediscover a type that Supabase already supplied.
+        const typeHint = remoteRepositoryTypeHint(remote);
+        const detected =
+          existingByRemoteIdentity && typeHint !== null
+            ? { type: typeHint, url: remote.url }
+            : await classifyRemoteRepository(remote, quotaFor());
+        const type = detected.type;
+        const detectedRemote = { ...remote, url: detected.url || remote.url, repoType: type };
+        const detectedIdentity = repositoryIdentity(detectedRemote.url);
+        const existing = next.repositories.find((entry) => {
+          const localIdentity = repositoryIdentity(entry.url);
+          return (
+            localIdentity &&
+            (localIdentity === remoteIdentity || localIdentity === detectedIdentity)
+          );
+        });
+        if (existing) {
+          if (type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
+            unknownRemoteRows.push(remote.raw || remote);
             continue;
           }
-          const external =
-            type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
-              ? detected.metadata ||
-                normalizeExternalRepositoryMetadata(detected.document, detected.url)
-              : null;
-          // A typed remote transition is authoritative for execution policy:
-          // remove any cached JS code before retaining the row as metadata-only.
-          next = replaceRepositoryAsNonExecutable(next, existing, remote, detected, external);
+          if (
+            type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX ||
+            type === PLUGIN_REPOSITORY_TYPES.LEGACY
+          ) {
+            // A typed DEX row is opaque to Web. A normal pull contains only the
+            // repository row, not the Android-side binary metadata, so keeping
+            // the local DEX entry byte-for-byte is safer than rebuilding it and
+            // accidentally dropping its preserved scraper metadata or flag.
+            if (
+              type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX &&
+              existing.type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX &&
+              !detected.metadata
+            ) {
+              continue;
+            }
+            const external =
+              type === PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
+                ? detected.metadata ||
+                  normalizeExternalRepositoryMetadata(detected.document, detected.url)
+                : null;
+            // A typed remote transition is authoritative for execution policy:
+            // remove any cached JS code before retaining the row as metadata-only.
+            next = await replaceRepositoryAsNonExecutable(
+              next,
+              existing,
+              remote,
+              detected,
+              external,
+              targetProfileId
+            );
+            continue;
+          }
+          if (
+            type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS &&
+            existing.type !== PLUGIN_REPOSITORY_TYPES.NUVIO_JS
+          ) {
+            try {
+              next = await hydrateDetectedJsRepository(
+                next,
+                existing,
+                remote,
+                detected,
+                targetProfileId
+              );
+            } catch (error) {
+              console.warn("Plugin sync JS repository rehydration failed:", error);
+            }
+          }
           continue;
         }
-        if (
-          type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS &&
-          existing.type !== PLUGIN_REPOSITORY_TYPES.NUVIO_JS
-        ) {
-          try {
-            next = await hydrateDetectedJsRepository(next, existing, remote, detected);
-          } catch (error) {
-            console.warn("Plugin sync JS repository rehydration failed:", error);
-          }
+        if (type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
+          unknownRemoteRows.push(remote.raw || remote);
+          next.repositories = [...next.repositories, createRemoteStub(detectedRemote)];
+          continue;
         }
-        continue;
-      }
-      if (type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
-        unknownRemoteRows.push(remote.raw || remote);
-        next.repositories = [...next.repositories, createRemoteStub(detectedRemote)];
-        continue;
-      }
-      if (type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS) {
-        try {
-          const manifestUrl = detected.url || canonicalizePluginUrl(remote.url, { manifest: true });
-          const manifest =
-            detected.manifest ||
-            normalizePluginManifest(await fetchJson(manifestUrl, quotaFor()), manifestUrl);
-          if (manifest)
-            next = await hydrateJsRepository(
-              next,
-              {
-                ...createRemoteStub({ ...remote, url: manifestUrl, repoType: type }),
-                type,
-                url: manifestUrl,
-                name: manifest.name
-              },
-              manifest
-            );
-        } catch (error) {
-          console.warn("Plugin sync JS repository hydration failed:", error);
+        if (type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS) {
+          try {
+            const manifestUrl =
+              detected.url || canonicalizePluginUrl(remote.url, { manifest: true });
+            const manifest =
+              detected.manifest ||
+              normalizePluginManifest(await fetchJson(manifestUrl, quotaFor()), manifestUrl);
+            if (manifest)
+              next = await hydrateJsRepository(
+                next,
+                {
+                  ...createRemoteStub({ ...remote, url: manifestUrl, repoType: type }),
+                  type,
+                  url: manifestUrl,
+                  name: manifest.name
+                },
+                manifest,
+                { profileId: targetProfileId }
+              );
+          } catch (error) {
+            console.warn("Plugin sync JS repository hydration failed:", error);
+            next.repositories = [
+              ...next.repositories,
+              createRemoteStub({ ...remote, repoType: type })
+            ];
+          }
+        } else {
+          const stub = createRemoteStub({ ...detectedRemote, repoType: type });
+          const external =
+            detected.metadata ||
+            normalizeExternalRepositoryMetadata(detected.document, detected.url);
+          const scrapers = external ? externalScrapers(stub, external) : [];
           next.repositories = [
             ...next.repositories,
-            createRemoteStub({ ...remote, repoType: type })
+            { ...stub, metadata: external || stub.metadata, scraperCount: scrapers.length }
+          ];
+          next.scrapers = [
+            ...next.scrapers.filter((entry) => entry.repositoryId !== stub.id),
+            ...scrapers
           ];
         }
-      } else {
-        const stub = createRemoteStub({ ...detectedRemote, repoType: type });
-        const external =
-          detected.metadata || normalizeExternalRepositoryMetadata(detected.document, detected.url);
-        const scrapers = external ? externalScrapers(stub, external) : [];
-        next.repositories = [
-          ...next.repositories,
-          { ...stub, metadata: external || stub.metadata, scraperCount: scrapers.length }
-        ];
-        next.scrapers = [
-          ...next.scrapers.filter((entry) => entry.repositoryId !== stub.id),
-          ...scrapers
-        ];
       }
-    }
-    if (removeMissingLocal) {
-      const remoteIdentities = new Set(incoming.map((entry) => repositoryIdentity(entry.url)));
-      const removed = next.repositories.filter(
-        (entry) => !remoteIdentities.has(repositoryIdentity(entry.url))
-      );
-      removed
-        .filter((entry) => entry.type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS)
-        .flatMap((entry) =>
-          next.scrapers
-            .filter((scraper) => scraper.repositoryId === entry.id)
-            .map((scraper) => scraper.id)
+      // A local add/remove/toggle may have happened while a remote manifest was
+      // being hydrated. Never commit the stale working copy over that newer
+      // local state; the caller will flush its pending dirty snapshot instead.
+      if (!reconcileRevisionChanges()) return next;
+      if (removeMissingLocal && incoming.length) {
+        const remoteIdentities = new Set(incoming.map((entry) => repositoryIdentity(entry.url)));
+        const removed = next.repositories.filter(
+          (entry) => !remoteIdentities.has(repositoryIdentity(entry.url))
+        );
+        await Promise.all(
+          removed
+            .filter((entry) => entry.type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS)
+            .flatMap((entry) =>
+              next.scrapers
+                .filter((scraper) => scraper.repositoryId === entry.id)
+                .map((scraper) => scraper.id)
+            )
+            .map((id) => PluginCodeStore.remove(id, targetProfileId))
+        );
+        // A successful typed snapshot is authoritative, just like Android's
+        // complete remote list. Callers that consume an older/partial source
+        // can omit authoritativeSnapshot and retain opaque local entries.
+        const opaqueTypes = [
+          PLUGIN_REPOSITORY_TYPES.UNKNOWN,
+          PLUGIN_REPOSITORY_TYPES.LEGACY,
+          PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
+        ];
+        next.repositories = next.repositories.filter(
+          (entry) =>
+            remoteIdentities.has(repositoryIdentity(entry.url)) ||
+            (!authoritativeSnapshot && opaqueTypes.includes(entry.type))
+        );
+        next.scrapers = next.scrapers.filter((entry) =>
+          next.repositories.some((repo) => repo.id === entry.repositoryId)
+        );
+      }
+      const ordered = incoming
+        .map((entry) =>
+          next.repositories.find(
+            (repo) => repositoryIdentity(repo.url) === repositoryIdentity(entry.url)
+          )
         )
-        .forEach((id) => PluginCodeStore.remove(id));
-      // A DEX or future/opaque repository is outside this client's delete
-      // authority. Keep it even when an older server response omits the row;
-      // Android may execute/reconcile DEX locally, but Web must never turn a
-      // partial/legacy cloud response into a destructive DEX removal.
-      next.repositories = next.repositories.filter(
-        (entry) =>
-          remoteIdentities.has(repositoryIdentity(entry.url)) ||
-          [
-            PLUGIN_REPOSITORY_TYPES.UNKNOWN,
-            PLUGIN_REPOSITORY_TYPES.LEGACY,
-            PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
-          ].includes(entry.type)
+        .filter(Boolean);
+      const extras = next.repositories.filter(
+        (repo) =>
+          !incoming.some((entry) => repositoryIdentity(entry.url) === repositoryIdentity(repo.url))
       );
-      next.scrapers = next.scrapers.filter((entry) =>
-        next.repositories.some((repo) => repo.id === entry.repositoryId)
+      if (!reconcileRevisionChanges()) return next;
+      const preservedUnknownRows = authoritativeSnapshot
+        ? unknownRemoteRows
+        : [...state.unknownRemoteRows, ...unknownRemoteRows];
+      PluginStore.replace(
+        {
+          ...next,
+          repositories: ordered.concat(extras),
+          // A complete remote snapshot also makes previously preserved opaque
+          // rows stale; partial callers keep the old safety behavior.
+          unknownRemoteRows: preservedUnknownRows
+            .filter((entry, index, values) => {
+              const key = JSON.stringify(entry || {});
+              return (
+                values.findIndex((candidate) => JSON.stringify(candidate || {}) === key) === index
+              );
+            })
+            .slice(0, 256),
+          rawRemoteRows: incoming.map((entry) => entry.raw || entry),
+          syncDirty: state.syncDirty
+        },
+        targetProfileId
       );
-    }
-    const ordered = incoming
-      .map((entry) =>
-        next.repositories.find(
-          (repo) => repositoryIdentity(repo.url) === repositoryIdentity(entry.url)
-        )
-      )
-      .filter(Boolean);
-    const extras = next.repositories.filter(
-      (repo) =>
-        !incoming.some((entry) => repositoryIdentity(entry.url) === repositoryIdentity(repo.url))
-    );
-    PluginStore.replace({
-      ...next,
-      repositories: ordered.concat(extras),
-      unknownRemoteRows: [...state.unknownRemoteRows, ...unknownRemoteRows]
-        .filter((entry, index, values) => {
-          const key = JSON.stringify(entry || {});
-          return values.findIndex((candidate) => JSON.stringify(candidate || {}) === key) === index;
-        })
-        .slice(0, 256),
-      rawRemoteRows: incoming.map((entry) => entry.raw || entry),
-      syncDirty: state.syncDirty
+      return PluginStore.get(targetProfileId);
     });
-    return PluginStore.get();
   },
 
   async executeScrapersStreaming({
@@ -1460,13 +1764,14 @@ export const PluginManager = {
           [scraperId]: settings && typeof settings === "object" ? settings : {}
         }
       },
-      syncDirty: true
+      // Per-scraper settings are local-only on Android and have no remote row.
+      syncDirty: state.syncDirty
     });
     return true;
   },
 
   async clearCache() {
-    PluginCodeStore.clear();
+    await PluginCodeStore.clear(getEffectivePluginProfileId());
     PluginServiceClient.resetHealthCache();
     try {
       await PluginServiceClient.clearCache();
