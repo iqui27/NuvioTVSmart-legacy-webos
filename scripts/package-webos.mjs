@@ -479,6 +479,39 @@ async function stagePluginService() {
   await assertServiceBundleIsLegacySafe(pluginServiceOut);
 }
 
+async function stagePluginService() {
+  const packageJsonPath = path.join(webOsPluginServiceSourceDir, "package.json");
+  const servicesManifestPath = path.join(webOsPluginServiceSourceDir, "services.json");
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  const servicesManifest = JSON.parse(await readFile(servicesManifestPath, "utf8"));
+  validateWebOsServiceManifest(servicesManifest, webOsPluginServiceId);
+
+  await mkdir(path.join(pluginServiceStageDir, "src"), { recursive: true });
+  await Promise.all([
+    writeFile(
+      path.join(pluginServiceStageDir, "package.json"),
+      `${JSON.stringify(packageJson, null, 2)}\n`,
+      "utf8"
+    ),
+    writeFile(
+      path.join(pluginServiceStageDir, "services.json"),
+      `${JSON.stringify(servicesManifest, null, 2)}\n`,
+      "utf8"
+    )
+  ]);
+
+  await build({
+    entryPoints: [path.join(webOsPluginServiceSourceDir, "src", "index.js")],
+    outfile: path.join(pluginServiceStageDir, "src", "index.js"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: [`node${compatibilityPolicy.webOsServiceNodeVersion}`],
+    external: ["webos-service"],
+    logLevel: "silent"
+  });
+}
+
 async function packageWebOs() {
   await syncVersionFiles();
   await assertDistExists();

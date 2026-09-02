@@ -10545,6 +10545,13 @@ export const HomeScreen = {
       });
     }
 
+    if (this.layoutMode === "grid") {
+      normalizeHomeGridCatalogSections(this.container, {
+        maxDisplayItems: gridMaxDisplayItems,
+        rowCount: homeGridRowCount
+      });
+    }
+
     if (modernLandscapePostersEnabled) {
       this.applyCachedModernLandscapePosterMetrics(
         this.container.querySelector(".home-screen-shell.home-modern-landscape-posters")
