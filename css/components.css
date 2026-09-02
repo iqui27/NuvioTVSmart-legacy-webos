@@ -21732,6 +21732,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .stream-route-empty {
   min-height: 220px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 32px;
@@ -21739,6 +21740,16 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   line-height: 30px;
   color: var(--text-secondary);
   text-align: center;
+}
+
+/* Why each source produced nothing. Without it every failure -- HTTP error,
+   TLS rejection, timeout -- looks the same as "this title has no streams". */
+.stream-route-empty-diagnostics {
+  margin-top: 16px;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--text-tertiary, var(--text-secondary));
+  max-width: 900px;
 }
 
 .stream-route-toast {

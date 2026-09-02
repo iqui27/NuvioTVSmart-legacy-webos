@@ -12,6 +12,7 @@ import {
 import { TmdbService } from "../../core/tmdb/tmdbService.js";
 import { LocalDebridAvailabilityService } from "../../core/debrid/localDebridAvailabilityService.js";
 import { DebridStreamPresentation } from "../../core/debrid/directDebridStreamPresentation.js";
+import { StreamDiagnostics } from "../../core/diagnostics/streamDiagnostics.js";
 
 const STREAM_SOURCE_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -35,6 +36,7 @@ class StreamRepository {
   }
 
   async getStreamsFromAllAddons(type, videoId, options = {}) {
+    StreamDiagnostics.reset();
     const installedAddons = (await addonRepository.getInstalledAddons()).map((addon, index) => ({
       ...addon,
       orderIndex: index
@@ -159,6 +161,11 @@ class StreamRepository {
             if (streamsResult.data.length) {
               addonStreams = streamsResult.data;
             }
+          } else {
+            StreamDiagnostics.recordFailure(addon.displayName, {
+              status: streamsResult.code,
+              message: streamsResult.message
+            });
           }
         }
         // Match Android: when a declared stream endpoint succeeds with no
@@ -176,6 +183,9 @@ class StreamRepository {
           );
         }
         if (addonStreams.length === 0) {
+          if (streamRequestSucceeded) {
+            StreamDiagnostics.recordEmpty(addon.displayName);
+          }
           return null;
         }
 
@@ -209,8 +219,10 @@ class StreamRepository {
             }
           }))
         };
+        StreamDiagnostics.recordSuccess(addon.displayName, addonStreams.length);
         return prepareDebridGroup(group);
-      } catch (_) {
+      } catch (error) {
+        StreamDiagnostics.recordFailure(addon.displayName, error);
         return null;
       }
     });
@@ -291,6 +303,7 @@ class StreamRepository {
         return acceptPluginChunks ? progressivePluginGroups : [];
       } catch (error) {
         console.warn("Plugin stream fetch failed", error);
+        StreamDiagnostics.recordFailure("Plugins", error);
         return [];
       }
     })();
