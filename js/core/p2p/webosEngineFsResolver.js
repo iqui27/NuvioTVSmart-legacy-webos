@@ -3,6 +3,7 @@ import {
   isWebOsCompanionServiceAvailable,
   requestWebOsCompanionService
 } from "../../platform/webos/webosCompanionService.js";
+import { getPeerSearchBudget, primeLowMemoryProfile } from "./lowMemoryStreamingProfile.js";
 
 const ENGINEFS_CREATE_TIMEOUT_MS = 60000;
 const ENGINEFS_KIND = "webos-enginefs";
@@ -289,10 +290,14 @@ function buildDirectCreateBody({
     torrent: { infoHash }
   };
   if (sources.length) {
+    // The swarm size the device can hold. On a small set this drops to a
+    // tenth of the default, because the peers compete with the video decoder
+    // for the same memory.
+    const peerBudget = getPeerSearchBudget();
     body.peerSearch = {
       sources,
-      min: 40,
-      max: 200
+      min: peerBudget.min,
+      max: peerBudget.max
     };
   }
   body.guessFileIdx = hasExplicitFileIdx ? false : guessFileIdx || {};
@@ -742,6 +747,11 @@ export const WebOsEngineFsResolver = {
     if (!this.canResolveStream(stream)) {
       return { status: "unsupported" };
     }
+
+    // Learn the memory class before the create call picks a peer budget. It is
+    // one ping, it is cached for the session, and it fails silently into the
+    // default budget, so it cannot block playback.
+    await primeLowMemoryProfile();
 
     try {
       const infoHash = getInfoHash(stream);
