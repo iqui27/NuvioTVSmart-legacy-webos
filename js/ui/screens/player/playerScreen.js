@@ -9545,12 +9545,29 @@ export const PlayerScreen = {
         this.scheduleBufferingSpinnerRefresh();
         return;
       }
-      this.bufferingActive = false;
+      const minimalBufferingUiEnabled =
+        Environment.isWebOS() &&
+        PlayerSettingsStore.get().minimalBufferingUiEnabled === true &&
+        this.hasPresentedPlaybackFrame &&
+        currentSeconds > 0 &&
+        !this.seekLoading &&
+        !this.sourcesPanelVisible &&
+        !this.isSeekOverlaySuppressingControls();
       this.dismissPauseOverlay();
       this.loadingVisible = true;
-      this.updateLoadingVisibility();
-      if (!this.sourcesPanelVisible && !this.isSeekOverlaySuppressingControls()) {
-        this.setControlsVisible(true, { focus: false });
+      if (minimalBufferingUiEnabled) {
+        this.bufferingActive = true;
+        this.bufferingSpinnerBaselineSeconds = currentSeconds;
+        this.lastPlaybackProgressAt = Date.now();
+        this.setControlsVisible(false, { focus: false });
+        this.updateLoadingVisibility();
+        this.scheduleBufferingSpinnerRefresh();
+      } else {
+        this.bufferingActive = false;
+        this.updateLoadingVisibility();
+        if (!this.sourcesPanelVisible && !this.isSeekOverlaySuppressingControls()) {
+          this.setControlsVisible(true, { focus: false });
+        }
       }
       this.schedulePlaybackStallGuard();
     };
@@ -14607,7 +14624,13 @@ export const PlayerScreen = {
       isCurrentSelection,
       // webOS exposes requestVideoFrameCallback but its video pipeline does
       // not fire it; make ass.js capture requestAnimationFrame instead.
-      forceRafFrameLoop: Environment.isWebOS()
+      forceRafFrameLoop: Environment.isWebOS(),
+      // The webOS native pipeline can leave video.paused=true while the app
+      // is playing. Kick the newly-created renderer only when the controller
+      // and player UI both still consider playback active, so a paused
+      // selection does not start an uncancellable frame loop.
+      forcePlaybackFrameLoopKick:
+        Environment.isWebOS() && PlayerController.isPlaying && !this.paused
     });
     if (!renderer || typeof renderer.init !== "function") {
       return { applied: false, fallbackVtt: convertAssBodyToVtt(body) };
