@@ -131,6 +131,8 @@ import {
   HOME_MAX_ROWS_CONSTRAINED,
   HOME_MAX_ROWS_DEFAULT,
   HOME_MAX_ROWS_LEGACY_TV,
+  HOME_LAZY_HYDRATION_DEBOUNCE_MS,
+  HOME_LAZY_HYDRATION_MAX_PER_FRAME,
   HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS,
   isHomePerfDebugEnabled,
   HOME_RETURN_FOCUS_STATE_KEY,
@@ -8345,6 +8347,20 @@ export const HomeScreen = {
       cancelAnimationFrame(this.homeLazyImageHydrationRaf);
       this.homeLazyImageHydrationRaf = 0;
     }
+    // The debounce and the per-frame drain are the same hydration work by
+    // another scheduler: fast scroll has to silence all three, or the decode it
+    // exists to suppress simply arrives from a timer instead.
+    if (this.homeLazyImageHydrationTimer) {
+      clearTimeout(this.homeLazyImageHydrationTimer);
+      this.homeLazyImageHydrationTimer = 0;
+    }
+    if (this.homeLazyImageCommitRaf) {
+      cancelAnimationFrame(this.homeLazyImageCommitRaf);
+      this.homeLazyImageCommitRaf = 0;
+    }
+    // Note the queue itself is kept: endModernVerticalFastScroll re-hydrates on
+    // landing, and that pass resumes the drain. Clearing it here would strand
+    // images whose data-src is already gone.
 
     const state = {
       container: main,
@@ -10780,8 +10796,9 @@ export const HomeScreen = {
     if (this.homeLazyImageHydrationRaf) {
       return;
     }
-    this.homeLazyImageHydrationRaf = requestAnimationFrame(() => {
+    const run = () => {
       this.homeLazyImageHydrationRaf = 0;
+      this.homeLazyImageHydrationTimer = 0;
       const anchor = this.pendingHomeLazyImageAnchor || this.getCurrentFocusedNode();
       this.pendingHomeLazyImageAnchor = null;
       const forceFullScan = Boolean(this.homeLazyImageHydrationNeedsFullScan);
@@ -10789,7 +10806,34 @@ export const HomeScreen = {
       const shouldRefreshIndex = Boolean(this.homeLazyImageHydrationNeedsIndexRefresh);
       this.homeLazyImageHydrationNeedsIndexRefresh = false;
       this.hydrateHomeLazyImages(anchor, { forceFullScan, refreshIndex: shouldRefreshIndex });
-    });
+    };
+    // Moving BETWEEN rows on the legacy TV waits for the finger to stop.
+    //
+    // Every keypress used to schedule a hydration frame, so a 12-key descent
+    // fired twelve bursts of decode while the user was still moving - and the
+    // rows crossed on the way were decoded only to be left behind. Debounced,
+    // the same descent hydrates once or twice, when the movement settles.
+    //
+    // Deliberately NOT debounced: a move inside the same row (the anchor row is
+    // unchanged), and any call without an anchor - scroll, route re-entry,
+    // index refresh - which are one-offs rather than a stream of keys.
+    //
+    // The focused row itself is never delayed by this: hydrateHomeLazyImages
+    // hydrates the anchor row first, and only its neighbours ride the debounce.
+    const anchorRowChanged =
+      anchorRow instanceof HTMLElement && anchorRow !== this.lastHomeLazyImageHydrationAnchorRow;
+    if (this.isLegacyTvRuntime() && anchorRowChanged) {
+      if (this.homeLazyImageHydrationTimer) {
+        clearTimeout(this.homeLazyImageHydrationTimer);
+      }
+      this.homeLazyImageHydrationTimer = setTimeout(run, HOME_LAZY_HYDRATION_DEBOUNCE_MS);
+      return;
+    }
+    if (this.homeLazyImageHydrationTimer) {
+      clearTimeout(this.homeLazyImageHydrationTimer);
+      this.homeLazyImageHydrationTimer = 0;
+    }
+    this.homeLazyImageHydrationRaf = requestAnimationFrame(run);
   },
 
   buildHomeLazyImageHydrationIndex() {
@@ -10867,6 +10911,8 @@ export const HomeScreen = {
     // row is fully hydrated the early-returns above must not short-circuit, or a
     // horizontal move would land on an image whose src was never set.
     let anchorRowLeftUnhydrated = false;
+    // Collected here and assigned a few per frame by commitHomeLazyImageSources.
+    const queued = [];
     const imageRows =
       refreshIndex || !Array.isArray(this.homeLazyImageHydrationIndex)
         ? this.buildHomeLazyImageHydrationIndex()
@@ -10880,7 +10926,17 @@ export const HomeScreen = {
       this.container;
     const viewportRect = viewport.getBoundingClientRect();
     const constrained = this.isPerformanceConstrained();
-    const verticalMargin = constrained ? 720 : 1200;
+    // 720px de folga vertical num viewport de 1080 hidrata quase duas telas de
+    // fileiras a frente, e cada fileira nao focada hidrata ~11 posteres - a maior
+    // parte do lote. 240 deixa uma fileira de folga, que e o suficiente para a
+    // proxima descida ja estar pronta.
+    //
+    // O risco conhecido, que o proprio codigo ja registra em
+    // HOME_FOCUSED_ROW_HORIZONTAL_MARGIN: apertar uma margem MOVE custo para o
+    // proximo movimento em vez de eliminar. La isso trocou 800ms de vertical por
+    // 483ms de horizontal, ganho agregado de 8%. Medir os dois eixos e reverter
+    // se a soma nao melhorar.
+    const verticalMargin = constrained ? (this.isLegacyTvRuntime() ? 240 : 720) : 1200;
     // Duas tentativas medidas e REJEITADAS aqui, para nao repetir:
     //
     // 1) Subir esta margem para 1250 (buscar ~4 cards antes da
@@ -10963,10 +11019,83 @@ export const HomeScreen = {
           image.dataset.lazySrc = src;
         }
         image.removeAttribute("data-src");
-        image.src = src;
+        queued.push({ image, src, focusedRow: shouldHydrateFocusedRow });
       });
     });
+    this.commitHomeLazyImageSources(queued);
     this.focusedRowFullyHydrated = !anchorRowLeftUnhydrated;
+  },
+
+  /**
+   * Assign the queued `src` values a couple per frame instead of all at once.
+   *
+   * A settle batch can hold 8-11 images and each decode costs ~41ms on this
+   * SoC, so assigning the whole batch is one 300ms+ frame - the worst frame in
+   * the measurements. Spreading it keeps every frame near ~82ms and drains the
+   * queue in a handful of frames.
+   *
+   * The focused row goes first: it is the only row whose posters the user is
+   * looking at right now, and leaving it grey while a neighbour decodes would
+   * be a regression dressed as an optimisation.
+   *
+   * Not applied off the legacy TV: elsewhere the decode is cheap enough that
+   * batching only adds latency.
+   */
+  commitHomeLazyImageSources(queued = []) {
+    const stalled = this.homeLazyImageCommitQueue;
+    if (!queued.length) {
+      // A pass that queued nothing still has to restart a drain that fast
+      // scroll interrupted, otherwise the images it had already claimed (their
+      // data-src is gone) stay blank for good.
+      if (stalled?.length && !this.homeLazyImageCommitRaf) {
+        this.homeLazyImageCommitRaf = requestAnimationFrame(() =>
+          this.commitHomeLazyImageSources([])
+        );
+      }
+      return;
+    }
+    const assign = (entry) => {
+      const { image, src } = entry;
+      if (!(image instanceof HTMLImageElement) || !image.isConnected) {
+        return;
+      }
+      image.src = src;
+    };
+    if (!this.isLegacyTvRuntime() || queued.length <= HOME_LAZY_HYDRATION_MAX_PER_FRAME) {
+      queued.forEach(assign);
+      if (stalled?.length && !this.homeLazyImageCommitRaf) {
+        this.commitHomeLazyImageSources([]);
+      }
+      return;
+    }
+    // The queue is APPENDED TO, never replaced.
+    //
+    // Dropping a pending drain in favour of the newest batch loses every image
+    // still in it - and `data-src` was already removed when the entry was
+    // queued, so the hydration index counts those images as done and no later
+    // pass ever retries them. On screen that is a poster, a hero backdrop or a
+    // title logo that simply never appears. Cancelling here was exactly that
+    // bug.
+    //
+    // Focused-row entries jump ahead of anything not yet assigned, so a new
+    // focus still gets its posters first without discarding the older work.
+    const pending = this.homeLazyImageCommitQueue || (this.homeLazyImageCommitQueue = []);
+    const focusedFirst = queued.filter((entry) => entry.focusedRow);
+    const rest = queued.filter((entry) => !entry.focusedRow);
+    pending.unshift(...focusedFirst);
+    pending.push(...rest);
+    if (this.homeLazyImageCommitRaf) {
+      return;
+    }
+    const drain = () => {
+      this.homeLazyImageCommitRaf = 0;
+      const batch = pending.splice(0, HOME_LAZY_HYDRATION_MAX_PER_FRAME);
+      batch.forEach(assign);
+      if (pending.length) {
+        this.homeLazyImageCommitRaf = requestAnimationFrame(drain);
+      }
+    };
+    drain();
   },
 
   teardownGridStickyHeader() {

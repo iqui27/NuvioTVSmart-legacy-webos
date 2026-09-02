@@ -74,3 +74,25 @@ export function isHomePerfDebugEnabled() {
 export const HOME_MAX_ROWS_DEFAULT = 40;
 export const HOME_MAX_ROWS_CONSTRAINED = 24;
 export const HOME_MAX_ROWS_LEGACY_TV = 16;
+
+// Hidratacao de imagem na TV legada (ver scheduleHomeLazyImageHydration e
+// hydrateHomeLazyImages em homeScreen.js).
+//
+// Cada tecla agendava um rAF de hidratacao, entao uma descida de 12 toques
+// disparava 12 rajadas de decode DURANTE a navegacao. O fast-scroll ja suprimia
+// isso, mas so existe com a tecla mantida pressionada - toques discretos
+// passavam por fora. Estas constantes fecham esse furo.
+//
+// 180ms e o intervalo entre teclas de quem esta navegando de verdade; abaixo
+// disso o debounce nao junta nada, acima o poster demora a aparecer depois que
+// o dedo para. A fileira FOCADA nunca entra no debounce: ela hidrata no rAF
+// como antes, senao o cartao sob o foco fica cinza numa descida rapida, que e
+// regressao visivel e nao otimizacao.
+export const HOME_LAZY_HYDRATION_DEBOUNCE_MS = 180;
+
+// Teto de `src` atribuidos por quadro. Um lote de assentamento pode ter 8-11
+// imagens e cada decode custa ~41ms neste SoC: 8 x 41 = 328ms num unico quadro,
+// que e o pior quadro medido. Com 2 por quadro sao ~82ms, ainda acima de 16ms
+// (decodificar 375k pixels em 16ms nao existe neste hardware) mas fora da faixa
+// que o usuario le como travada; a fila esvazia em ~5 quadros.
+export const HOME_LAZY_HYDRATION_MAX_PER_FRAME = 2;
