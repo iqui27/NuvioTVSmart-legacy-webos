@@ -2766,7 +2766,15 @@ function renderContinueWatchingCard(item, index, options = {}) {
       hasAired
     }
   );
-  const uniqueCardImageSources = uniqueNonEmptyValues(cardImageSources);
+  // Medido na C9 nesta carta: a arte chegava do addon em w780 (780x439) para uma
+  // caixa que desenha 415x236 — 1,88x de largura, ~3,5x de pixel decodificado a
+  // toa — e quando a fonte era retrato vinha 500x750 para preencher a mesma
+  // caixa 16:9. Diferente dos posteres, este caminho nunca passava por
+  // tmdbImageAtSize: usava a URL como o addon mandou. w500 cobre 1,2x a largura
+  // desenhada, que e o teto util aqui.
+  const uniqueCardImageSources = uniqueNonEmptyValues(cardImageSources).map((source) =>
+    tmdbImageAtSize(source, "w500")
+  );
   const cardImage = uniqueCardImageSources[0] || "";
   const fallbackQueue = encodeHeroBackdropFallbacks(uniqueCardImageSources.slice(1));
   const deferContinueImage = getTvRuntimePerformanceProfile().isPerformanceConstrained;
@@ -11098,12 +11106,24 @@ export const HomeScreen = {
       }
       return;
     }
+    // Atribuir o src e barato; o que custa e o decode, e ele cai no quadro em que
+    // o compositor precisa pintar a imagem — exatamente o quadro da tecla. O
+    // perfil de CPU ja mostrava o thread principal ocioso com quadros de 200ms+,
+    // que e a assinatura de trabalho fora do JS.
+    //
+    // `decode()` (Chromium 64+, e esta TV e 68) faz esse trabalho fora do quadro
+    // e so entao a imagem entra pintada. Falha silenciosa de proposito: se a
+    // promessa rejeitar (imagem trocada, erro de rede) o `src` ja esta no
+    // elemento e o caminho normal de load/onerror continua valendo.
     const assign = (entry) => {
       const { image, src } = entry;
       if (!(image instanceof HTMLImageElement) || !image.isConnected) {
         return;
       }
       image.src = src;
+      if (typeof image.decode === "function") {
+        image.decode().catch(() => {});
+      }
     };
     if (!this.isLegacyTvRuntime() || queued.length <= HOME_LAZY_HYDRATION_MAX_PER_FRAME) {
       queued.forEach(assign);
