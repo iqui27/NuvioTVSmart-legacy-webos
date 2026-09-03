@@ -7,6 +7,7 @@ import { Platform } from "../../platform/index.js";
 import { getPluginCapabilitySnapshot } from "./pluginPolicy.js";
 import {
   canonicalizePluginUrl,
+  androidJsScraperId,
   isExecutablePluginRepository,
   isExecutableScraper,
   normalizeExternalRepositoryMetadata,
@@ -14,13 +15,12 @@ import {
   normalizePluginRepositoryType,
   normalizePluginState,
   pluginSupportsType,
-  repositoryIdForUrl,
+  randomPluginUuid,
   resolvePluginUrl,
   isPluginShortCode,
   isVideoEasyScraper,
   isExternalDexRepository,
   sanitizePluginRepositoryInput,
-  safePluginId,
   scraperIdForManifest,
   stablePluginHash,
   PLUGIN_REPOSITORY_TYPES
@@ -54,6 +54,67 @@ function withReconcileLock(task) {
 function currentState(profileId = null) {
   return normalizePluginState(profileId == null ? PluginStore.get() : PluginStore.get(profileId));
 }
+
+function diagnosticError(error) {
+  const details = {
+    name: String(error?.name || "Error"),
+    message: String(error?.message || error || "Unknown error")
+  };
+  if (error?.code) details.code = String(error.code);
+  if (error?.stack) details.stack = String(error.stack).slice(0, 1200);
+  return details;
+}
+
+function diagnosticUrl(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch (_) {
+    return raw.split(/[?#]/, 1)[0].slice(0, 240);
+  }
+}
+
+function diagnosticRepository(repository = {}) {
+  let keys = [];
+  try {
+    keys = Object.keys(repository).sort().slice(0, 40);
+  } catch (_) {
+    keys = [];
+  }
+  return {
+    id: repository?.id == null ? "" : String(repository.id).slice(0, 128),
+    name: repository?.name == null ? "" : String(repository.name).slice(0, 120),
+    url: diagnosticUrl(repository?.url || repository?.url_template || repository?.urlTemplate),
+    type: repository?.repoType ?? repository?.repo_type ?? repository?.type ?? null,
+    repoTypeDeclared: repository?.repoTypeDeclared === true,
+    enabled: repository?.enabled,
+    keys
+  };
+}
+
+function diagnosticState(state = {}) {
+  return {
+    syncDirty: state.syncDirty === true,
+    repositoryCount: Array.isArray(state.repositories) ? state.repositories.length : 0,
+    scraperCount: Array.isArray(state.scrapers) ? state.scrapers.length : 0,
+    unknownRemoteRowsCount: Array.isArray(state.unknownRemoteRows)
+      ? state.unknownRemoteRows.length
+      : 0,
+    repositories: (Array.isArray(state.repositories) ? state.repositories : [])
+      .slice(0, 64)
+      .map(diagnosticRepository),
+    unknownRemoteRows: (Array.isArray(state.unknownRemoteRows) ? state.unknownRemoteRows : [])
+      .slice(0, 64)
+      .map(diagnosticRepository)
+  };
+}
+
+// Keep the call sites inert in production. The user-facing test report remains
+// available through PluginManager.testScraper(), while startup/sync paths do
+// not emit verbose state snapshots.
+function logPluginDiagnostic() {}
 
 function canEdit(profileId = null) {
   return PluginStore.canEdit(profileId == null ? undefined : profileId);
@@ -262,10 +323,19 @@ async function mergeRepositoryScrapers(state, repository, manifest, profileId = 
   const previousByKey = new Map(
     previous.map((entry) => [`${entry.manifestId || entry.filename}`, entry])
   );
+  logPluginDiagnostic("JS repository scraper merge begin", {
+    profileId: profileId == null ? "" : String(profileId),
+    repository: diagnosticRepository(repository),
+    manifestScraperCount: Array.isArray(manifest?.scrapers) ? manifest.scrapers.length : 0,
+    previousScraperCount: previous.length
+  });
   const scrapers = await Promise.all(
     manifest.scrapers.map(async (entry) => {
-      const id = scraperIdForManifest(repository.id, entry.id, entry.filename);
       const old = previousByKey.get(`${entry.id}`) || previousByKey.get(`${entry.filename}`) || {};
+      // Android identifies a new Nuvio JS scraper as repository UUID plus
+      // manifest id. Keep an existing Smart id when refreshing so its code
+      // cache and per-scraper settings remain addressable.
+      const id = old.id || androidJsScraperId(repository.id, entry.id);
       return {
         ...entry,
         id,
@@ -286,6 +356,12 @@ async function mergeRepositoryScrapers(state, repository, manifest, profileId = 
       };
     })
   );
+  logPluginDiagnostic("JS repository scraper merge complete", {
+    profileId: profileId == null ? "" : String(profileId),
+    repository: diagnosticRepository(repository),
+    scraperCount: scrapers.length,
+    cachedScraperCount: scrapers.filter((entry) => entry.codeAvailable).length
+  });
   return {
     ...state,
     repositories: [
@@ -465,16 +541,35 @@ async function classifyRemoteRepository(remote, quota) {
     declaredTypeValue,
     PLUGIN_REPOSITORY_TYPES.UNKNOWN
   );
+  logPluginDiagnostic("repository classification begin", {
+    remote: diagnosticRepository(remote),
+    canonicalUrl: diagnosticUrl(url),
+    declaredType: declaredTypeValue == null ? null : String(declaredTypeValue),
+    normalizedType: explicitType,
+    hasExplicitType
+  });
   // The extension is an unambiguous CloudStream binary marker. Even a stale
   // or malicious cloud row claiming NUVIO_JS must never make Web TV fetch it
   // as a JavaScript manifest.
   if (/\.cs3(?:$|[?#])/i.test(url)) {
-    return { type: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX, url };
+    const result = { type: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX, url };
+    logPluginDiagnostic("repository classified", {
+      stage: "cs3-extension",
+      input: diagnosticRepository(remote),
+      result: { type: result.type, url: diagnosticUrl(result.url) }
+    });
+    return result;
   }
   // A future/unknown explicit enum is not safe to reinterpret from its URL or
   // document. Preserve it as an opaque row until a client understands it.
   if (hasExplicitType && explicitType === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
-    return { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
+    const result = { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
+    logPluginDiagnostic("repository classified", {
+      stage: "explicit-unknown-type",
+      input: diagnosticRepository(remote),
+      result: { type: result.type, url: diagnosticUrl(result.url) }
+    });
+    return result;
   }
   if (explicitType !== PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
     if (
@@ -490,30 +585,64 @@ async function classifyRemoteRepository(remote, quota) {
         const manifest = normalizePluginManifest(loaded.document, loaded.sourceUrl);
         const metadata = await loadExternalMetadata(loaded.document, loaded.sourceUrl, quota);
         if (preferExternal && metadata) {
-          return {
+          const result = {
             type: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX,
             url,
             document: loaded.document,
             metadata
           };
+          logPluginDiagnostic("repository classified", {
+            stage: "typed-document-external",
+            input: diagnosticRepository(remote),
+            result: {
+              type: result.type,
+              url: diagnosticUrl(result.url),
+              sourceUrl: diagnosticUrl(loaded.sourceUrl)
+            }
+          });
+          return result;
         }
         if (manifest && Array.isArray(loaded.document?.scrapers)) {
-          return {
+          const result = {
             type: PLUGIN_REPOSITORY_TYPES.NUVIO_JS,
             url: loaded.sourceUrl,
             document: loaded.document,
             manifest
           };
+          logPluginDiagnostic("repository classified", {
+            stage: "typed-document-js",
+            input: diagnosticRepository(remote),
+            result: {
+              type: result.type,
+              url: diagnosticUrl(result.url),
+              sourceUrl: diagnosticUrl(loaded.sourceUrl)
+            }
+          });
+          return result;
         }
         if (metadata) {
-          return {
+          const result = {
             type: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX,
             url,
             document: loaded.document,
             metadata
           };
+          logPluginDiagnostic("repository classified", {
+            stage: "typed-document-metadata",
+            input: diagnosticRepository(remote),
+            result: {
+              type: result.type,
+              url: diagnosticUrl(result.url),
+              sourceUrl: diagnosticUrl(loaded.sourceUrl)
+            }
+          });
+          return result;
         }
       } catch (error) {
+        logPluginDiagnostic("typed repository classification failed", {
+          input: diagnosticRepository(remote),
+          error: diagnosticError(error)
+        });
         console.warn(
           "Typed plugin repository detection failed; falling back to auto-detection:",
           error
@@ -524,7 +653,13 @@ async function classifyRemoteRepository(remote, quota) {
       explicitType !== PLUGIN_REPOSITORY_TYPES.NUVIO_JS &&
       explicitType !== PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
     ) {
-      return { type: explicitType, url };
+      const result = { type: explicitType, url };
+      logPluginDiagnostic("repository classified", {
+        stage: "explicit-non-executable-type",
+        input: diagnosticRepository(remote),
+        result: { type: result.type, url: diagnosticUrl(result.url) }
+      });
+      return result;
     }
   }
   try {
@@ -533,37 +668,85 @@ async function classifyRemoteRepository(remote, quota) {
     const manifest = normalizePluginManifest(loaded.document, loaded.sourceUrl);
     const external = await loadExternalMetadata(loaded.document, loaded.sourceUrl, quota);
     if (preferExternal && external) {
-      return {
+      const result = {
         type: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX,
         url,
         document: loaded.document,
         metadata: external
       };
+      logPluginDiagnostic("repository classified", {
+        stage: "auto-document-external",
+        input: diagnosticRepository(remote),
+        result: {
+          type: result.type,
+          url: diagnosticUrl(result.url),
+          sourceUrl: diagnosticUrl(loaded.sourceUrl)
+        }
+      });
+      return result;
     }
     if (manifest && Array.isArray(loaded.document?.scrapers)) {
-      return {
+      const result = {
         type: PLUGIN_REPOSITORY_TYPES.NUVIO_JS,
         url: loaded.sourceUrl,
         document: loaded.document,
         manifest
       };
+      logPluginDiagnostic("repository classified", {
+        stage: "auto-document-js",
+        input: diagnosticRepository(remote),
+        result: {
+          type: result.type,
+          url: diagnosticUrl(result.url),
+          sourceUrl: diagnosticUrl(loaded.sourceUrl)
+        }
+      });
+      return result;
     }
     if (external) {
-      return {
+      const result = {
         type: PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX,
         url,
         document: loaded.document,
         metadata: external
       };
+      logPluginDiagnostic("repository classified", {
+        stage: "auto-document-metadata",
+        input: diagnosticRepository(remote),
+        result: {
+          type: result.type,
+          url: diagnosticUrl(result.url),
+          sourceUrl: diagnosticUrl(loaded.sourceUrl)
+        }
+      });
+      return result;
     }
   } catch (error) {
+    logPluginDiagnostic("repository auto-classification failed", {
+      input: diagnosticRepository(remote),
+      error: diagnosticError(error)
+    });
     console.warn("Plugin repository type detection failed:", error);
   }
-  return { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
+  const result = { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
+  logPluginDiagnostic("repository classified", {
+    stage: "unknown",
+    input: diagnosticRepository(remote),
+    result: { type: result.type, url: diagnosticUrl(result.url) }
+  });
+  return result;
 }
 
 async function downloadCode(scraper, repository, quota, profileId = null) {
   const existing = await PluginCodeStore.get(scraper.id, profileId);
+  logPluginDiagnostic("plugin code download begin", {
+    profileId: profileId == null ? "" : String(profileId),
+    repository: diagnosticRepository(repository),
+    scraperId: String(scraper?.id || "").slice(0, 128),
+    scraperName: String(scraper?.name || "").slice(0, 120),
+    codeUrl: diagnosticUrl(scraper?.codeUrl),
+    cachedCode: Boolean(existing?.code)
+  });
   try {
     const response = await PluginServiceClient.fetch({
       url: scraper.codeUrl,
@@ -587,8 +770,24 @@ async function downloadCode(scraper, repository, quota, profileId = null) {
     ) {
       throw new Error("Plugin code cache quota exceeded");
     }
+    logPluginDiagnostic("plugin code download success", {
+      profileId: profileId == null ? "" : String(profileId),
+      repositoryId: String(repository?.id || "").slice(0, 128),
+      scraperId: String(scraper?.id || "").slice(0, 128),
+      httpStatus: response.status,
+      bodyBytes: response.body.length,
+      cachedCode: true
+    });
     return true;
   } catch (error) {
+    logPluginDiagnostic("plugin code download failed", {
+      profileId: profileId == null ? "" : String(profileId),
+      repositoryId: String(repository?.id || "").slice(0, 128),
+      scraperId: String(scraper?.id || "").slice(0, 128),
+      codeUrl: diagnosticUrl(scraper?.codeUrl),
+      cachedCode: Boolean(existing?.code),
+      error: diagnosticError(error)
+    });
     console.warn(`Plugin code download failed for ${repository.name}/${scraper.name}:`, error);
     return Boolean(existing?.code);
   }
@@ -604,6 +803,13 @@ async function hydrateJsRepository(
   const previousIds = state.scrapers
     .filter((entry) => entry.repositoryId === repository.id)
     .map((entry) => entry.id);
+  logPluginDiagnostic("JS repository hydration begin", {
+    profileId: profileId == null ? "" : String(profileId),
+    repository: diagnosticRepository(repository),
+    manifestScraperCount: Array.isArray(manifest?.scrapers) ? manifest.scrapers.length : 0,
+    previousScraperCount: previousIds.length,
+    markDirty
+  });
   let next = await mergeRepositoryScrapers(state, repository, manifest, profileId);
   const nextIds = new Set(
     next.scrapers.filter((entry) => entry.repositoryId === repository.id).map((entry) => entry.id)
@@ -612,7 +818,16 @@ async function hydrateJsRepository(
     previousIds.filter((id) => !nextIds.has(id)).map((id) => PluginCodeStore.remove(id, profileId))
   );
   const hydrated = [];
-  for (const scraper of next.scrapers.filter((entry) => entry.repositoryId === repository.id)) {
+  const repositoryScrapers = next.scrapers.filter((entry) => entry.repositoryId === repository.id);
+  logPluginDiagnostic("JS repository code hydration begin", {
+    profileId: profileId == null ? "" : String(profileId),
+    repository: diagnosticRepository(repository),
+    scraperCount: repositoryScrapers.length,
+    removedCachedScraperCount: previousIds.filter(
+      (id) => !repositoryScrapers.some((entry) => entry.id === id)
+    ).length
+  });
+  for (const scraper of repositoryScrapers) {
     const codeAvailable = await downloadCode(scraper, repository, quota, profileId);
     hydrated.push({ ...scraper, codeAvailable });
   }
@@ -624,7 +839,16 @@ async function hydrateJsRepository(
     ],
     syncDirty: markDirty || next.syncDirty
   };
-  return normalizePluginState(next);
+  const normalized = normalizePluginState(next);
+  logPluginDiagnostic("JS repository hydration complete", {
+    profileId: profileId == null ? "" : String(profileId),
+    repository: diagnosticRepository(repository),
+    scraperCount: hydrated.length,
+    codeAvailableCount: hydrated.filter((entry) => entry.codeAvailable).length,
+    codeMissingCount: hydrated.filter((entry) => !entry.codeAvailable).length,
+    ...diagnosticState(normalized)
+  });
+  return normalized;
 }
 
 function externalScrapers(repository, metadata) {
@@ -747,10 +971,9 @@ function createRemoteStub(remote = {}) {
     PLUGIN_REPOSITORY_TYPES.UNKNOWN
   );
   const type = /\.cs3(?:$|[?#])/i.test(url) ? PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX : declaredType;
-  // A repository URL is the portable identity shared by Android, Web and the
-  // cloud row. Do not let a database row id or a remote display id create
-  // cross-device cache collisions.
-  const id = repositoryIdForUrl(url) || safePluginId(remote.id, "repository");
+  // Android assigns a random UUID to each newly discovered local repository.
+  // The URL remains the duplicate/reconciliation key; it is not the local id.
+  const id = randomPluginUuid();
   return {
     id,
     name: String(
@@ -850,7 +1073,7 @@ async function executeOne(
               settings: executionSettings,
               args,
               quota,
-              timeoutMs: quota.globalTimeoutMs,
+              timeoutMs: quota.providerTimeoutMs,
               signal: executionSignal
             }),
           quota,
@@ -913,8 +1136,18 @@ export const PluginManager = {
 
   async ensureRuntime() {
     const capabilities = getPluginCapabilitySnapshot();
+    logPluginDiagnostic("runtime ensure begin", {
+      platform: capabilities.platform,
+      candidate: capabilities.candidate,
+      executable: capabilities.executable,
+      reason: capabilities.reason,
+      pluginServicePackaged: capabilities.pluginServicePackaged,
+      tizenVersion: capabilities.tizenVersion || "",
+      chromiumMajorVersion: capabilities.chromiumMajorVersion || 0
+    });
     if (!capabilities.candidate) {
       markRuntime("unsupported", capabilities.reason);
+      logPluginDiagnostic("runtime ensure skipped", { reason: capabilities.reason });
       throw new Error(capabilities.reason);
     }
     if (!runtimeReadyPromise) {
@@ -925,11 +1158,17 @@ export const PluginManager = {
       ])
         .then(() => {
           markRuntime("ready", "");
+          logPluginDiagnostic("runtime ensure success", {
+            platform: capabilities.platform,
+            memoryBudget: quota.memoryLimitBytes,
+            maxConcurrent: quota.maxConcurrent
+          });
           return true;
         })
         .catch((error) => {
           runtimeReadyPromise = null;
           markRuntime("error", error?.message || error);
+          logPluginDiagnostic("runtime ensure failed", { error: diagnosticError(error) });
           throw error;
         });
     }
@@ -1110,7 +1349,7 @@ export const PluginManager = {
       const repository = {
         ...(state.repositories.find((entry) => entry.url === canonicalizePluginUrl(sourceUrl)) ||
           {}),
-        id: repositoryIdForUrl(sourceUrl),
+        id: randomPluginUuid(),
         name: manifest.name,
         url: canonicalizePluginUrl(sourceUrl),
         description: manifest.description,
@@ -1376,6 +1615,16 @@ export const PluginManager = {
         );
       const state = currentState(targetProfileId);
       let reconciliationRevision = PluginStore.getRevision(targetProfileId);
+      logPluginDiagnostic("reconcile begin", {
+        targetProfileId: String(targetProfileId),
+        removeMissingLocal,
+        authoritativeSnapshot,
+        expectedRevision,
+        reconciliationRevision,
+        incomingCount: incoming.length,
+        incoming: incoming.slice(0, 64).map(diagnosticRepository),
+        ...diagnosticState(state)
+      });
       const reconcileRevisionChanges = () => {
         const current = currentState(targetProfileId);
         const currentRevision = PluginStore.getRevision(targetProfileId);
@@ -1392,27 +1641,58 @@ export const PluginManager = {
         return true;
       };
       if (expectedRevision != null && reconciliationRevision !== Number(expectedRevision)) {
+        logPluginDiagnostic("reconcile skipped", {
+          targetProfileId: String(targetProfileId),
+          reason: "revision mismatch",
+          expectedRevision,
+          reconciliationRevision
+        });
         return state;
       }
       // Match Android's empty-snapshot guard: an empty successful response is
       // not evidence that the local profile should be cleared.
-      if (!incoming.length) return state;
+      if (!incoming.length) {
+        logPluginDiagnostic("reconcile skipped", {
+          targetProfileId: String(targetProfileId),
+          reason: "empty remote snapshot"
+        });
+        return state;
+      }
       let next = { ...state };
       const unknownRemoteRows = [];
       for (const remote of incoming) {
+        logPluginDiagnostic("reconcile repository begin", {
+          targetProfileId: String(targetProfileId),
+          remote: diagnosticRepository(remote)
+        });
         const remoteIdentity = repositoryIdentity(remote.url);
         const existingByRemoteIdentity = next.repositories.find(
           (entry) => repositoryIdentity(entry.url) === remoteIdentity
         );
-        // Android trusts the typed row for repositories it already knows. Do
-        // the same so every pull does not re-download each manifest just to
-        // rediscover a type that Supabase already supplied.
+        // Android keeps an existing repository and its cached scrapers when an
+        // old cloud row does not declare repo_type. Do the same: a missing type
+        // is not evidence that a known local repository should be classified
+        // again, and classification would start the PluginService during sync.
         const typeHint = remoteRepositoryTypeHint(remote);
         const detected =
-          existingByRemoteIdentity && typeHint !== null
-            ? { type: typeHint, url: remote.url }
-            : await classifyRemoteRepository(remote, quotaFor());
+          existingByRemoteIdentity && typeHint === null
+            ? { type: existingByRemoteIdentity.type, url: existingByRemoteIdentity.url }
+            : existingByRemoteIdentity && typeHint !== null
+              ? { type: typeHint, url: remote.url }
+              : await classifyRemoteRepository(remote, quotaFor());
         const type = detected.type;
+        logPluginDiagnostic("reconcile repository detected", {
+          targetProfileId: String(targetProfileId),
+          remote: diagnosticRepository(remote),
+          existing: existingByRemoteIdentity
+            ? diagnosticRepository(existingByRemoteIdentity)
+            : null,
+          typeHint,
+          detectedType: type,
+          detectedUrl: diagnosticUrl(detected.url),
+          hasManifest: Boolean(detected.manifest),
+          hasMetadata: Boolean(detected.metadata)
+        });
         const detectedRemote = { ...remote, url: detected.url || remote.url, repoType: type };
         const detectedIdentity = repositoryIdentity(detectedRemote.url);
         const existing = next.repositories.find((entry) => {
@@ -1425,6 +1705,13 @@ export const PluginManager = {
         if (existing) {
           if (type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
             unknownRemoteRows.push(remote.raw || remote);
+            logPluginDiagnostic("reconcile repository kept opaque", {
+              targetProfileId: String(targetProfileId),
+              reason: "unknown type for existing repository",
+              repository: diagnosticRepository(existing),
+              remote: diagnosticRepository(remote),
+              unknownRemoteRowsCount: unknownRemoteRows.length
+            });
             continue;
           }
           if (
@@ -1472,6 +1759,12 @@ export const PluginManager = {
                 targetProfileId
               );
             } catch (error) {
+              logPluginDiagnostic("JS repository rehydration failed", {
+                targetProfileId: String(targetProfileId),
+                repository: diagnosticRepository(existing),
+                remote: diagnosticRepository(remote),
+                error: diagnosticError(error)
+              });
               console.warn("Plugin sync JS repository rehydration failed:", error);
             }
           }
@@ -1480,6 +1773,12 @@ export const PluginManager = {
         if (type === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
           unknownRemoteRows.push(remote.raw || remote);
           next.repositories = [...next.repositories, createRemoteStub(detectedRemote)];
+          logPluginDiagnostic("reconcile repository kept opaque", {
+            targetProfileId: String(targetProfileId),
+            reason: "unknown type for new repository",
+            remote: diagnosticRepository(remote),
+            unknownRemoteRowsCount: unknownRemoteRows.length
+          });
           continue;
         }
         if (type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS) {
@@ -1502,6 +1801,11 @@ export const PluginManager = {
                 { profileId: targetProfileId }
               );
           } catch (error) {
+            logPluginDiagnostic("JS repository hydration failed", {
+              targetProfileId: String(targetProfileId),
+              remote: diagnosticRepository(remote),
+              error: diagnosticError(error)
+            });
             console.warn("Plugin sync JS repository hydration failed:", error);
             next.repositories = [
               ...next.repositories,
@@ -1527,7 +1831,14 @@ export const PluginManager = {
       // A local add/remove/toggle may have happened while a remote manifest was
       // being hydrated. Never commit the stale working copy over that newer
       // local state; the caller will flush its pending dirty snapshot instead.
-      if (!reconcileRevisionChanges()) return next;
+      if (!reconcileRevisionChanges()) {
+        logPluginDiagnostic("reconcile stopped", {
+          targetProfileId: String(targetProfileId),
+          reason: "local revision changed during hydration",
+          ...diagnosticState(next)
+        });
+        return next;
+      }
       if (removeMissingLocal && incoming.length) {
         const remoteIdentities = new Set(incoming.map((entry) => repositoryIdentity(entry.url)));
         const removed = next.repositories.filter(
@@ -1571,7 +1882,14 @@ export const PluginManager = {
         (repo) =>
           !incoming.some((entry) => repositoryIdentity(entry.url) === repositoryIdentity(repo.url))
       );
-      if (!reconcileRevisionChanges()) return next;
+      if (!reconcileRevisionChanges()) {
+        logPluginDiagnostic("reconcile stopped", {
+          targetProfileId: String(targetProfileId),
+          reason: "local revision changed before commit",
+          ...diagnosticState(next)
+        });
+        return next;
+      }
       const preservedUnknownRows = authoritativeSnapshot
         ? unknownRemoteRows
         : [...state.unknownRemoteRows, ...unknownRemoteRows];
@@ -1594,7 +1912,13 @@ export const PluginManager = {
         },
         targetProfileId
       );
-      return PluginStore.get(targetProfileId);
+      const committed = PluginStore.get(targetProfileId);
+      logPluginDiagnostic("reconcile committed", {
+        targetProfileId: String(targetProfileId),
+        preservedUnknownRows: preservedUnknownRows.length,
+        ...diagnosticState(committed)
+      });
+      return committed;
     });
   },
 

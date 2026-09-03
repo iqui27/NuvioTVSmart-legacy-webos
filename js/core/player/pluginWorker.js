@@ -58,6 +58,7 @@ function cheerioBridge(execution, maxDocuments = 4, maxElements = 10000) {
   }
   function textFor(documentId, ids) {
     var root = documents.get(documentId);
+    if (!root) return "";
     // Jsoup's Element.text()/Elements.text() collapses runs of whitespace and
     // trims the resulting text. Cheerio leaves those runs intact, which is a
     // visible difference for title selectors used by Android providers.
@@ -71,30 +72,44 @@ function cheerioBridge(execution, maxDocuments = 4, maxElements = 10000) {
   }
   function nodeHtml(documentId, id) {
     var root = documents.get(documentId);
+    if (!root) return "";
     var entry = getElement(id);
-    return entry ? root(entry.node).html() || "" : root.html() || "";
+    if (id) return entry ? root(entry.node).html() || "" : "";
+    return root.html() || "";
   }
   function invoke(name, args) {
     switch (name) {
       case "load":
         return createDocument(args[0]);
       case "select": {
-        var root = documents.get(args[0]);
-        return JSON.stringify(idsFor(args[0], root(args[1] || "").toArray()));
+        try {
+          var root = documents.get(args[0]);
+          if (!root) return "[]";
+          return JSON.stringify(idsFor(args[0], root(args[1] || "").toArray()));
+        } catch (_) {
+          // Jsoup's Android bridge converts an invalid selector into an empty
+          // selection. Keep the Cheerio compatibility bridge non-throwing too.
+          return "[]";
+        }
       }
       case "find": {
-        var findRoot = documents.get(args[0]);
-        var findEntry = getElement(args[1]);
-        return JSON.stringify(
-          idsFor(
-            args[0],
-            findEntry
-              ? findRoot(findEntry.node)
-                  .find(args[2] || "")
-                  .toArray()
-              : []
-          )
-        );
+        try {
+          var findRoot = documents.get(args[0]);
+          var findEntry = getElement(args[1]);
+          if (!findRoot) return "[]";
+          return JSON.stringify(
+            idsFor(
+              args[0],
+              findEntry
+                ? findRoot(findEntry.node)
+                    .find(args[2] || "")
+                    .toArray()
+                : []
+            )
+          );
+        } catch (_) {
+          return "[]";
+        }
       }
       case "text":
         return textFor(
@@ -108,54 +123,69 @@ function cheerioBridge(execution, maxDocuments = 4, maxElements = 10000) {
       case "innerHtml": {
         var innerRoot = documents.get(args[0]);
         var inner = getElement(args[1]);
-        return inner ? innerRoot(inner.node).html() || "" : "";
+        return innerRoot && inner ? innerRoot(inner.node).html() || "" : "";
       }
       case "attr": {
         var attrRoot = documents.get(args[0]);
         var attr = getElement(args[1]);
-        if (!attr) return "__UNDEFINED__";
+        if (!attrRoot || !attr) return "__UNDEFINED__";
         var attrValue = attrRoot(attr.node).attr(args[2]);
         return attrValue == null || attrValue === "" ? "__UNDEFINED__" : String(attrValue);
       }
       case "next": {
         var nextEntry = getElement(args[1]);
-        if (!nextEntry) return "__NONE__";
-        var nextNode = documents.get(args[0])(nextEntry.node).next().get(0);
+        var nextRoot = documents.get(args[0]);
+        if (!nextRoot || !nextEntry) return "__NONE__";
+        var nextNode = nextRoot(nextEntry.node).next().get(0);
         return nextNode ? createElement(args[0], nextNode) || "__NONE__" : "__NONE__";
       }
       case "prev": {
         var prevEntry = getElement(args[1]);
-        if (!prevEntry) return "__NONE__";
-        var prevNode = documents.get(args[0])(prevEntry.node).prev().get(0);
+        var prevRoot = documents.get(args[0]);
+        if (!prevRoot || !prevEntry) return "__NONE__";
+        var prevNode = prevRoot(prevEntry.node).prev().get(0);
         return prevNode ? createElement(args[0], prevNode) || "__NONE__" : "__NONE__";
       }
       case "parent": {
         var parentEntry = getElement(args[1]);
-        if (!parentEntry) return "__NONE__";
-        var parentNode = documents.get(args[0])(parentEntry.node).parent().get(0);
+        var parentRoot = documents.get(args[0]);
+        if (!parentRoot || !parentEntry) return "__NONE__";
+        var parentNode = parentRoot(parentEntry.node).parent().get(0);
         return parentNode ? createElement(args[0], parentNode) || "__NONE__" : "__NONE__";
       }
-      case "children":
-        return JSON.stringify(
-          idsFor(args[0], documents.get(args[0])(getElement(args[1])?.node).children().toArray())
-        );
+      case "children": {
+        try {
+          var childrenRoot = documents.get(args[0]);
+          var childrenEntry = getElement(args[1]);
+          if (!childrenRoot || !childrenEntry) return "[]";
+          return JSON.stringify(
+            idsFor(args[0], childrenRoot(childrenEntry.node).children().toArray())
+          );
+        } catch (_) {
+          return "[]";
+        }
+      }
       case "filter":
-        return JSON.stringify(
-          idsFor(
-            args[0],
-            documents
-              .get(args[0])(
-                selection(
-                  args[0],
-                  String(args[1] || "")
-                    .split(",")
-                    .filter(Boolean)
+        try {
+          return JSON.stringify(
+            idsFor(
+              args[0],
+              documents
+                .get(args[0])(
+                  selection(
+                    args[0],
+                    String(args[1] || "")
+                      .split(",")
+                      .filter(Boolean)
+                  )
                 )
-              )
-              .filter(args[2] || "")
-              .toArray()
-          )
-        );
+                .filter(args[2] || "")
+                .toArray()
+            )
+          );
+        } catch (_) {
+          return "[]";
+        }
       case "eq": {
         var eqIds = String(args[1] || "")
           .split(",")
@@ -463,7 +493,7 @@ async function resolveGuestPromise(context, runtime, handle, timeoutMs) {
 async function execute(message) {
   importScripts("../libs/quickjs-emscripten.global.js");
   var QJS = workerScope.QJS;
-  if (!QJS || typeof QJS.newAsyncContext !== "function")
+  if (!QJS || typeof QJS.getQuickJS !== "function")
     throw new Error("QuickJS WASM asset unavailable");
   var request = message || {};
   var quota = request.quota || {};
@@ -477,9 +507,16 @@ async function execute(message) {
     rejectPending: null
   };
   activeExecution = execution;
-  var context = await QJS.newAsyncContext({
-    // Eval is required by quickjs-emscripten's evalCode/evalCodeAsync host
-    // APIs and remains available to the guest, as it does on Android.
+  // The network bridge returns a QuickJS promise immediately and resolves it
+  // from the Worker message loop. It never suspends a synchronous QuickJS C
+  // callback on a native JS promise, so Asyncify is unnecessary here. Keep
+  // the VM on the regular QuickJS module, as Android does, and drive promise
+  // jobs explicitly in resolveGuestPromise(). This avoids Asyncify re-entry
+  // and its smaller/less predictable host stack on Tizen Web Workers.
+  var quickJS = await QJS.getQuickJS();
+  var context = quickJS.newContext({
+    // Eval is required by quickjs-emscripten's evalCode host API and remains
+    // available to the guest, as it does on Android.
     intrinsics: {
       BaseObjects: true,
       Date: true,
@@ -497,7 +534,9 @@ async function execute(message) {
   var runtime = context.runtime;
   execution.context = context;
   runtime.setMemoryLimit?.(Number(quota.memoryLimitBytes || 32 * 1024 * 1024));
-  runtime.setMaxStackSize?.(512 * 1024);
+  // Keep QuickJS's compiled default stack policy, as Android does. The old
+  // 512 KiB override was a stricter Tizen-only limit and caused compatible
+  // Nuvio JS providers to fail with "Maximum call stack size exceeded".
   var deadline = Number(request.deadline) || Date.now() + Number(request.timeoutMs || 60000);
   runtime.setInterruptHandler?.(() => Date.now() > deadline);
 
@@ -612,7 +651,7 @@ async function execute(message) {
   });
   nativeFetch.consume((value) => context.setProp(context.global, "__native_fetch", value));
   var polyfill = pluginPolyfill();
-  var polyfillResult = await context.evalCodeAsync(polyfill, "nuvio-plugin-polyfill.js");
+  var polyfillResult = context.evalCode(polyfill, "nuvio-plugin-polyfill.js");
   context.unwrapResult(polyfillResult).dispose();
   var cryptoJsSource =
     typeof __NUVIO_CRYPTO_JS_SOURCE__ === "string" ? __NUVIO_CRYPTO_JS_SOURCE__ : "";
@@ -621,13 +660,13 @@ async function execute(message) {
   // standard polyfill. Keep the same bootstrap: with no CommonJS module
   // globals present, the source installs itself on the global object and the
   // Android-compatible require shim returns that exact object.
-  var cryptoJsResult = await context.evalCodeAsync(
+  var cryptoJsResult = context.evalCode(
     cryptoJsSource +
       "\nif (!globalThis.CryptoJS) throw new Error('CryptoJS global unavailable'); true;",
     "crypto-js.js"
   );
   context.unwrapResult(cryptoJsResult).dispose();
-  var bridgeCleanup = await context.evalCodeAsync(
+  var bridgeCleanup = context.evalCode(
     '["__native_fetch","__native_cancel","__parse_url","__get_scraper_id","__get_scraper_settings","__get_tmdb_api_key","__cheerio_load","__cheerio_select","__cheerio_find","__cheerio_text","__cheerio_html","__cheerio_innerHtml","__cheerio_attr","__cheerio_next","__cheerio_prev","__cheerio_parent","__cheerio_children","__cheerio_filter","__cheerio_eq"].forEach(function(name){ try { globalThis[name] = undefined; delete globalThis[name]; } catch (_) {} }); true;',
     "nuvio-plugin-bridge-cleanup.js"
   );
@@ -639,23 +678,52 @@ async function execute(message) {
       : unescape(encodeURIComponent(source)).length;
   if (sourceBytes > Number(quota.maxCodeBytes || 1024 * 1024))
     throw new Error("Plugin code exceeds quota");
-  var moduleResult = await context.evalCodeAsync(
+  var moduleResult = context.evalCode(
     "var module = { exports: {} }; var exports = module.exports; (function(){\n" +
       source +
       "\n})(); globalThis.__pluginModuleExports = module.exports;",
     String(request.filename || "plugin.js")
   );
   context.unwrapResult(moduleResult).dispose();
-  var callResult = await context.evalCodeAsync(
-    "(async function(){ var exported = globalThis.__pluginModuleExports || {}; var fn = exported.getStreams || globalThis.getStreams; if (typeof fn !== 'function') throw new Error('getStreams function not found'); var args = " +
-      JSON.stringify(request.args || {}) +
-      "; var value = await fn(args.tmdbId, args.mediaType, args.season, args.episode); return JSON.stringify(Array.isArray(value) ? value : []); })()",
-    "nuvio-plugin-call.js"
-  );
-  var callHandle = context.unwrapResult(callResult);
+  var callHandle;
+  try {
+    var callResult = context.evalCode(
+      "(async function(){ try { var exported = globalThis.__pluginModuleExports || {}; var fn = exported.getStreams || globalThis.getStreams; if (typeof fn !== 'function') return JSON.stringify([]); var args = " +
+        JSON.stringify(request.args || {}) +
+        "; var value = await fn(args.tmdbId, args.mediaType, args.season, args.episode); return JSON.stringify(Array.isArray(value) ? value : []); } catch (_) { return JSON.stringify([]); } })()",
+      "nuvio-plugin-call.js"
+    );
+    callHandle = context.unwrapResult(callResult);
+  } catch (_) {
+    // A synchronous provider failure can be reported by QuickJS while
+    // evaluating the async call expression itself (before a Promise handle is
+    // returned). It is still an exception of getStreams and follows Android's
+    // empty-result contract.
+    execution.cleanup();
+    activeExecution = null;
+    send({ type: "result", results: [] });
+    return;
+  }
   var resolvedCallResult;
   try {
-    resolvedCallResult = await resolveGuestPromise(context, runtime, callHandle, request.timeoutMs);
+    try {
+      resolvedCallResult = await resolveGuestPromise(
+        context,
+        runtime,
+        callHandle,
+        request.timeoutMs
+      );
+    } catch (_) {
+      // Android's PluginRuntime catches every exception raised by getStreams,
+      // including QuickJS pending-job failures such as a provider stack
+      // overflow, and reports an empty result to the manager. Keep bootstrap
+      // and module-evaluation failures above as real worker errors; this
+      // boundary covers only the provider call itself.
+      execution.cleanup();
+      activeExecution = null;
+      send({ type: "result", results: [] });
+      return;
+    }
   } finally {
     callHandle.dispose();
   }

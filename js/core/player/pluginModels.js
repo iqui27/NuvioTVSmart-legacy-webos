@@ -260,8 +260,54 @@ export function safePluginId(value, fallback = "plugin", maxLength = 128) {
   return normalized || fallback;
 }
 
+export function randomPluginUuid() {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") {
+    try {
+      return cryptoApi.randomUUID();
+    } catch (_) {
+      // Fall through to the portable UUID implementation below.
+    }
+  }
+
+  const bytes = new Uint8Array(16);
+  if (typeof cryptoApi?.getRandomValues === "function") {
+    try {
+      cryptoApi.getRandomValues(bytes);
+    } catch (_) {
+      // Some older TV WebViews expose crypto but not getRandomValues.
+    }
+  }
+  for (let index = 0; index < bytes.length; index += 1) {
+    if (bytes[index] === 0) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20)
+  ].join("-");
+}
+
 export function repositoryIdForUrl(url) {
   return `repo_${stablePluginHash(canonicalizePluginUrl(url))}`;
+}
+
+/**
+ * Android's Nuvio JS scraper identity is the local repository UUID followed
+ * by the manifest provider id. Keep this separate from the legacy deterministic
+ * helper used when normalizing old Smart state.
+ */
+export function androidJsScraperId(repositoryId, manifestId) {
+  const repository = String(repositoryId || "").trim() || "repository";
+  const provider = String(manifestId || "").trim() || "scraper";
+  return `${repository}:${provider}`;
 }
 
 export function scraperIdForManifest(repositoryId, manifestId, filename = "scraper") {
@@ -514,23 +560,19 @@ export function normalizePluginState(raw) {
             return null;
           }
           scraperIdentityKeys.add(identityKey);
-          let id = safePluginId(
-            entry.id,
-            scraperIdForManifest(
-              repositoryId,
-              identity,
-              entry.filename || entry.sourceUrl || "scraper"
-            )
-          );
+          // Preserve persisted IDs verbatim because they key the code and
+          // settings stores. Newly normalized rows use Android's JS identity;
+          // deterministic fallback IDs remain only for legacy repositories
+          // whose data predates the Android-compatible identity.
+          let id = text(entry.id) || androidJsScraperId(repositoryId, identity);
           if (scraperById.has(id)) {
-            id = scraperIdForManifest(
+            id = androidJsScraperId(
               repositoryId,
-              identity,
-              entry.filename || entry.sourceUrl || "scraper"
+              `${identity}_${stablePluginHash(JSON.stringify(entry))}`
             );
           }
           if (scraperById.has(id)) {
-            id = safePluginId(`${id}_${stablePluginHash(JSON.stringify(entry))}`, "scraper");
+            id = `${id}_${stablePluginHash(JSON.stringify(entry))}`;
           }
           const repository = repositories.find((candidate) => candidate.id === repositoryId);
           const repositoryType = repository?.type || PLUGIN_REPOSITORY_TYPES.NUVIO_JS;

@@ -10,6 +10,8 @@ try {
 var pluginHttp = require("../../../services/plugin-http.cjs");
 var SERVICE_ID = "space.nuvio.webos.plugin.service";
 var PLUGIN_SERVICE_PORT = 2721;
+var MAX_ACTIVE_REQUESTS = 10;
+var MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 var service = new Service(SERVICE_ID);
 var server = pluginHttp.createPluginHttpServer({ port: PLUGIN_SERVICE_PORT });
 
@@ -47,10 +49,10 @@ service.register("ping", function (message) {
             runtimeVersion: "nuvio-plugin-network/1",
             quickjsVersion: "quickjs-emscripten/0.32.0 (app-worker)",
             workerSupport: true,
-            maxConcurrency: 2,
+            maxConcurrency: MAX_ACTIVE_REQUESTS,
             memoryTier: "bounded",
             defaultResponseBytes: 1024 * 1024,
-            maxResponseBytes: 2 * 1024 * 1024,
+            maxResponseBytes: MAX_RESPONSE_BYTES,
             jsPluginCapability: true,
             networkBoundary: true,
             port: PLUGIN_SERVICE_PORT
@@ -67,10 +69,10 @@ service.register("capabilities", function (message) {
     runtimeVersion: "nuvio-plugin-network/1",
     quickjsVersion: "quickjs-emscripten/0.32.0 (app-worker)",
     workerSupport: true,
-    maxConcurrency: 2,
+    maxConcurrency: MAX_ACTIVE_REQUESTS,
     memoryTier: "bounded",
     defaultResponseBytes: 1024 * 1024,
-    maxResponseBytes: 2 * 1024 * 1024,
+    maxResponseBytes: MAX_RESPONSE_BYTES,
     jsPluginCapability: true,
     networkBoundary: true
   });

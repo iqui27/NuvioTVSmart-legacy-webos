@@ -3,7 +3,8 @@ import { Router } from "../../navigation/router.js";
 import { Platform } from "../../../platform/index.js";
 import { I18n } from "../../../i18n/index.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
-import { PluginSyncService } from "../../../core/profile/pluginSyncService.js";
+import { ProfileManager } from "../../../core/profile/profileManager.js";
+import { StartupSyncService } from "../../../core/profile/startupSyncService.js";
 import {
   isExternalDexRepository,
   isVideoEasyScraper,
@@ -104,6 +105,33 @@ function providerTypeBadge(type) {
   return `<span class="plugins-type-badge ${colorClass}">${escapeHtml(normalized.toUpperCase())}</span>`;
 }
 
+function runtimeNotice(model) {
+  const runtime = model?.runtime || {};
+  if (runtime.supportLevel === "unsupported") {
+    return `
+      <section class="plugins-runtime-card is-warning is-unsupported" role="status">
+        <span class="plugins-runtime-icon material-icons" aria-hidden="true">error_outline</span>
+        <div class="plugins-runtime-copy">
+          <strong>${escapeHtml(t("plugin_runtime_heading", {}, "TV plugin runtime"))}</strong>
+          <span>${escapeHtml(t("plugin_runtime_unsupported", {}, "Execution unavailable on this TV runtime"))}</span>
+        </div>
+      </section>
+    `;
+  }
+  if (runtime.supportLevel === "limited" && runtime.executable === true) {
+    return `
+      <section class="plugins-runtime-card is-warning is-limited" role="status">
+        <span class="plugins-runtime-icon material-icons" aria-hidden="true">info_outline</span>
+        <div class="plugins-runtime-copy">
+          <strong>${escapeHtml(t("plugin_runtime_heading", {}, "TV plugin runtime"))}</strong>
+          <span>${escapeHtml(t("plugin_runtime_limited", {}, "Plugin support is limited on this TV. Some providers may be slower or unavailable."))}</span>
+        </div>
+      </section>
+    `;
+  }
+  return "";
+}
+
 export const PluginsScreen = {
   async mount() {
     this.container = document.getElementById("plugins");
@@ -121,28 +149,47 @@ export const PluginsScreen = {
     this.diagnosticsProviderId = null;
     this.testAbortController = null;
     this.pendingScraperEnable = null;
-    this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
-    const runtimeProbeGeneration = this.runtimeProbeGeneration;
-    this.pluginSyncGeneration = Number(this.pluginSyncGeneration || 0) + 1;
-    const pluginSyncGeneration = this.pluginSyncGeneration;
+    this.ensureStartupSyncSubscription();
+    const deferRuntimeProbe = Platform.isTizen();
+    if (!deferRuntimeProbe) {
+      this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
+      const runtimeProbeGeneration = this.runtimeProbeGeneration;
+      // Match Android's initial-state rendering: runtime capabilities only
+      // gate executable actions and must not delay the management screen.
+      void this.probeRuntime().then(() => {
+        if (
+          runtimeProbeGeneration !== this.runtimeProbeGeneration ||
+          Router.getCurrent() !== "plugins" ||
+          this.hasActiveTextInput()
+        ) {
+          return;
+        }
+        this.render();
+      });
+    }
     this.bindEvents();
     this.render();
-    // Match Android's initial-state rendering: runtime capabilities only gate
-    // executable actions and must not delay the management screen itself.
-    void this.probeRuntime().then(() => {
-      if (
-        runtimeProbeGeneration !== this.runtimeProbeGeneration ||
-        Router.getCurrent() !== "plugins" ||
-        this.hasActiveTextInput()
-      ) {
-        return;
+  },
+
+  ensureStartupSyncSubscription() {
+    if (this.unsubscribeStartupSyncPullCompleted) {
+      return;
+    }
+    // Android's PluginViewModel observes the local plugin state; entering the
+    // screen does not start another remote pull. Re-render when the
+    // Android-aligned startup/warm pull has reconciled that local state.
+    this.unsubscribeStartupSyncPullCompleted = StartupSyncService.subscribeToPullCompleted(
+      ({ profileId } = {}) => {
+        if (Router.getCurrent() !== "plugins" || this.busy || this.hasActiveTextInput()) {
+          return;
+        }
+        const activeProfileId = String(ProfileManager.getActiveProfileId() || "");
+        if (profileId && String(profileId) !== activeProfileId) {
+          return;
+        }
+        this.render();
       }
-      this.render();
-    });
-    // The Android plugin surface is refreshed when its management flow is
-    // entered. Do the scoped pull here as well, so a repository added/removed
-    // on another device is visible without waiting for the next full startup.
-    void this.pullRemotePlugins(pluginSyncGeneration);
+    );
   },
 
   hasActiveTextInput() {
@@ -152,18 +199,17 @@ export const PluginsScreen = {
     );
   },
 
-  async pullRemotePlugins(generation) {
-    await PluginSyncService.pull();
-    if (
-      generation !== this.pluginSyncGeneration ||
-      Router.getCurrent() !== "plugins" ||
-      this.hasActiveTextInput()
-    ) {
-      return;
+  isNativeTextInputEditingActive(event = null) {
+    if (!Platform.isTizen() && !Platform.isWebOS()) {
+      return false;
     }
-    if (PluginSyncService.getLastPullStatus?.() === "ok") {
-      this.render();
-    }
+    const active = document.activeElement;
+    const eventTarget = event?.target || null;
+    return Boolean(
+      (active && this.container?.contains?.(active) && active.matches?.("input, textarea")) ||
+      eventTarget?.matches?.("input, textarea") ||
+      eventTarget?.closest?.("input, textarea")
+    );
   },
 
   async probeRuntime() {
@@ -473,7 +519,9 @@ export const PluginsScreen = {
             }
             ${
               runtimeUnavailable
-                ? `<p class="plugins-warning">${escapeHtml(t("plugin_tv_model_unsupported", {}, "Plugins are not available on this TV model. Add-ons, playback, library, and sync remain available."))}</p>`
+                ? model.runtime?.supportLevel !== "unsupported"
+                  ? `<p class="plugins-warning">${escapeHtml(t("plugin_tv_model_unsupported", {}, "Plugins are not available on this TV model. Add-ons, playback, library, and sync remain available."))}</p>`
+                  : ""
                 : ""
             }
             ${
@@ -559,6 +607,8 @@ export const PluginsScreen = {
           </header>
           <main class="plugins-main">
             <div class="plugins-panel">
+              ${runtimeNotice(model)}
+
               ${
                 model.readOnly
                   ? `<section class="plugins-readonly-card">
@@ -930,6 +980,13 @@ export const PluginsScreen = {
       return;
     }
     const code = Number(event?.keyCode || 0);
+    if (this.isNativeTextInputEditingActive(event) && [38, 40, 37, 39].includes(code)) {
+      // Tizen/webOS route the directional keys through the native TV keyboard
+      // while an input is being edited. Do not let the page-level focus graph
+      // move to repository actions behind that keyboard.
+      event?.stopPropagation?.();
+      return;
+    }
     if (code === 13) {
       event?.preventDefault?.();
       const current = this.container?.querySelector?.(".plugins-focusable.focused");
@@ -968,7 +1025,10 @@ export const PluginsScreen = {
   cleanup() {
     this.routeEnterPending = false;
     this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
-    this.pluginSyncGeneration = Number(this.pluginSyncGeneration || 0) + 1;
+    if (this.unsubscribeStartupSyncPullCompleted) {
+      this.unsubscribeStartupSyncPullCompleted();
+      this.unsubscribeStartupSyncPullCompleted = null;
+    }
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.statusTimer = 0;
     this.testAbortController?.abort?.();

@@ -2518,7 +2518,7 @@ export const ProfileSelectionScreen = {
       );
       marcar("Router.navigate");
       void StartupSyncService.requestSyncNow({
-        notifyPullCompleted: experienceRoute === "home"
+        notifyPullCompleted: ["home", "plugins"].includes(experienceRoute)
       }).catch((error) => {
         console.warn("Profile background sync failed", error);
       });

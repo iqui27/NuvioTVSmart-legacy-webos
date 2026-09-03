@@ -483,6 +483,9 @@ export const StartupSyncService = {
     if (!force && !allowWarmRepeat && canUsePersistedWarmSync(key, includeProfileSettings, now)) {
       // Boot warm: o pull completo e dispensado, mas a credencial Trakt ainda
       // precisa de copia na nuvem. Ver reconcileTraktCredentialDetached.
+      // 1.0.5 went further and made this warm branch await a full remote pull,
+      // the same one a cold startup runs. Refused for the same reason as 1.0.4:
+      // that pull used to sit 7.1 s in front of the first paint on these TVs.
       reconcileTraktCredentialDetached(profileId);
       refreshPluginSurfaceDetached(profileId);
       this.lastPullCompleted = true;

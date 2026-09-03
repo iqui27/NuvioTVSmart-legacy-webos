@@ -569,7 +569,9 @@ export const SearchScreen = {
     ScreenUtils.indexFocusables(this.container);
     this.buildNavigationModel();
     this.bindActionEvents();
-    input.value = this.query || "";
+    // Keep the live IME value untouched while only the result siblings are refreshed.
+    // `this.query` is normalized for catalog requests and may omit a trailing space
+    // that the user has just entered and is still editing.
     input.focus?.();
     this.focusNode(this.container?.querySelector(".focusable.focused") || null, input);
     restoreInputSelection(input, selectionSnapshot);
@@ -1733,9 +1735,16 @@ export const SearchScreen = {
 
   keepSearchInputEditingKey(event, code) {
     const input = this.container?.querySelector("#searchInput");
-    const navigationKeys = [35, 36, 37, 39];
+    const navigationKeys = [35, 36, 37, 38, 39, 40];
     if (!input || navigationKeys.indexOf(code) === -1 || !this.isSearchInputEditingActive(event)) {
       return false;
+    }
+
+    if (Platform.isTizen() || Platform.isWebOS()) {
+      // The native TV keyboard owns directional navigation while the search
+      // field is active; otherwise the page focus graph can move underneath it.
+      event?.stopPropagation?.();
+      return true;
     }
 
     // Release left/right once the caret sits at the matching edge of the value

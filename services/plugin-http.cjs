@@ -37,12 +37,15 @@ function getZlibModule() {
 var MAX_REQUEST_BYTES = 1024 * 1024;
 var MAX_SERVICE_REQUEST_BYTES = MAX_REQUEST_BYTES + 64 * 1024;
 var DEFAULT_RESPONSE_BYTES = 1024 * 1024;
-var MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-var MAX_WIRE_RESPONSE_BYTES = 4 * 1024 * 1024;
+// Keep the service envelope consistent with the modern app policy. Plugin
+// fetches still request the Android 1 MiB cap; this upper bound is for
+// manifest/code management responses.
+var MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+var MAX_WIRE_RESPONSE_BYTES = MAX_RESPONSE_BYTES;
 var MAX_REDIRECTS = 20;
 var DEFAULT_TIMEOUT_MS = 30000;
 var PLUGIN_PROTOCOL_VERSION = 1;
-var MAX_ACTIVE_REQUESTS = 8;
+var MAX_ACTIVE_REQUESTS = 10;
 var MAX_REQUESTS_PER_SCRAPER_PER_MINUTE = 60;
 var CIRCUIT_FAILURE_LIMIT = 3;
 var CIRCUIT_OPEN_MS = 30000;
@@ -618,7 +621,7 @@ function createPluginHttpServer({ port = 2711, logger = console } = {}) {
         runtimeVersion: "nuvio-plugin-network/1",
         quickjsVersion: "quickjs-emscripten/0.32.0 (app-worker)",
         workerSupport: true,
-        maxConcurrency: 2,
+        maxConcurrency: MAX_ACTIVE_REQUESTS,
         memoryTier: "bounded",
         defaultResponseBytes: DEFAULT_RESPONSE_BYTES,
         maxResponseBytes: MAX_RESPONSE_BYTES,
@@ -637,7 +640,7 @@ function createPluginHttpServer({ port = 2711, logger = console } = {}) {
         runtimeVersion: "nuvio-plugin-network/1",
         quickjsVersion: "quickjs-emscripten/0.32.0 (app-worker)",
         workerSupport: true,
-        maxConcurrency: 2,
+        maxConcurrency: MAX_ACTIVE_REQUESTS,
         memoryTier: "bounded",
         defaultResponseBytes: DEFAULT_RESPONSE_BYTES,
         maxResponseBytes: MAX_RESPONSE_BYTES,

@@ -3,16 +3,25 @@ import { TizenCapabilities } from "../../platform/tizen/tizenCapabilities.js";
 
 export const PLUGIN_QUOTAS = Object.freeze({
   modern: Object.freeze({
-    maxConcurrent: 2,
-    maxManifestBytes: 256 * 1024,
-    maxCodeBytes: 2 * 1024 * 1024,
+    // Keep the JS execution policy aligned with Android's PluginManager:
+    // ten network-bound scrapers, up to 150 results, and a 120-second outer
+    // scraper budget. The fetch bridge still has Android's 1 MiB body cap and
+    // the QuickJS runtime has its own 60-second execution budget per provider.
+    maxConcurrent: 10,
+    // Android does not impose a separate manifest cap; 5 MiB is the same
+    // bounded repository envelope used for Android scraper downloads while
+    // retaining a safe finite limit for the Tizen transport.
+    maxManifestBytes: 5 * 1024 * 1024,
+    maxCodeBytes: 5 * 1024 * 1024,
     maxCacheBytes: 16 * 1024 * 1024,
     maxFetchBytes: 1024 * 1024,
-    maxResultsPerScraper: 50,
+    // Android limits the flattened request to 150, not each provider. Keep
+    // the same effective boundary and avoid a stricter per-scraper truncation.
+    maxResultsPerScraper: 150,
     maxResults: 150,
-    providerTimeoutMs: 30000,
-    globalTimeoutMs: 60000,
-    maxDocuments: 4,
+    providerTimeoutMs: 60000,
+    globalTimeoutMs: 120000,
+    maxDocuments: 8,
     maxDomElements: 10000,
     memoryLimitBytes: 64 * 1024 * 1024
   }),
@@ -63,6 +72,7 @@ function snapshotFields(
     normalAddonsSupported,
     candidate,
     executable,
+    supportLevel: candidate ? (quota === PLUGIN_QUOTAS.modern ? "full" : "limited") : "unsupported",
     reason,
     pluginServiceAvailable: false,
     localJsPluginSupported: executable,

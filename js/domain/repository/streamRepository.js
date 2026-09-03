@@ -1,4 +1,4 @@
 export const StreamRepositoryContract = {
-  getStreamsFromAddon: "getStreamsFromAddon(baseUrl, type, videoId)",
-  getStreamsFromAllAddons: "getStreamsFromAllAddons(type, videoId, season?, episode?)"
+  getStreamsFromAddon: "getStreamsFromAddon(baseUrl, type, videoId, options?)",
+  getStreamsFromAllAddons: "getStreamsFromAllAddons(type, videoId, options?)"
 };

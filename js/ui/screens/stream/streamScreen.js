@@ -1388,6 +1388,7 @@ export const StreamScreen = {
   },
 
   async mount(params = {}, navigationContext = {}) {
+    streamRepository.setLocalPluginSearchPaused(false);
     this.container = document.getElementById("stream");
     ScreenUtils.show(this.container);
     this.params = params || {};
@@ -1705,6 +1706,7 @@ export const StreamScreen = {
       itemId: String(this.params?.itemId || ""),
       season: this.params?.season ?? null,
       episode: this.params?.episode ?? null,
+      forceRefresh: false,
       onAddon: (addon) => {
         if (token !== this.loadToken) {
           return;
@@ -3426,6 +3428,7 @@ export const StreamScreen = {
     if (!selected) {
       return;
     }
+    streamRepository.setLocalPluginSearchPaused(true);
     const playerStreamCandidates = this.getFilteredStreams();
     const itemType = normalizeType(this.params?.itemType);
     const startFromBeginning = Boolean(this.params?.startFromBeginning);
@@ -3748,6 +3751,7 @@ export const StreamScreen = {
   },
 
   cleanup() {
+    streamRepository.setLocalPluginSearchPaused(true);
     this.cancelAutoPlayCountdown();
     this.cancelAutoPlaySelectionWait();
     this.loadToken = (this.loadToken || 0) + 1;
