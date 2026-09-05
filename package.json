@@ -2,7 +2,7 @@
   "name": "nuvio-tv-smart",
   "private": true,
   "type": "module",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "build:on-release": "node ./scripts/release-build-poller.mjs",

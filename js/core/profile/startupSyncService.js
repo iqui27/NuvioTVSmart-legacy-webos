@@ -211,6 +211,16 @@ export const StartupSyncService = {
     );
   },
 
+  isCurrentProfilePullPending() {
+    if (!this.started || !AuthManager.isAuthenticated) {
+      return false;
+    }
+    if (this.inFlight || this.pendingSyncRequest) {
+      return true;
+    }
+    return !(this.lastPullCompleted && this.lastPulledKey === currentSyncKey());
+  },
+
   scheduleBackoffRetry({ notifyPullCompleted = false } = {}) {
     if (!this.started || !AuthManager.isAuthenticated) {
       return;
