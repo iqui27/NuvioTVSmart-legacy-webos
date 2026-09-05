@@ -24666,6 +24666,18 @@ html.no-css-grid .player-subtitle-rail {
   padding: 16px 0;
 }
 
+/* O Chromium 53 e anterior ao "automatic minimum size" do flexbox: um item de
+   flex ali encolhe abaixo do proprio conteudo em vez de parar em min-height
+   auto. Como cada trilha e uma coluna flex com mais linhas do que altura, TODAS
+   as linhas eram espremidas -- medido na C9 com o dialogo real aberto: as linhas
+   da coluna do meio ficaram em 47px carregando texto de 155px, e as de estilo em
+   51px carregando um botao de 80px. O conteudo vazava da caixa e desenhava por
+   cima da linha seguinte. Nao e o mesmo defeito das colunas logo acima: aquele
+   era largura, este e altura, e um so aparece depois do outro resolvido. */
+html.no-css-grid .player-subtitle-rail > .player-dialog-item {
+  flex: 0 0 auto;
+}
+
 html.no-css-grid.no-flex-gap .player-subtitle-overlay-grid > * + * {
   margin-left: 28px;
 }
