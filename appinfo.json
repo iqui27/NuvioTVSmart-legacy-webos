@@ -1,6 +1,6 @@
 {
   "id": "space.nuvio.webos",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "vendor": "Nuvio Media",
   "type": "web",
   "main": "index.html",

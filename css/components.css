@@ -24628,19 +24628,37 @@ html.no-css-grid .player-subtitle-overlay-grid > * {
   min-width: 0;
 }
 
-html.no-css-grid .player-subtitle-language-rail {
-  flex-basis: 400px;
-  width: 400px;
+/* O fallback de Grid gerado pelo PostCSS emite `max-width: <trilha>` em cada
+   filho, copiado de grid-template-columns (220px 1fr 280px). Sem zerar isso, as
+   larguras escritas a mao logo abaixo nao valem nada: a trilha vence pelo
+   max-width e a coluna de estilo fica em 280px. Medido na C9 (Chromium 53): os
+   dois botoes -/+ ocupam 112px cada, sobra menos que zero para o miolo, e
+   .player-dialog-item-center computa width 0 -- o rotulo e o valor transbordam
+   da caixa e desenham por cima dos botoes e da coluna vizinha. Era esse o
+   "menu de legenda embaralhado" relatado. Os seletores abaixo sao filhos
+   diretos da grade de proposito: `>` sobe a especificidade acima da regra
+   gerada e nao depende da ordem no arquivo. */
+html.no-css-grid .player-subtitle-overlay-grid > .player-subtitle-rail {
+  max-width: none;
 }
 
-html.no-css-grid .player-subtitle-options-rail {
-  flex-basis: 600px;
-  width: 600px;
+html.no-css-grid .player-subtitle-overlay-grid > .player-subtitle-language-rail {
+  flex: 0 0 340px;
+  width: 340px;
 }
 
-html.no-css-grid .player-subtitle-style-rail {
-  flex-basis: 560px;
-  width: 560px;
+/* O miolo cresce com a sobra em vez de levar largura fixa: 340 + 600 + 560 mais
+   as duas margens de 28px passa dos 1448px da janela e a ultima coluna saia da
+   tela. */
+html.no-css-grid .player-subtitle-overlay-grid > .player-subtitle-options-rail {
+  flex: 1 1 0%;
+  width: auto;
+  min-width: 0;
+}
+
+html.no-css-grid .player-subtitle-overlay-grid > .player-subtitle-style-rail {
+  flex: 0 0 520px;
+  width: 520px;
 }
 
 html.no-css-grid .player-subtitle-rail {
