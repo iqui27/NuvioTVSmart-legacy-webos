@@ -11,7 +11,7 @@
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
   "splashBackground": "splash.png",
-  "iconColor": "#0e0f12",
+  "iconColor": "#0d101e",
   "handlesRelaunch": true,
   "disableBackHistoryAPI": true,
   "resolution": "1920x1080",
