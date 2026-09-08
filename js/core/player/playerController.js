@@ -21,10 +21,7 @@ import {
   detectWebOsAudioCapabilities
 } from "../../platform/webos/webosAudioCapabilities.js";
 import { WebOsLunaService } from "../../platform/webos/webosLunaService.js";
-import {
-  requestWebOsCompanionService,
-  subscribeWebOsCompanionService
-} from "../../platform/webos/webosCompanionService.js";
+import { subscribeWebOsCompanionService } from "../../platform/webos/webosCompanionService.js";
 import { WebOSPlayerExtensions } from "../../platform/webos/webosPlayerExtensions.js";
 import { loadStreamingLibs } from "../../runtime/loadStreamingLibs.js";
 import { WATCH_PROGRESS_UNKNOWN_DURATION_PERCENT } from "../../domain/model/watchProgress.js";
@@ -45,6 +42,296 @@ const AVPLAY_SEEK_TIMEOUT_MS = 30_000;
 // hls.js' default live sync distance and gives the first rendition enough data
 // to establish a stable clock before playback begins.
 const WEBOS_LIVE_INITIAL_MANIFEST_SIZE = 3;
+// Keep HLS request and retry budgets aligned with Android's OkHttp/Media3
+// playback path. In particular, the playlist child used by Easy Catalogs can
+// take slightly more than 10 seconds before returning its first byte.
+const ANDROID_PLAYBACK_IO_TIMEOUT_MS = 15_000;
+// Android's addon/source resolution can remain pending for about one minute
+// before the media URL is usable. This is the first-byte budget only; the
+// active read budget remains ANDROID_PLAYBACK_IO_TIMEOUT_MS.
+const ANDROID_PLAYBACK_SOURCE_FIRST_BYTE_TIMEOUT_MS = 120_000;
+const ANDROID_PLAYBACK_MAX_RETRY_COUNT = 6;
+const ANDROID_PLAYBACK_TIMEOUT_RETRY_DELAY_MS = 750;
+const ANDROID_PLAYBACK_TIMEOUT_MAX_RETRY_DELAY_MS = 3_000;
+// Android's standard ExoPlayer path uses Media3's stock 50-second forward
+// buffer and explicitly retains only 1.5 seconds behind the playhead. Keep
+// the same effective HLS bounds on every browser runtime; the optional
+// Android custom-buffer setting is not enabled by default.
+const ANDROID_PLAYBACK_MAX_BUFFER_SECONDS = 50;
+const ANDROID_PLAYBACK_BACK_BUFFER_SECONDS = 1.5;
+// A short buffer starvation is expected on a slow provider. Only surface the
+// diagnostic when the same playback stall remains continuous for one minute.
+const HLS_BUFFER_STALL_WARNING_DELAY_MS = 60_000;
+const TRANSIENT_HLS_BUFFER_ERROR_DETAILS = new Set(["bufferStalledError", "bufferNudgeOnStall"]);
+
+function createAndroidAlignedHlsLoadPolicy({ allowSlowFirstByte = false } = {}) {
+  return {
+    default: {
+      maxTimeToFirstByteMs: allowSlowFirstByte
+        ? ANDROID_PLAYBACK_SOURCE_FIRST_BYTE_TIMEOUT_MS
+        : ANDROID_PLAYBACK_IO_TIMEOUT_MS,
+      maxLoadTimeMs: ANDROID_PLAYBACK_IO_TIMEOUT_MS,
+      timeoutRetry: {
+        maxNumRetry: ANDROID_PLAYBACK_MAX_RETRY_COUNT,
+        retryDelayMs: ANDROID_PLAYBACK_TIMEOUT_RETRY_DELAY_MS,
+        maxRetryDelayMs: ANDROID_PLAYBACK_TIMEOUT_MAX_RETRY_DELAY_MS,
+        backoff: "exponential"
+      },
+      errorRetry: {
+        maxNumRetry: ANDROID_PLAYBACK_MAX_RETRY_COUNT,
+        retryDelayMs: 1_000,
+        maxRetryDelayMs: 8_000,
+        backoff: "linear"
+      }
+    }
+  };
+}
+
+class AndroidAlignedFetchLoader {
+  constructor(config = {}) {
+    this.fetchSetup = config.fetchSetup || ((_, initParams) => new Request(_.url, initParams));
+    this.controller = new AbortController();
+    this.timeoutId = null;
+    this.destroyed = false;
+    this.response = null;
+    this.context = null;
+    this.config = null;
+    this.callbacks = null;
+    this.stats = {
+      aborted: false,
+      loaded: 0,
+      retry: 0,
+      total: 0,
+      chunkCount: 0,
+      bwEstimate: 0,
+      loading: { start: 0, first: 0, end: 0 },
+      parsing: { start: 0, end: 0 },
+      buffering: { start: 0, end: 0 }
+    };
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.clearTimeout();
+    this.abortInternal();
+    this.callbacks = null;
+    this.context = null;
+    this.config = null;
+    this.response = null;
+    this.fetchSetup = null;
+    this.controller = null;
+  }
+
+  abortInternal() {
+    if (this.controller && !this.stats.loading.end) {
+      this.stats.aborted = true;
+      try {
+        this.controller.abort();
+      } catch (_) {
+        // Ignore abort failures after the webOS fetch has already completed.
+      }
+    }
+  }
+
+  abort() {
+    if (this.stats.loading.end || this.stats.aborted) {
+      return;
+    }
+    this.clearTimeout();
+    this.stats.aborted = true;
+    try {
+      this.controller?.abort?.();
+    } catch (_) {
+      // Ignore abort failures after the webOS fetch has already completed.
+    }
+    this.callbacks?.onAbort?.(this.stats, this.context, this.response);
+  }
+
+  load(context, config, callbacks) {
+    if (this.stats.loading.start) {
+      throw new Error("Loader can only be used once.");
+    }
+    this.context = context;
+    this.config = config;
+    this.callbacks = callbacks;
+    this.stats.loading.start = this.now();
+    const initParams = {
+      method: "GET",
+      mode: "cors",
+      credentials: "same-origin",
+      signal: this.controller.signal,
+      headers: new Headers(Object.assign({}, context.headers || {}))
+    };
+    if (context.rangeEnd) {
+      initParams.headers.set(
+        "Range",
+        `bytes=${context.rangeStart || 0}-${String(context.rangeEnd - 1)}`
+      );
+    }
+
+    try {
+      const request = this.fetchSetup(context, initParams);
+      this.armTimeout(config.loadPolicy?.maxTimeToFirstByteMs);
+      fetch(request)
+        .then((response) => this.readResponse(response))
+        .then(
+          (data) => this.finish(data),
+          (error) => this.fail(error)
+        );
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  async readResponse(response) {
+    this.response = response;
+    if (!response.ok) {
+      const error = new Error(response.statusText || "fetch, bad network response");
+      error.code = response.status;
+      error.response = response;
+      throw error;
+    }
+
+    const contentLength = Number(response.headers?.get?.("Content-Length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > 0) {
+      this.stats.total = contentLength;
+    }
+
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+      this.markFirstByte();
+      this.armTimeout(this.config?.loadPolicy?.maxLoadTimeMs);
+      return this.context?.responseType === "arraybuffer"
+        ? response.arrayBuffer()
+        : this.context?.responseType === "json"
+          ? response.json()
+          : response.text();
+    }
+
+    const chunks = [];
+    let totalBytes = 0;
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      }
+      const chunk = result.value;
+      if (!chunk?.byteLength) {
+        continue;
+      }
+      this.markFirstByte();
+      chunks.push(chunk);
+      totalBytes += chunk.byteLength;
+      this.stats.loaded = totalBytes;
+      this.stats.chunkCount += 1;
+      this.armTimeout(this.config?.loadPolicy?.maxLoadTimeMs);
+    }
+
+    const bytes = new Uint8Array(totalBytes);
+    let offset = 0;
+    chunks.forEach((chunk) => {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    });
+    if (this.context?.responseType === "arraybuffer") {
+      return bytes.buffer;
+    }
+    const text = new TextDecoder().decode(bytes);
+    return this.context?.responseType === "json" ? JSON.parse(text) : text;
+  }
+
+  finish(data) {
+    if (this.destroyed || this.stats.aborted || !this.callbacks || !this.context) {
+      return;
+    }
+    this.clearTimeout();
+    this.stats.loading.end = this.now();
+    if (!this.stats.loading.first) {
+      this.markFirstByte();
+    }
+    if (!this.stats.total) {
+      this.stats.total = this.stats.loaded = data?.byteLength ?? data?.length ?? 0;
+    } else if (!this.stats.loaded) {
+      this.stats.loaded = data?.byteLength ?? data?.length ?? 0;
+    }
+    const elapsedMs = this.stats.loading.end - this.stats.loading.first;
+    this.stats.bwEstimate = elapsedMs > 0 ? (this.stats.loaded * 8000) / elapsedMs : 0;
+    this.callbacks.onSuccess(
+      {
+        url: this.response?.url || this.context.url,
+        data,
+        code: this.response?.status || 200
+      },
+      this.stats,
+      this.context,
+      this.response
+    );
+  }
+
+  fail(error) {
+    if (this.destroyed || this.stats.aborted || !this.callbacks || !this.context) {
+      return;
+    }
+    this.clearTimeout();
+    this.callbacks.onError(
+      {
+        code: Number(error?.code || error?.response?.status || 0),
+        text: String(error?.message || "Fetch failed")
+      },
+      this.context,
+      error?.response || this.response,
+      this.stats
+    );
+  }
+
+  handleTimeout() {
+    if (this.destroyed || this.stats.aborted || this.stats.loading.end || !this.callbacks) {
+      return;
+    }
+    this.stats.aborted = true;
+    try {
+      this.controller?.abort?.();
+    } catch (_) {
+      // Ignore abort failures after notifying hls.js about the timeout.
+    }
+    this.callbacks.onTimeout(this.stats, this.context, this.response);
+  }
+
+  armTimeout(timeoutMs) {
+    this.clearTimeout();
+    if (!Number.isFinite(Number(timeoutMs)) || Number(timeoutMs) <= 0) {
+      return;
+    }
+    this.timeoutId = setTimeout(() => this.handleTimeout(), Number(timeoutMs));
+  }
+
+  clearTimeout() {
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+  }
+
+  markFirstByte() {
+    if (!this.stats.loading.first) {
+      this.stats.loading.first = this.now();
+    }
+  }
+
+  now() {
+    const performanceNow = globalThis.performance?.now?.();
+    return Number.isFinite(performanceNow) ? performanceNow : Date.now();
+  }
+
+  getCacheAge() {
+    const age = this.response?.headers?.get?.("age");
+    return age ? Number.parseFloat(age) : null;
+  }
+
+  getResponseHeader(name) {
+    return this.response?.headers?.get?.(name) || null;
+  }
+}
 
 function logEngineFsDebug(...args) {
   if (globalThis.__NUVIO_DEBUG_ENGINEFS__) {
@@ -208,6 +495,7 @@ export const PlayerController = {
   avplayLastErrorDiagnostic: null,
   lastPlaybackErrorCode: 0,
   lastHlsErrorDiagnostic: null,
+  hlsBufferStallWarningTimer: null,
   currentPlaybackUrl: "",
   currentPlaybackHeaders: {},
   currentPlaybackMediaSourceType: null,
@@ -373,9 +661,65 @@ export const PlayerController = {
       return null;
     };
 
+    const inferFromNestedQueryValues = (search) => {
+      if (!search?.forEach) {
+        return null;
+      }
+
+      let inferredType = null;
+      search.forEach((value) => {
+        if (inferredType) {
+          return;
+        }
+
+        const rawValue = String(value || "").trim();
+        if (!rawValue) {
+          return;
+        }
+
+        const candidates = [rawValue];
+        try {
+          const decodedValue = decodeURIComponent(rawValue);
+          if (decodedValue !== rawValue) {
+            candidates.push(decodedValue);
+          }
+        } catch (_) {
+          // Keep the original query value when it is only partially encoded.
+        }
+
+        candidates.some((candidate) => {
+          try {
+            const nestedUrl = new URL(candidate);
+            inferredType = inferByPath(nestedUrl.pathname, nestedUrl.searchParams);
+          } catch (_) {
+            inferredType = inferByPath(candidate, null);
+          }
+
+          if (inferredType) {
+            return true;
+          }
+
+          const normalizedCandidate = candidate.toLowerCase();
+          if (/(^|[=/_.?&-])m3u8($|[=/_.?&-])/.test(normalizedCandidate)) {
+            inferredType = "application/vnd.apple.mpegurl";
+          } else if (/(^|[=/_.?&-])mpd($|[=/_.?&-])/.test(normalizedCandidate)) {
+            inferredType = "application/dash+xml";
+          } else if (/(^|[=/_.?&-])isml?(?:\/manifest)?($|[=/_.?&-])/.test(normalizedCandidate)) {
+            inferredType = "application/vnd.ms-sstr+xml";
+          }
+          return Boolean(inferredType);
+        });
+      });
+
+      return inferredType;
+    };
+
     try {
       const parsed = new URL(raw);
-      return inferByPath(parsed.pathname, parsed.searchParams);
+      return (
+        inferByPath(parsed.pathname, parsed.searchParams) ||
+        inferFromNestedQueryValues(parsed.searchParams)
+      );
     } catch (_) {
       return inferByPath(raw, null);
     }
@@ -3311,6 +3655,48 @@ export const PlayerController = {
     };
   },
 
+  clearHlsBufferStallWarning() {
+    if (this.hlsBufferStallWarningTimer) {
+      clearTimeout(this.hlsBufferStallWarningTimer);
+      this.hlsBufferStallWarningTimer = null;
+    }
+  },
+
+  scheduleHlsBufferStallWarning(diagnostic) {
+    const video = this.video;
+    const hls = this.hlsInstance;
+    if (!video || !hls || video.paused || video.ended) {
+      return;
+    }
+    if (this.hlsBufferStallWarningTimer) {
+      return;
+    }
+
+    const initialTime = Number(video.currentTime);
+    const startedAt = Date.now();
+    this.hlsBufferStallWarningTimer = setTimeout(() => {
+      this.hlsBufferStallWarningTimer = null;
+      const currentTime = Number(this.video?.currentTime);
+      const hasAdvanced =
+        Number.isFinite(currentTime) &&
+        Number.isFinite(initialTime) &&
+        currentTime > initialTime + 0.25;
+      const samePlayback = this.hlsInstance === hls && this.video === video;
+      const stillStalled = samePlayback && !video.paused && !video.ended && !hasAdvanced;
+      const stallDurationMs = Math.max(0, Date.now() - startedAt);
+      if (!stillStalled) {
+        return;
+      }
+      console.warn("[Nuvio playback] hls.js error", {
+        ...diagnostic,
+        stallDurationMs,
+        readyState: Number(video.readyState || 0),
+        networkState: Number(video.networkState || 0),
+        currentTime: Number.isFinite(currentTime) ? Number(currentTime.toFixed(3)) : null
+      });
+    }, HLS_BUFFER_STALL_WARNING_DELAY_MS);
+  },
+
   captureHlsErrorDiagnostic(data = {}) {
     const video = this.video || null;
     const hls = this.hlsInstance || null;
@@ -3368,6 +3754,17 @@ export const PlayerController = {
       mediaError: this.sanitizePlaybackDiagnosticText(video?.error?.message)
     };
     this.lastHlsErrorDiagnostic = diagnostic;
+    const transientBufferError =
+      !diagnostic.fatal &&
+      diagnostic.type === "mediaError" &&
+      TRANSIENT_HLS_BUFFER_ERROR_DETAILS.has(diagnostic.details);
+    if (transientBufferError) {
+      if (diagnostic.details === "bufferStalledError") {
+        this.scheduleHlsBufferStallWarning(diagnostic);
+      }
+      return diagnostic;
+    }
+    this.clearHlsBufferStallWarning();
     console.warn("[Nuvio playback] hls.js error", diagnostic);
     return diagnostic;
   },
@@ -3670,6 +4067,7 @@ export const PlayerController = {
   },
 
   teardownHlsInstance() {
+    this.clearHlsBufferStallWarning();
     if (!this.hlsInstance) {
       return;
     }
@@ -3779,18 +4177,25 @@ export const PlayerController = {
     const forwardedHeaders = this.normalizePlaybackHeaders(requestHeaders);
     const isWebOs = Platform.isWebOS();
     const isLivePlayback = this.isLivePlaybackItemType();
+    const hlsManifestLoadPolicy = createAndroidAlignedHlsLoadPolicy({
+      allowSlowFirstByte: isWebOs
+    });
+    const hlsMediaLoadPolicy = createAndroidAlignedHlsLoadPolicy();
     return {
       autoStartLoad: false,
       enableWorker: !isWebOs,
       lowLatencyMode: false,
       initialLiveManifestSize: isWebOs && isLivePlayback ? WEBOS_LIVE_INITIAL_MANIFEST_SIZE : 1,
-      backBufferLength: isWebOs ? 30 : 90,
-      maxBufferLength: isWebOs ? 18 : 30,
-      maxMaxBufferLength: isWebOs ? (isLivePlayback ? 24 : 80) : 60,
+      backBufferLength: ANDROID_PLAYBACK_BACK_BUFFER_SECONDS,
+      maxBufferLength: ANDROID_PLAYBACK_MAX_BUFFER_SECONDS,
+      maxMaxBufferLength: ANDROID_PLAYBACK_MAX_BUFFER_SECONDS,
       maxBufferHole: 0.5,
       startFragPrefetch: false,
-      fragLoadingTimeOut: isWebOs ? 18000 : 20000,
-      manifestLoadingTimeOut: isWebOs ? 18000 : 20000,
+      ...(isWebOs ? { loader: AndroidAlignedFetchLoader } : {}),
+      manifestLoadPolicy: hlsManifestLoadPolicy,
+      playlistLoadPolicy: hlsManifestLoadPolicy,
+      fragLoadPolicy: hlsMediaLoadPolicy,
+      keyLoadPolicy: hlsMediaLoadPolicy,
       xhrSetup: (xhr) => {
         Object.entries(forwardedHeaders).forEach(([headerName, headerValue]) => {
           try {
@@ -5027,6 +5432,9 @@ export const PlayerController = {
       // waits for the next real playing event before resuming the periodic job.
       this.saveProgressIfNeeded();
       this.stopProgressSaving();
+    });
+    ["playing", "timeupdate", "pause", "ended", "emptied"].forEach((eventName) => {
+      this.video.addEventListener(eventName, () => this.clearHlsBufferStallWarning());
     });
     this.video.addEventListener("seeked", () => {
       this.reapplyWebOsPlaybackRate().catch(() => {});

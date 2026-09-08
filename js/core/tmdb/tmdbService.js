@@ -1,11 +1,44 @@
 import { TmdbSettingsStore } from "../../data/local/tmdbSettingsStore.js";
 import { TMDB_API_KEY } from "../../config.js";
+import { PluginServiceClient } from "../../platform/pluginServiceClient.js";
+import { Platform } from "../../platform/index.js";
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
+const TMDB_SERVICE_FETCH_TIMEOUT_MS = 10000;
+const TMDB_SERVICE_MAX_RESPONSE_BYTES = 512 * 1024;
 const imdbToTmdbCache = new Map();
 const imdbToTmdbInFlight = new Map();
 const tmdbToImdbCache = new Map();
 const tmdbToImdbInFlight = new Map();
+
+async function fetchJson(url) {
+  // Some webOS TV runtimes can reject direct cross-origin fetches even while
+  // the packaged network service can reach the same HTTPS endpoint. Keep the
+  // service path scoped to webOS and retain the browser fetch as a fallback
+  // for older installs or when the optional service is unavailable.
+  if (Platform.isWebOS()) {
+    try {
+      const result = await PluginServiceClient.fetch({
+        url,
+        method: "GET",
+        maxResponseBytes: TMDB_SERVICE_MAX_RESPONSE_BYTES,
+        timeoutMs: TMDB_SERVICE_FETCH_TIMEOUT_MS
+      });
+      if (!result?.ok) {
+        return null;
+      }
+      return JSON.parse(result.body || "");
+    } catch (_) {
+      // Fall back to the existing direct request for compatibility.
+    }
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    return null;
+  }
+  return response.json();
+}
 
 function getContentType(type) {
   const normalized = String(type || "").toLowerCase();
@@ -67,12 +100,8 @@ export const TmdbService = {
 
     const url = `${TMDB_BASE_URL}/find/${encodeURIComponent(parsed.idPart)}?external_source=imdb_id&api_key=${encodeURIComponent(apiKey)}`;
     const request = (async () => {
-      const response = await fetch(url);
-      if (!response.ok) {
-        return null;
-      }
-
-      const data = await response.json();
+      const data = await fetchJson(url);
+      if (!data) return null;
       const list = contentType === "tv" ? data.tv_results : data.movie_results;
       const first = Array.isArray(list) ? list[0] : null;
       if (!first?.id) {
@@ -112,12 +141,8 @@ export const TmdbService = {
 
     const url = `${TMDB_BASE_URL}/${contentType}/${encodeURIComponent(numericId)}/external_ids?api_key=${encodeURIComponent(apiKey)}`;
     const request = (async () => {
-      const response = await fetch(url);
-      if (!response.ok) {
-        return null;
-      }
-
-      const data = await response.json();
+      const data = await fetchJson(url);
+      if (!data) return null;
       const imdbId = String(data?.imdb_id || "").trim();
       if (!/^tt\d+$/i.test(imdbId)) {
         return null;

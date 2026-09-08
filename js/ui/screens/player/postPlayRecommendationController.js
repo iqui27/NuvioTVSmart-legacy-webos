@@ -1464,7 +1464,7 @@ export class PostPlayRecommendationController {
     await Promise.all(tasks);
   }
 
-  async resolveCandidate(seed = {}, currentMeta = {}, token = this.pipelineToken) {
+  async resolveCandidate(seed = {}, _currentMeta = {}, token = this.pipelineToken) {
     const normalizedSeed = normalizeCandidateSeed(seed, this.snapshot?.contentType || "movie");
     if (!normalizedSeed) {
       return null;

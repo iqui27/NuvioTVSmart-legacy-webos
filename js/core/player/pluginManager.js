@@ -1601,6 +1601,7 @@ export const PluginManager = {
     {
       removeMissingLocal = true,
       authoritativeSnapshot = false,
+      allowVerifiedEmptySnapshot = false,
       expectedRevision = null,
       profileId = null
     } = {}
@@ -1628,6 +1629,7 @@ export const PluginManager = {
         targetProfileId: String(targetProfileId),
         removeMissingLocal,
         authoritativeSnapshot,
+        allowVerifiedEmptySnapshot,
         expectedRevision,
         reconciliationRevision,
         incomingCount: incoming.length,
@@ -1659,11 +1661,16 @@ export const PluginManager = {
         return state;
       }
       // Match Android's empty-snapshot guard: an empty successful response is
-      // not evidence that the local profile should be cleared.
-      if (!incoming.length) {
+      // not evidence that the local profile should be cleared. PluginSyncService
+      // may opt in only after an independent authenticated overview confirms
+      // that this existing profile has zero remote plugin rows.
+      const canApplyVerifiedEmptySnapshot =
+        authoritativeSnapshot && allowVerifiedEmptySnapshot === true;
+      if (!incoming.length && !canApplyVerifiedEmptySnapshot) {
         logPluginDiagnostic("reconcile skipped", {
           targetProfileId: String(targetProfileId),
-          reason: "empty remote snapshot"
+          reason: "empty remote snapshot",
+          allowVerifiedEmptySnapshot: canApplyVerifiedEmptySnapshot
         });
         return state;
       }
@@ -1854,7 +1861,7 @@ export const PluginManager = {
         });
         return next;
       }
-      if (removeMissingLocal && incoming.length) {
+      if (removeMissingLocal && (incoming.length || canApplyVerifiedEmptySnapshot)) {
         const remoteIdentities = new Set(incoming.map((entry) => repositoryIdentity(entry.url)));
         const removed = next.repositories.filter(
           (entry) => !remoteIdentities.has(repositoryIdentity(entry.url))

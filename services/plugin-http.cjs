@@ -43,7 +43,9 @@ var DEFAULT_RESPONSE_BYTES = 1024 * 1024;
 var MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 var MAX_WIRE_RESPONSE_BYTES = MAX_RESPONSE_BYTES;
 var MAX_REDIRECTS = 20;
-var DEFAULT_TIMEOUT_MS = 30000;
+// Android gives each provider request a 60-second budget; the caller still
+// enforces the separate 120-second global plugin-search deadline.
+var DEFAULT_TIMEOUT_MS = 60000;
 var PLUGIN_PROTOCOL_VERSION = 1;
 var MAX_ACTIVE_REQUESTS = 10;
 var MAX_REQUESTS_PER_SCRAPER_PER_MINUTE = 60;
@@ -84,6 +86,22 @@ function traceRequestDetails(payload, parsed, redirects) {
     details.path = String(parsed.pathname || "/").slice(0, 512);
   }
   return details;
+}
+
+function isLoopbackAddress(value) {
+  var address = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!address) return false;
+  address = address.split("%", 1)[0];
+  if (address === "::1" || address === "0:0:0:0:0:0:0:1") return true;
+  address = address.replace(/^::ffff:/, "");
+  return /^127(?:\.\d{1,3}){3}$/.test(address);
+}
+
+function isLoopbackRequest(request) {
+  var socket = request && (request.socket || request.connection);
+  return isLoopbackAddress(socket && socket.remoteAddress);
 }
 
 function parseUrl(value) {
@@ -758,6 +776,13 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
     });
   }
   var server = http.createServer(function (request, response) {
+    if (!isLoopbackRequest(request)) {
+      send(response, 403, {
+        returnValue: false,
+        errorText: "Plugin service accepts loopback clients only"
+      });
+      return;
+    }
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
         "Access-Control-Allow-Origin": "*",

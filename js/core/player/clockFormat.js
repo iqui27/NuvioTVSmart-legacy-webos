@@ -28,10 +28,13 @@ function resolveIntlHour12(intlApi, locale = undefined) {
 
 export function parsePlatformTimeFormat(format) {
   const normalized = String(format || "").replace(/'[^']*'/g, "");
-  if (/[hK]/.test(normalized)) {
+  // Tizen's time format uses `h` for both hour cycles; `ap` is the
+  // discriminator for 12-hour output. Keep the LDML fallbacks for runtimes
+  // that expose an uppercase hour-cycle token instead.
+  if (/\b(?:ap|a)\b/i.test(normalized) || /K/.test(normalized)) {
     return true;
   }
-  if (/[Hk]/.test(normalized)) {
+  if (/[Hhk]/.test(normalized)) {
     return false;
   }
   return null;

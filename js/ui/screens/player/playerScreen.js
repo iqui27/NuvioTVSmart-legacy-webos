@@ -157,7 +157,8 @@ const BUFFERING_SPINNER_STALL_MS = 0;
 const LOADING_LOGO_FILL_TARGET_LERP = 0.22;
 const LOADING_LOGO_FILL_IDLE_STEP = 0.006;
 const LOADING_LOGO_FILL_FRAME_MS = 80;
-const NEXT_EPISODE_SOURCE_RESOLVE_TIMEOUT_MS = 45000;
+// Keep next-episode source resolution within Android's 120-second hard limit.
+const NEXT_EPISODE_SOURCE_RESOLVE_TIMEOUT_MS = 120000;
 const STARTUP_AUDIO_PREFERENCE_RETRY_WINDOW_MS = 6000;
 const STARTUP_AUDIO_PREFERENCE_RETRY_INTERVAL_MS = 250;
 // This gate calls play() and then immediately pauses again, waiting for track
@@ -184,12 +185,13 @@ const WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS = STARTUP_AUDIO_PREFERENCE_RETRY_W
 // (HLS/MKV) caminharem por ramos com prazo.
 const STARTUP_AUDIO_GATE_MAX_WAIT_MS = STARTUP_AUDIO_PREFERENCE_RETRY_WINDOW_MS;
 const WEBOS_NATIVE_STARTUP_LOADING_EXTENSION_MS = 120000;
-const WEBOS_HLS_REBUFFER_STALL_TIMEOUT_MS = 20000;
+const WEBOS_HLS_STARTUP_STALL_TIMEOUT_MS = 120000;
+const WEBOS_HLS_REBUFFER_STALL_TIMEOUT_MS = 15000;
 const WEBOS_NATIVE_FILE_REBUFFER_STALL_TIMEOUT_MS = 35000;
 // How much the buffer must grow between a stall guard being armed and firing for
 // the stall to count as "still making progress" rather than dead.
 const PLAYBACK_STALL_BUFFER_PROGRESS_EPSILON_SECONDS = 0.25;
-const WEBOS_HLS_PLAYBACK_RECOVERY_MAX_ATTEMPTS = 1;
+const WEBOS_HLS_PLAYBACK_RECOVERY_MAX_ATTEMPTS = 2;
 const TIZEN_NATIVE_HLS_STARTUP_STALL_TIMEOUT_MS = 22000;
 const PLAYBACK_ENGINE_VALIDATION_WINDOW_MS = 30000;
 const PLAYBACK_ENGINE_VALIDATION_MAX_PROGRESS_GAP_SECONDS = 15;
@@ -3007,8 +3009,6 @@ export const PlayerScreen = {
     this.nextEpisodeLaunchToken = Number(this.nextEpisodeLaunchToken || 0) + 1;
     this.nextEpisodeCardTriggered = false;
     this.nextEpisodeCardRenderedKey = "";
-    this.nextEpisodeCardFocusCycleKey = "";
-    this.nextEpisodeCardPlacedFocused = false;
     this.nextEpisodeCardSearching = false;
     this.nextEpisodeCardSourceName = "";
     this.nextEpisodeCardCountdownSec = null;
@@ -5469,6 +5469,7 @@ export const PlayerScreen = {
       this.controlFocusZone === "nextEpisode" &&
       !card.classList.contains("hidden") &&
       this.isNextEpisodeCardFocusable();
+    target.classList.toggle("is-selected", focused && !this.controlsVisible);
     target.classList.toggle("focused", focused);
     if (!focused) {
       if (document.activeElement === target) {
@@ -7019,40 +7020,16 @@ export const PlayerScreen = {
 
     try {
       const headers = this.getCurrentStreamRequestHeaders(currentCandidate);
-      const manifestFetchTimeoutMs = 5000;
       const fetchManifestText = async (url, requestHeaders = {}) => {
-        const requestController =
-          typeof AbortController === "function" ? new AbortController() : null;
-        let requestTimeoutId = null;
-        try {
-          const timeoutPromise = new Promise((_, reject) => {
-            requestTimeoutId = setTimeout(() => {
-              try {
-                requestController?.abort?.();
-              } catch (_) {
-                // Ignore abort failures.
-              }
-              reject(new Error("Manifest fetch timeout"));
-            }, manifestFetchTimeoutMs);
-          });
-          const response = await Promise.race([
-            fetch(url, {
-              method: "GET",
-              headers: requestHeaders,
-              signal: requestController?.signal
-            }),
-            timeoutPromise
-          ]);
-          const text = await response.text();
-          return {
-            text,
-            finalUrl: response.url || url
-          };
-        } finally {
-          if (requestTimeoutId) {
-            clearTimeout(requestTimeoutId);
-          }
-        }
+        const response = await fetch(url, {
+          method: "GET",
+          headers: requestHeaders
+        });
+        const text = await response.text();
+        return {
+          text,
+          finalUrl: response.url || url
+        };
       };
 
       const urlCandidates = uniqueNonEmptyValues([
@@ -13191,14 +13168,6 @@ export const PlayerScreen = {
     this.ensureNextEpisodeStreamsPrefetch();
     const nextEpisode = this.resolveNextEpisodeInfo();
     const hidden = !this.isNextEpisodeCardVisible();
-    const focusCycleKey =
-      !hidden && nextEpisode
-        ? `${nextEpisode.videoId}|controls:${this.controlsVisible ? "visible" : "hidden"}`
-        : "";
-    if (focusCycleKey !== this.nextEpisodeCardFocusCycleKey) {
-      this.nextEpisodeCardFocusCycleKey = focusCycleKey;
-      this.nextEpisodeCardPlacedFocused = false;
-    }
 
     card.classList.toggle("hidden", hidden);
     if (hidden) {
@@ -13209,6 +13178,21 @@ export const PlayerScreen = {
           this.controlsVisible && this.isSeekBarAvailable() ? "progress" : "buttons";
       }
       return;
+    }
+
+    // Android keeps the next-episode action as the default hidden-controls
+    // focus target. Reconcile that state from the live focus zone on every
+    // render so an older webOS DOM/focus transition cannot leave the card
+    // visually selected while the player root still owns navigation.
+    if (
+      !this.controlsVisible &&
+      this.controlFocusZone !== "skipIntro" &&
+      this.controlFocusZone !== "nextEpisode"
+    ) {
+      this.stickyProgressFocus = false;
+      this.autoHideControlsAfterSeek = false;
+      this.controlFocusZone = "nextEpisode";
+      this.resetControlsAutoHide();
     }
 
     const titleLine = [nextEpisode.episodeLabel, nextEpisode.episodeTitle]
@@ -13245,7 +13229,7 @@ export const PlayerScreen = {
       !card.querySelector(".player-next-episode-card-inner")
     ) {
       card.innerHTML = `
-        <div class="player-next-episode-card-inner focusable${nextEpisode.hasAired ? " is-playable" : ""}${!this.controlsVisible ? " is-selected" : ""}" tabindex="-1" role="button" data-player-pointer-action="nextEpisode">
+        <div class="player-next-episode-card-inner focusable${nextEpisode.hasAired ? " is-playable" : ""}${!this.controlsVisible && this.controlFocusZone === "nextEpisode" ? " is-selected" : ""}" tabindex="-1" role="button" data-player-pointer-action="nextEpisode">
           <div class="player-next-episode-thumb-wrap">
             ${thumb ? `<img class="player-next-episode-thumb" src="${escapeHtml(thumb)}" alt="" aria-hidden="true" />` : `<div class="player-next-episode-thumb player-next-episode-thumb-fallback"></div>`}
             <div class="player-next-episode-thumb-shade"></div>
@@ -13262,13 +13246,6 @@ export const PlayerScreen = {
         </div>
       `;
       this.nextEpisodeCardRenderedKey = renderKey;
-    }
-    if (!this.controlsVisible && !this.nextEpisodeCardPlacedFocused) {
-      this.nextEpisodeCardPlacedFocused = true;
-      this.stickyProgressFocus = false;
-      this.autoHideControlsAfterSeek = false;
-      this.controlFocusZone = "nextEpisode";
-      this.resetControlsAutoHide();
     }
     this.syncNextEpisodeCardFocusState();
   },
@@ -15000,6 +14977,11 @@ export const PlayerScreen = {
         return TIZEN_NATIVE_HLS_STARTUP_STALL_TIMEOUT_MS;
       }
       if (Environment.isTizen() || Environment.isWebOS()) {
+        if (Environment.isWebOS() && playbackEngine === "hls.js") {
+          // Allow the hls.js load policy to use Android's six timeout retries
+          // before the screen-level engine fallback takes over.
+          return WEBOS_HLS_STARTUP_STALL_TIMEOUT_MS;
+        }
         return playbackEngine.endsWith("avplay") ? 60000 : 45000;
       }
       return 18000;
@@ -15009,8 +14991,7 @@ export const PlayerScreen = {
     }
     if (Environment.isWebOS()) {
       if (playbackEngine === "hls.js") {
-        // hls.js waits 18 seconds for a fragment on webOS; let its internal
-        // retry run before the screen-level recovery policy takes over.
+        // Match Android's 15-second playback stall watchdog.
         return WEBOS_HLS_REBUFFER_STALL_TIMEOUT_MS;
       }
       // A rebuffer on native-file means tearing the stream down and re-opening
@@ -24454,7 +24435,8 @@ export const PlayerScreen = {
       Boolean(activeElement?.closest?.("[data-player-pointer-action='skipIntro']"));
     const nextOverlayFocused =
       this.controlFocusZone === "nextEpisode" ||
-      Boolean(activeElement?.closest?.("[data-player-pointer-action='nextEpisode']"));
+      Boolean(activeElement?.closest?.("[data-player-pointer-action='nextEpisode']")) ||
+      (!this.controlsVisible && nextOverlayFocusable && !skipOverlayFocused);
     const overlayButtonsCoexist = skipOverlayFocusable && nextOverlayFocusable;
     if (overlayButtonsCoexist && (keyCode === 37 || keyCode === 39)) {
       if (keyCode === 39 && skipOverlayFocused && this.focusNextEpisodeCard()) {
@@ -24495,18 +24477,6 @@ export const PlayerScreen = {
         this.setControlsVisible(true, { focus: true });
         return;
       }
-    }
-
-    if (
-      !this.paused &&
-      this.controlsVisible &&
-      !this.isDialogOpen() &&
-      Boolean(event?.repeat) &&
-      (keyCode === 37 || keyCode === 39)
-    ) {
-      this.focusProgressBar();
-      this.beginSeekPreview(keyCode === 37 ? -1 : 1, true);
-      return;
     }
 
     if (!this.controlsVisible) {

@@ -18,6 +18,7 @@ import { emitPluginDiagnosticEvent } from "../diagnostics/pluginDiagnostics.js";
 
 const TABLE = "plugins";
 const PUSH_RPC = "sync_push_plugins";
+const SYNC_OVERVIEW_RPC = "get_sync_overview";
 let lastPullStatus = "idle";
 let lastPullError = null;
 const pullInFlightByProfile = new Map();
@@ -129,6 +130,58 @@ function logPluginSyncDiagnostic(event, details = {}) {
 function normalizeProfileId(profileId = null) {
   const raw = Number(profileId == null ? getEffectivePluginProfileId() : profileId);
   return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 1;
+}
+
+async function verifyEmptyRemotePluginSnapshot(profileId) {
+  const profileKey = String(normalizeProfileId(profileId));
+  try {
+    const response = await SupabaseApi.rpc(SYNC_OVERVIEW_RPC, {}, true);
+    const overview =
+      Array.isArray(response) && response.length === 1
+        ? response[0]
+        : response && typeof response === "object" && !Array.isArray(response)
+          ? response
+          : null;
+    const plugins =
+      overview?.plugins && typeof overview.plugins === "object" && !Array.isArray(overview.plugins)
+        ? overview.plugins
+        : null;
+    const profiles =
+      overview?.profiles &&
+      typeof overview.profiles === "object" &&
+      !Array.isArray(overview.profiles)
+        ? overview.profiles
+        : null;
+    const profileExists =
+      profiles &&
+      Object.prototype.hasOwnProperty.call(profiles, profileKey) &&
+      profiles[profileKey] &&
+      typeof profiles[profileKey] === "object" &&
+      !Array.isArray(profiles[profileKey]);
+    const hasPluginCount = plugins && Object.prototype.hasOwnProperty.call(plugins, profileKey);
+    const rawPluginCount = hasPluginCount ? plugins[profileKey] : 0;
+    const pluginCount = Number(rawPluginCount);
+    const validPluginCount =
+      (!hasPluginCount ||
+        typeof rawPluginCount === "number" ||
+        typeof rawPluginCount === "string") &&
+      Number.isInteger(pluginCount) &&
+      pluginCount >= 0;
+    const verified = Boolean(profileExists && validPluginCount && pluginCount === 0);
+    logPluginSyncDiagnostic("empty snapshot verification", {
+      targetProfileId: profileKey,
+      profileExists: Boolean(profileExists),
+      pluginCount: validPluginCount ? pluginCount : null,
+      verified
+    });
+    return verified;
+  } catch (error) {
+    logPluginSyncDiagnostic("empty snapshot verification failed", {
+      targetProfileId: profileKey,
+      error: diagnosticError(error)
+    });
+    return false;
+  }
 }
 
 /**
@@ -542,16 +595,26 @@ export const PluginSyncService = {
         // not cause an otherwise valid pull to be skipped.
         pullRevision = currentRevision;
         const remotePlugins = mapRemotePluginRows(rows);
+        const currentState = PluginStore.get(targetProfileId);
+        const allowVerifiedEmptySnapshot =
+          Array.isArray(rows) &&
+          rows.length === 0 &&
+          currentState.repositories.length > 0 &&
+          !currentState.syncDirty &&
+          !hasOpaqueRepositoryState(currentState) &&
+          (await verifyEmptyRemotePluginSnapshot(targetProfileId));
         logPluginSyncDiagnostic("remote plugins normalized", {
           requestedProfileId: requestedId,
           targetProfileId,
           pullRevision,
           rowCount: remotePlugins.length,
+          allowVerifiedEmptySnapshot,
           rows: remotePlugins.slice(0, 64).map(diagnosticRow)
         });
         const reconciled = await PluginManager.reconcileWithRemoteRepoUrls(remotePlugins, {
           removeMissingLocal: true,
           authoritativeSnapshot: true,
+          allowVerifiedEmptySnapshot,
           expectedRevision: pullRevision,
           profileId: targetProfileId
         });
