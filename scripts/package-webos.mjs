@@ -23,7 +23,7 @@ const appName = "Nuvio TV";
 const webOsServiceId = "space.nuvio.webos.service";
 const webOsPluginServiceId = "space.nuvio.webos.plugin.service";
 const webOsServiceSourceDir = path.join(rootDir, "services", "webos");
-const webOsPluginServiceSourceDir = path.join(rootDir, "services", "webos-plugin");
+const webOsPluginServiceSourceDir = path.join(rootDir, "services", "webos", "plugin");
 const webOsRuntimeScriptPath = "assets/libs/webOSTV.js";
 
 // On-demand screen chunks emitted by scripts/build.mjs. They are fetched at

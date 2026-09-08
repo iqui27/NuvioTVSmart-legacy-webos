@@ -1,12 +1,7 @@
 import { Platform } from "../index.js";
 import { TizenCapabilities } from "./tizenCapabilities.js";
 
-const LOCAL_BASE_URLS = [
-  "http://127.0.0.1:2710",
-  "http://localhost:2710",
-  "http://127.0.0.1:11470",
-  "http://localhost:11470"
-];
+const LOCAL_BASE_URLS = ["http://127.0.0.1:2710", "http://localhost:2710"];
 
 const START_TIMEOUT_MS = 12000;
 const PROBE_TIMEOUT_MS = 2500;

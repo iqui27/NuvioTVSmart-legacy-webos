@@ -1,6 +1,11 @@
 import { WebOsLunaService } from "./webosLunaService.js";
 
 const WEBOS_COMPANION_SERVICE_ID = "space.nuvio.webos.service";
+const RECOVERABLE_METHODS = new Set(["ping", "status"]);
+
+function waitBeforeRecoveryRetry() {
+  return new Promise((resolve) => setTimeout(resolve, 100));
+}
 
 export function isWebOsCompanionServiceAvailable() {
   return WebOsLunaService.isAvailable();
@@ -13,7 +18,9 @@ export function getWebOsCompanionServiceIds() {
 export async function requestWebOsCompanionService({
   method = "",
   parameters = {},
-  subscribe = false
+  subscribe = false,
+  timeoutMs = 30000,
+  retryOnFailure = RECOVERABLE_METHODS.has(String(method || "").trim())
 } = {}) {
   if (!isWebOsCompanionServiceAvailable()) {
     throw {
@@ -24,19 +31,26 @@ export async function requestWebOsCompanionService({
   }
 
   let lastError = null;
-  for (const serviceId of getWebOsCompanionServiceIds()) {
-    try {
-      const payload = await WebOsLunaService.request(`luna://${serviceId}`, {
-        method,
-        parameters,
-        subscribe
-      });
-      return {
-        serviceId,
-        payload
-      };
-    } catch (error) {
-      lastError = error;
+  const attempts = retryOnFailure && !subscribe ? 2 : 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    for (const serviceId of getWebOsCompanionServiceIds()) {
+      try {
+        const payload = await WebOsLunaService.request(`luna://${serviceId}`, {
+          method,
+          parameters,
+          subscribe,
+          timeoutMs
+        });
+        return {
+          serviceId,
+          payload
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (attempt + 1 < attempts) {
+      await waitBeforeRecoveryRetry();
     }
   }
 

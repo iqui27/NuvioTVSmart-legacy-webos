@@ -3,9 +3,11 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { I18n } from "../../../i18n/index.js";
 import { Platform } from "../../../platform/index.js";
+import { MODERN_HOME_CONSTANTS } from "../home/modernHomeLayout.js";
 import { renderContentFilterPicker } from "../../components/filterPicker.js";
 import {
   PosterOptionsDialogController,
@@ -33,6 +35,7 @@ import {
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { scrollIntoNearestView } from "../../../platform/legacyDom.js";
 import { atualizarImagensDeGrade } from "../../../core/util/gradeLazyImages.js";
+import { allowDpadRepeat, resetDpadRepeat } from "../../navigation/dpadRepeatThrottle.js";
 import { catalogSkipStep, catalogSupportsExtra } from "../../../core/addons/homeCatalogs.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
@@ -245,9 +248,15 @@ export const DiscoverScreen = {
     });
   },
 
-  async refreshWatchedTitleIds() {
+  async refreshWatchedTitleIds(items = this.items) {
     const watchedItems = await watchedItemsRepository.getAll(5000).catch(() => []);
-    this.watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
+    const projectedItems = await watchedTitleStateRepository
+      .getTitleWatchedItems(Array.isArray(items) ? items : [], {
+        baseWatchedItems: watchedItems,
+        limit: 5000
+      })
+      .catch(() => watchedItems);
+    this.watchedTitleIds = buildWatchedTitleIdSet(projectedItems);
   },
 
   getRouteStateKey() {
@@ -360,6 +369,8 @@ export const DiscoverScreen = {
     this.rowFocusedIndexByRow = {};
     this.pendingRestoreFocus = false;
     this.preserveViewportOnNextRender = false;
+    this.discoverVerticalFastScrollState = null;
+    this.discoverVerticalFastScrollEndTimer = null;
     this.nextSkip = 0;
     this.hasMore = true;
     const routeLoadToken = this.loadToken;
@@ -679,6 +690,11 @@ export const DiscoverScreen = {
     this.pendingRestoreFocus = Boolean(restoreFocusToGrid);
     this.preserveViewportOnNextRender = Boolean(preserveViewport && addedCount > 0);
     this.suppressInitialLoadingRenders = false;
+    void this.refreshWatchedTitleIds(this.items).then(() => {
+      if (token === this.loadToken && Router.getCurrent() === "discover") {
+        this.requestRender();
+      }
+    });
     if (partialRender) {
       this.updateRenderedDiscoverResults();
     } else {
@@ -1337,6 +1353,133 @@ export const DiscoverScreen = {
     return true;
   },
 
+  endDiscoverVerticalFastScroll({ land = true } = {}) {
+    const state = this.discoverVerticalFastScrollState || null;
+    if (state?.raf) {
+      cancelAnimationFrame(state.raf);
+    }
+    if (this.discoverVerticalFastScrollEndTimer) {
+      clearTimeout(this.discoverVerticalFastScrollEndTimer);
+      this.discoverVerticalFastScrollEndTimer = null;
+    }
+    this.discoverVerticalFastScrollState = null;
+    if (land && state?.direction) {
+      this.landDiscoverVerticalFastScroll(state.direction, state.startColumn);
+    }
+  },
+
+  canDiscoverVerticalFastScroll(scroller, direction) {
+    if (!scroller || !direction) {
+      return false;
+    }
+    const maxScrollTop = Math.max(
+      0,
+      Number(scroller.scrollHeight || 0) - Number(scroller.clientHeight || 0)
+    );
+    const scrollTop = Number(scroller.scrollTop || 0);
+    return direction > 0 ? scrollTop < maxScrollTop - 1 : scrollTop > 1;
+  },
+
+  startDiscoverVerticalFastScroll(direction) {
+    const scroller = this.getContentScroller();
+    const current = this.container?.querySelector(".discover-grid .seeall-card.focused") || null;
+    if (!scroller || !direction || !current) {
+      return false;
+    }
+    if (!this.canDiscoverVerticalFastScroll(scroller, direction)) {
+      this.endDiscoverVerticalFastScroll({ land: true });
+      return true;
+    }
+
+    const existing = this.discoverVerticalFastScrollState;
+    if (existing?.raf && existing.direction === direction) {
+      this.armDiscoverVerticalFastScrollEndTimer();
+      return true;
+    }
+
+    this.endDiscoverVerticalFastScroll({ land: true });
+    const state = {
+      scroller,
+      direction,
+      startColumn: Number(current.dataset.navCol || 0),
+      raf: null,
+      lastTime: performance.now()
+    };
+    const tick = (now) => {
+      if (this.discoverVerticalFastScrollState !== state) {
+        return;
+      }
+      if (!scroller.isConnected) {
+        this.endDiscoverVerticalFastScroll({ land: false });
+        return;
+      }
+      const dtMs = Math.min(
+        MODERN_HOME_CONSTANTS.verticalFastScrollMaxFrameMs,
+        Math.max(0, now - state.lastTime)
+      );
+      state.lastTime = now;
+      const maxScrollTop = Math.max(
+        0,
+        Number(scroller.scrollHeight || 0) - Number(scroller.clientHeight || 0)
+      );
+      const currentTop = Number(scroller.scrollTop || 0);
+      const delta =
+        state.direction * MODERN_HOME_CONSTANTS.verticalFastScrollVelocityPxPerSec * (dtMs / 1000);
+      const nextTop = Math.max(0, Math.min(maxScrollTop, currentTop + delta));
+      scroller.scrollTop = nextTop;
+      this.savedScrollTop = nextTop;
+      if (Math.abs(nextTop - currentTop) <= 0.1 || nextTop <= 0 || nextTop >= maxScrollTop) {
+        this.endDiscoverVerticalFastScroll({ land: true });
+        return;
+      }
+      state.raf = requestAnimationFrame(tick);
+    };
+
+    this.discoverVerticalFastScrollState = state;
+    state.raf = requestAnimationFrame(tick);
+    this.armDiscoverVerticalFastScrollEndTimer();
+    return true;
+  },
+
+  armDiscoverVerticalFastScrollEndTimer() {
+    if (this.discoverVerticalFastScrollEndTimer) {
+      clearTimeout(this.discoverVerticalFastScrollEndTimer);
+    }
+    this.discoverVerticalFastScrollEndTimer = setTimeout(() => {
+      this.discoverVerticalFastScrollEndTimer = null;
+      this.endDiscoverVerticalFastScroll({ land: true });
+    }, MODERN_HOME_CONSTANTS.verticalFastScrollEndTimeoutMs);
+  },
+
+  landDiscoverVerticalFastScroll(direction, startColumn) {
+    const scroller = this.getContentScroller();
+    if (!scroller) {
+      return;
+    }
+    const scrollerRect = scroller.getBoundingClientRect();
+    const visibleCards = Array.from(
+      this.container?.querySelectorAll(".discover-grid .seeall-card.focusable") || []
+    )
+      .map((node) => {
+        const rect = node.getBoundingClientRect();
+        const overlap =
+          Math.min(rect.bottom, scrollerRect.bottom) - Math.max(rect.top, scrollerRect.top);
+        return overlap > 0 ? node : null;
+      })
+      .filter(Boolean);
+    if (!visibleCards.length) {
+      return;
+    }
+    const sameColumn = visibleCards.filter(
+      (node) => Number(node.dataset.navCol || -1) === Number(startColumn)
+    );
+    const candidates = sameColumn.length ? sameColumn : visibleCards;
+    const target = direction > 0 ? candidates[candidates.length - 1] : candidates[0];
+    if (target) {
+      this.focusNode(target);
+    }
+  },
+
   getContentScroller() {
     return this.container?.querySelector(".discover-main") || null;
   },
@@ -1900,6 +2043,36 @@ export const DiscoverScreen = {
       event?.preventDefault?.();
     }
 
+    const activeFastScroll = this.discoverVerticalFastScrollState || null;
+    const requestedFastScrollDirection = isDownKey(event) ? 1 : isUpKey(event) ? -1 : 0;
+    if (
+      activeFastScroll &&
+      (isLeftKey(event) ||
+        isRightKey(event) ||
+        (!event?.repeat &&
+          requestedFastScrollDirection !== 0 &&
+          requestedFastScrollDirection !== activeFastScroll.direction))
+    ) {
+      this.endDiscoverVerticalFastScroll({ land: true });
+    }
+
+    if (
+      currentAction === "openDetail" &&
+      event?.repeat &&
+      requestedFastScrollDirection !== 0 &&
+      this.startDiscoverVerticalFastScroll(requestedFastScrollDirection)
+    ) {
+      return;
+    }
+
+    if (
+      currentAction === "openDetail" &&
+      (isLeftKey(event) || isRightKey(event)) &&
+      !allowDpadRepeat(this, event, { horizontalMs: 80, verticalMs: 112 })
+    ) {
+      return;
+    }
+
     if (this.openPicker) {
       if (isUpKey(event)) {
         this.movePickerIndex(-1);
@@ -1984,6 +2157,16 @@ export const DiscoverScreen = {
   },
 
   onKeyUp(event) {
+    const keyCode = Number(event?.keyCode || 0);
+    if ([37, 38, 39, 40].includes(keyCode)) {
+      resetDpadRepeat(this);
+    }
+    if (keyCode === 38 || keyCode === 40) {
+      const releasedDirection = keyCode === 40 ? 1 : -1;
+      if (this.discoverVerticalFastScrollState?.direction === releasedDirection) {
+        this.endDiscoverVerticalFastScroll({ land: true });
+      }
+    }
     if (this.suppressHoldMenuEnterUntilKeyUp) {
       this.suppressHoldMenuEnterUntilKeyUp = false;
       if (Number(event?.keyCode || 0) === 13) {
@@ -1991,7 +2174,7 @@ export const DiscoverScreen = {
         return;
       }
     }
-    if (Number(event?.keyCode || 0) !== 13) {
+    if (keyCode !== 13) {
       return;
     }
     const current =
@@ -2016,6 +2199,8 @@ export const DiscoverScreen = {
 
   cleanup() {
     this.loadToken = (this.loadToken || 0) + 1;
+    resetDpadRepeat(this);
+    this.endDiscoverVerticalFastScroll({ land: false });
     this.cancelScheduledRender();
     this.clearClosingPicker();
     this.lastRenderedOpenPicker = null;

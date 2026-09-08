@@ -1,6 +1,7 @@
 import { watchedItemsRepository } from "./watchedItemsRepository.js";
 import { watchProgressRepository } from "./watchProgressRepository.js";
 import { TraktAuthService } from "./traktAuthService.js";
+import { watchedItemsShareIdentity } from "./watchedIdentity.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -32,12 +33,12 @@ function buildEpisodeKey(season, episode) {
   return `${season}:${episode}`;
 }
 
-async function fetchLocalWatchedMap(contentId) {
+async function fetchLocalWatchedMap(contentReference = {}) {
   const allWatched = await watchedItemsRepository.getAll();
   const watchedMap = new Map();
 
   for (const item of allWatched) {
-    if (item.contentId !== contentId) continue;
+    if (!watchedItemsShareIdentity(item, contentReference)) continue;
     if (item.contentType === "series" && item.season != null && item.episode != null) {
       const key = buildEpisodeKey(item.season, item.episode);
       watchedMap.set(key, {
@@ -57,12 +58,12 @@ async function fetchLocalWatchedMap(contentId) {
   return watchedMap;
 }
 
-async function fetchProgressWatchedMap(contentId) {
+async function fetchProgressWatchedMap(contentReference = {}) {
   const allProgress = await watchProgressRepository.getAll();
   const progressMap = new Map();
 
   for (const progress of allProgress) {
-    if (progress.contentId !== contentId) continue;
+    if (!watchedItemsShareIdentity(progress, contentReference)) continue;
     const fraction =
       Number(progress.durationMs || 0) > 0
         ? Number(progress.positionMs || 0) / Number(progress.durationMs || 0)
@@ -117,7 +118,9 @@ async function fetchTraktMovieWatchedState(movieTraktId) {
 
   try {
     const watchedMovies = await TraktAuthService.fetchWatchedMovies();
-    const watchedMovie = watchedMovies.find((movie) => movie.traktId === movieTraktId);
+    const watchedMovie = watchedMovies.find(
+      (movie) => String(movie.traktId || "") === String(movieTraktId || "")
+    );
 
     if (watchedMovie) {
       return {
@@ -167,8 +170,8 @@ export const detailWatchedEnrichmentService = {
     if (cached) return cached;
 
     const [localMap, progressMap, traktMap] = await Promise.all([
-      fetchLocalWatchedMap(contentId),
-      fetchProgressWatchedMap(contentId),
+      fetchLocalWatchedMap({ contentId, traktId: showTraktId }),
+      fetchProgressWatchedMap({ contentId, traktId: showTraktId }),
       fetchTraktSeriesWatchedMap(showTraktId)
     ]);
 
@@ -186,8 +189,8 @@ export const detailWatchedEnrichmentService = {
     if (cached) return cached;
 
     const [localMap, progressMap] = await Promise.all([
-      fetchLocalWatchedMap(contentId),
-      fetchProgressWatchedMap(contentId)
+      fetchLocalWatchedMap({ contentId, traktId: movieTraktId }),
+      fetchProgressWatchedMap({ contentId, traktId: movieTraktId })
     ]);
 
     const localState = localMap.get("movie");

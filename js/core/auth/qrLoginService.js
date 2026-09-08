@@ -7,6 +7,14 @@ import { fetchSupabaseAuth } from "./supabaseAuthFetch.js";
 
 let lastError = null;
 
+function loginTrace(event, data) {
+  try {
+    globalThis.__NUVIO_TIZEN_LOGIN_TRACE__?.(event, data);
+  } catch (_) {
+    // Login diagnostics must never change the authentication flow.
+  }
+}
+
 function hasQrAuthConfig() {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 }
@@ -356,6 +364,7 @@ export const QrLoginService = {
 
   async start() {
     lastError = null;
+    loginTrace("qr start begin");
     try {
       if (!hasQrAuthConfig()) {
         throw new Error("QR auth is not configured");
@@ -403,7 +412,7 @@ export const QrLoginService = {
         throw new Error("Empty response from start_tv_login_session");
       }
 
-      return {
+      const result = {
         code: session.code,
         loginUrl: session.qr_content || session.web_url || null,
         qrImageUrl:
@@ -413,8 +422,15 @@ export const QrLoginService = {
         pollIntervalSeconds: Number(session.poll_interval_seconds || 3),
         deviceNonce
       };
+      loginTrace("qr start success", {
+        pollIntervalSeconds: result.pollIntervalSeconds,
+        hasQrContent: Boolean(result.loginUrl),
+        hasQrImage: Boolean(result.qrImageUrl)
+      });
+      return result;
     } catch (error) {
       lastError = String(error?.message || "QR start failed");
+      loginTrace("qr start failed", { name: error?.name || "Error" });
       console.error("QR start error:", error);
       return null;
     }
@@ -448,9 +464,12 @@ export const QrLoginService = {
       }
 
       const data = await response.json();
-      return data?.[0]?.status || null;
+      const status = data?.[0]?.status || null;
+      loginTrace("qr poll parsed", { status: status || "empty" });
+      return status;
     } catch (error) {
       lastError = String(error?.message || "QR poll failed");
+      loginTrace("qr poll failed", { name: error?.name || "Error" });
       console.error("QR poll error:", error);
       return null;
     }
@@ -458,6 +477,7 @@ export const QrLoginService = {
 
   async exchange(code, deviceNonce) {
     lastError = null;
+    loginTrace("qr exchange begin");
     try {
       if (!hasQrAuthConfig()) {
         lastError = "QR auth is not configured";
@@ -491,15 +511,19 @@ export const QrLoginService = {
       };
       if (!tokens?.accessToken || !tokens?.refreshToken) {
         lastError = "QR exchange missing session tokens";
+        loginTrace("qr exchange missing tokens");
         return false;
       }
       SessionStore.accessToken = tokens.accessToken;
       SessionStore.refreshToken = tokens.refreshToken;
       SessionStore.isAnonymousSession = false;
+      loginTrace("qr exchange session ready");
       AuthManager.setState(AuthState.AUTHENTICATED);
+      loginTrace("qr exchange authenticated");
       return result;
     } catch (error) {
       lastError = String(error?.message || "QR exchange failed");
+      loginTrace("qr exchange failed", { name: error?.name || "Error" });
       console.error("QR exchange error:", error);
       return false;
     }

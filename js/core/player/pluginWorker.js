@@ -242,6 +242,7 @@ function pluginPolyfill() {
     // private bridge functions directly.
     var __nuvioNativeFetch = __native_fetch;
     var __nuvioNativeCancel = __native_cancel;
+    var __nuvioNativeLog = __native_log;
     var __nuvioFetchCounter = 0;
     var __nuvioParseUrl = __parse_url;
     var __nuvioCheerioLoad = __cheerio_load;
@@ -261,9 +262,35 @@ function pluginPolyfill() {
     globalThis.global = globalThis;
     globalThis.window = globalThis;
     globalThis.self = globalThis;
-    // QuickJS deliberately starts without browser globals. Keep provider
-    // logging harmless and local; plugin logs never cross the host bridge.
-    globalThis.console = { log: function() {}, info: function() {}, warn: function() {}, error: function() {}, debug: function() {} };
+    function __nuvioFormatLogValue(value) {
+      try {
+        if (value && value.stack) return String(value.stack);
+      } catch (_) {}
+      if (value === undefined) return 'undefined';
+      if (value === null) return 'null';
+      if (typeof value === 'string') return value;
+      try {
+        var json = JSON.stringify(value);
+        return json === undefined ? String(value) : json;
+      } catch (_) {
+        return String(value);
+      }
+    }
+    function __nuvioForwardPluginLog(level, args) {
+      var values = [];
+      for (var i = 0; i < args.length; i++) values.push(__nuvioFormatLogValue(args[i]));
+      try { __nuvioNativeLog(level, values.join(' ')); } catch (_) {}
+    }
+    // Keep provider info/debug logs quiet, but forward warnings and errors to
+    // the host. The host writes them through console.warn/error so they are
+    // visible in Inspector and in Settings > Console debug.
+    globalThis.console = {
+      log: function() {},
+      info: function() {},
+      warn: function() { __nuvioForwardPluginLog('warn', arguments); },
+      error: function() { __nuvioForwardPluginLog('error', arguments); },
+      debug: function() {}
+    };
     globalThis.SCRAPER_ID = __get_scraper_id();
     globalThis.SCRAPER_SETTINGS = JSON.parse(__get_scraper_settings());
     globalThis.TMDB_API_KEY = __get_tmdb_api_key();
@@ -549,6 +576,14 @@ async function execute(message) {
   installSync("__get_scraper_id", () => String(request.scraperId || ""));
   installSync("__get_scraper_settings", () => JSON.stringify(request.settings || {}));
   installSync("__get_tmdb_api_key", () => String(request.tmdbApiKey || ""));
+  installSync("__native_log", (level, message) => {
+    send({
+      type: "pluginLog",
+      level: String(level || "").toLowerCase() === "error" ? "error" : "warn",
+      message: String(message || "").slice(0, 4000)
+    });
+    return "";
+  });
   installSync("__native_cancel", (abortToken) => {
     var requestId = execution.abortTokens.get(String(abortToken || ""));
     if (!requestId) return false;
@@ -701,7 +736,7 @@ async function execute(message) {
   );
   context.unwrapResult(cryptoJsResult).dispose();
   var bridgeCleanup = context.evalCode(
-    '["__native_fetch","__native_cancel","__parse_url","__get_scraper_id","__get_scraper_settings","__get_tmdb_api_key","__cheerio_load","__cheerio_select","__cheerio_find","__cheerio_text","__cheerio_html","__cheerio_innerHtml","__cheerio_attr","__cheerio_next","__cheerio_prev","__cheerio_parent","__cheerio_children","__cheerio_filter","__cheerio_eq"].forEach(function(name){ try { globalThis[name] = undefined; delete globalThis[name]; } catch (_) {} }); true;',
+    '["__native_fetch","__native_cancel","__native_log","__parse_url","__get_scraper_id","__get_scraper_settings","__get_tmdb_api_key","__cheerio_load","__cheerio_select","__cheerio_find","__cheerio_text","__cheerio_html","__cheerio_innerHtml","__cheerio_attr","__cheerio_next","__cheerio_prev","__cheerio_parent","__cheerio_children","__cheerio_filter","__cheerio_eq"].forEach(function(name){ try { globalThis[name] = undefined; delete globalThis[name]; } catch (_) {} }); true;',
     "nuvio-plugin-bridge-cleanup.js"
   );
   context.unwrapResult(bridgeCleanup).dispose();
@@ -731,17 +766,22 @@ async function execute(message) {
     var callResult = context.evalCode(
       "(async function(){ try { var exported = globalThis.__pluginModuleExports || {}; var fn = exported.getStreams || globalThis.getStreams; if (typeof fn !== 'function') return JSON.stringify([]); var args = " +
         JSON.stringify(request.args || {}) +
-        "; var value = await fn(args.tmdbId, args.mediaType, args.season, args.episode); return JSON.stringify(Array.isArray(value) ? value : []); } catch (_) { return JSON.stringify([]); } })()",
+        "; var value = await fn(args.tmdbId, args.mediaType, args.season, args.episode); return JSON.stringify(Array.isArray(value) ? value : []); } catch (_) { try { console.error('getStreams failed:', _); } catch (__) {} return JSON.stringify([]); } })()",
       "nuvio-plugin-call.js"
     );
     callHandle = context.unwrapResult(callResult);
-  } catch (_) {
+  } catch (error) {
     // A synchronous provider failure can be reported by QuickJS while
     // evaluating the async call expression itself (before a Promise handle is
     // returned). It is still an exception of getStreams and follows Android's
     // empty-result contract.
     execution.cleanup();
     activeExecution = null;
+    send({
+      type: "pluginLog",
+      level: "error",
+      message: "getStreams invocation failed: " + String(error?.message || error)
+    });
     send({ type: "result", results: [] });
     return;
   }
@@ -764,6 +804,12 @@ async function execute(message) {
     // covers only the provider call itself.
     execution.cleanup();
     activeExecution = null;
+    send({
+      type: "pluginLog",
+      level: "error",
+      message:
+        "getStreams promise failed: " + String(providerCallError?.message || providerCallError)
+    });
     send({ type: "result", results: [] });
     return;
   }
@@ -774,7 +820,12 @@ async function execute(message) {
   var results;
   try {
     results = JSON.parse(typeof resultJson === "string" ? resultJson : String(resultJson || "[]"));
-  } catch (_) {
+  } catch (error) {
+    send({
+      type: "pluginLog",
+      level: "error",
+      message: "Plugin returned invalid JSON: " + String(error?.message || error)
+    });
     results = [];
   }
   results = Array.isArray(results)

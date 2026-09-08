@@ -3,6 +3,7 @@ import { tmdbImageAtSize } from "../../../core/util/tmdbImageSize.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { Environment } from "../../../platform/environment.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { I18n } from "../../../i18n/index.js";
@@ -247,9 +248,15 @@ export const CatalogSeeAllScreen = {
     return true;
   },
 
-  async refreshWatchedTitleIds() {
+  async refreshWatchedTitleIds(items = this.items) {
     const watchedItems = await watchedItemsRepository.getAll(5000).catch(() => []);
-    this.watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
+    const projectedItems = await watchedTitleStateRepository
+      .getTitleWatchedItems(Array.isArray(items) ? items : [], {
+        baseWatchedItems: watchedItems,
+        limit: 5000
+      })
+      .catch(() => watchedItems);
+    this.watchedTitleIds = buildWatchedTitleIdSet(projectedItems);
   },
 
   async mount(params = {}, navigationContext = {}) {
@@ -408,6 +415,11 @@ export const CatalogSeeAllScreen = {
     this.loading = false;
     this.pendingRestoreFocus = true;
     this.preserveViewportOnNextRender = Boolean(preserveViewport && addedCount > 0);
+    void this.refreshWatchedTitleIds(this.items).then(() => {
+      if (token === this.loadToken && Router.getCurrent() === "catalogSeeAll") {
+        this.render();
+      }
+    });
     this.render();
   },
 
@@ -684,18 +696,8 @@ export const CatalogSeeAllScreen = {
           this.preserveViewportOnNextRender = true;
           this.render();
         },
-        onChanged: (state) => {
-          const itemId = String(state?.item?.id || "").trim();
-          if (!itemId) {
-            return;
-          }
-          const watchedTitleIds = new Set(this.watchedTitleIds || []);
-          if (state.isWatched) {
-            watchedTitleIds.add(itemId);
-          } else {
-            watchedTitleIds.delete(itemId);
-          }
-          this.watchedTitleIds = watchedTitleIds;
+        onChanged: () => {
+          void this.refreshWatchedTitleIds(this.items);
         }
       });
     }

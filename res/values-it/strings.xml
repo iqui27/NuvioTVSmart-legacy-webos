@@ -1070,6 +1070,10 @@
     <string name="library_filter_sort">Ordina</string>
     <string name="library_filter_genre">Genere</string>
     <string name="library_filter_year">Anno</string>
+    <string name="library_filter_watched">Stato visione</string>
+    <string name="library_watched_filter_all">Tutti</string>
+    <string name="library_watched_filter_watched">Visti</string>
+    <string name="library_watched_filter_unwatched">Non visti</string>
     <string name="genre_action">Azione</string>
     <string name="genre_adventure">Avventura</string>
     <string name="genre_animation">Animazione</string>

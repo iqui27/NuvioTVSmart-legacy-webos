@@ -75,6 +75,10 @@ async function markAsWatchedLocally(context) {
     const { watchedItemsRepository } = await import("./watchedItemsRepository.js");
     const item = {
       contentId: context.contentId,
+      contentType: context.contentType,
+      imdbId: context.imdbId || null,
+      tmdbId: context.tmdbId || null,
+      traktId: context.traktId || null,
       watchedAt: Date.now()
     };
     if (context.contentType === "series") {

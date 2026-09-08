@@ -1,25 +1,8 @@
 import { normalizeKeyEvent, isBackEvent } from "../sharedKeys.js";
 import { WebOSPlayerExtensions } from "../webos/webosPlayerExtensions.js";
-import {
-  isWebOsCompanionServiceAvailable,
-  requestWebOsCompanionService
-} from "../webos/webosCompanionService.js";
 
 export const webosAdapter = {
   name: "webos",
-
-  init() {
-    if (!isWebOsCompanionServiceAvailable()) {
-      return;
-    }
-
-    requestWebOsCompanionService({
-      method: "ping",
-      parameters: {}
-    }).catch((error) => {
-      console.warn("webOS companion service ping failed:", error);
-    });
-  },
 
   exitApp() {
     if (globalThis.webOSSystem && typeof globalThis.webOSSystem.close === "function") {

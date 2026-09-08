@@ -4,6 +4,7 @@ import { TmdbMetadataService } from "../../../core/tmdb/tmdbMetadataService.js";
 import { TmdbSettingsStore } from "../../../data/local/tmdbSettingsStore.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { Environment } from "../../../platform/environment.js";
 import { I18n } from "../../../i18n/index.js";
 import {
@@ -225,9 +226,18 @@ export const TmdbEntityBrowseScreen = {
     return true;
   },
 
-  async refreshWatchedTitleIds() {
+  async refreshWatchedTitleIds(items = null) {
     const watchedItems = await watchedItemsRepository.getAll(5000).catch(() => []);
-    this.watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
+    const railItems = Array.isArray(items)
+      ? items
+      : (this.data?.rails || []).flatMap((rail) => (Array.isArray(rail?.items) ? rail.items : []));
+    const projectedItems = await watchedTitleStateRepository
+      .getTitleWatchedItems(railItems, {
+        baseWatchedItems: watchedItems,
+        limit: 5000
+      })
+      .catch(() => watchedItems);
+    this.watchedTitleIds = buildWatchedTitleIdSet(projectedItems);
   },
 
   async mount(params = {}, navigationContext = {}) {
@@ -326,6 +336,11 @@ export const TmdbEntityBrowseScreen = {
       this.data = data;
       this.pendingRestoreFocus = false;
       this.render();
+      void this.refreshWatchedTitleIds().then(() => {
+        if (token === this.loadToken && Router.getCurrent() === "tmdbEntityBrowse") {
+          this.render();
+        }
+      });
     } catch (error) {
       if (token !== this.loadToken) {
         return;
@@ -805,6 +820,11 @@ export const TmdbEntityBrowseScreen = {
       rail.isLoading = false;
       if (token === this.loadToken) {
         this.render();
+        void this.refreshWatchedTitleIds().then(() => {
+          if (token === this.loadToken && Router.getCurrent() === "tmdbEntityBrowse") {
+            this.render();
+          }
+        });
       }
     }
   },
@@ -881,18 +901,8 @@ export const TmdbEntityBrowseScreen = {
           this.pendingRestoreFocus = true;
           this.render();
         },
-        onChanged: (state) => {
-          const itemId = String(state?.item?.id || "").trim();
-          if (!itemId) {
-            return;
-          }
-          const watched = new Set(this.watchedTitleIds || []);
-          if (state.isWatched) {
-            watched.add(itemId);
-          } else {
-            watched.delete(itemId);
-          }
-          this.watchedTitleIds = watched;
+        onChanged: () => {
+          void this.refreshWatchedTitleIds();
         }
       });
     }

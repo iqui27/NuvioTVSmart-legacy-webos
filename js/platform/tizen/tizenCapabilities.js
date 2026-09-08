@@ -2,6 +2,7 @@ const TIZEN_PLATFORM_VERSION_CAPABILITY = "http://tizen.org/feature/platform.ver
 const TIZEN_WEB_SERVICE_CAPABILITY = "http://tizen.org/feature/web.service";
 const TIZEN_P2P_MIN_MAJOR_VERSION = 5;
 const TIZEN_P2P_MIN_CHROMIUM_VERSION = 63;
+const TIZEN_PLUGIN_MIN_MAJOR_VERSION = 6;
 
 let cachedCapabilities = null;
 
@@ -133,10 +134,15 @@ export function getTizenCapabilities(runtime = globalThis) {
     });
   // Samsung exposes web.service as an optional capability. Some supported
   // TVs/firmwares report false even though the packaged service can still be
-  // started through the legacy service/application APIs. Let the real local
-  // service probe decide in that case; keep the version and package gates
-  // authoritative so Tizen 4 and service-less packages remain unsupported.
+  // started through wrt:service. Let the real local service probe decide in
+  // that case; keep the version and package gates authoritative so Tizen 4
+  // and service-less packages remain unsupported.
   const supportsP2p = isTizen && engineFsServicePackaged && p2pVersionSupported;
+  // The Tizen plugin runtime is intentionally disabled on older firmware.
+  // Keep this independent from EngineFS: P2P/media proxy support remains
+  // available on Tizen 5.x even though executable plugins are not.
+  const tizenPluginVersionSupported =
+    !isTizen || tizenVersion.major >= TIZEN_PLUGIN_MIN_MAJOR_VERSION;
 
   const capabilities = Object.freeze({
     isTizen,
@@ -152,20 +158,14 @@ export function getTizenCapabilities(runtime = globalThis) {
     supportsWebService,
     p2pVersionSupported,
     supportsP2p,
+    tizenPluginVersionSupported,
     supportsTizenAvPlayDashAudioSwitching:
       isTizen &&
       supportsP2pByVersion({
         tizenMajorVersion: tizenVersion.major,
         chromiumMajorVersion
       }),
-    advancedSubtitleStylingLimited: isTizen && typeof runtime?.ResizeObserver !== "function",
-    legacyTizen: Boolean(
-      isTizen &&
-      ((tizenVersion.major > 0 && tizenVersion.major < TIZEN_P2P_MIN_MAJOR_VERSION) ||
-        (tizenVersion.major === 0 &&
-          chromiumMajorVersion > 0 &&
-          chromiumMajorVersion < TIZEN_P2P_MIN_CHROMIUM_VERSION))
-    )
+    advancedSubtitleStylingLimited: isTizen && typeof runtime?.ResizeObserver !== "function"
   });
 
   if (runtime === globalThis) {
@@ -193,6 +193,11 @@ export const TizenCapabilities = {
 
   canUseP2p(runtime = globalThis) {
     return getTizenCapabilities(runtime).supportsP2p;
+  },
+
+  canUsePlugins(runtime = globalThis) {
+    const capabilities = getTizenCapabilities(runtime);
+    return !capabilities.isTizen || capabilities.tizenPluginVersionSupported;
   },
 
   isP2pUnsupported(runtime = globalThis) {

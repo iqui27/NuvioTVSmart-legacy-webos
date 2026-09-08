@@ -4,11 +4,11 @@
   "services": [
     {
       "name": "space.nuvio.webos.service",
-      "description": "Boots the local media runtime and exposes health checks",
+      "description": "Starts the local media runtime on demand and exposes health checks",
       "commands": [
         {
           "name": "ping",
-          "description": "Boot the local runtime and report service health",
+          "description": "Start the local runtime on demand and report service health",
           "public": true
         },
         {

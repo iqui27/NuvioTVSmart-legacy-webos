@@ -7,13 +7,15 @@ try {
     this.register = function () {};
   };
 }
-var pluginHttp = require("../../../services/plugin-http.cjs");
+var pluginHttp = require("../../../plugin-http.cjs");
 var SERVICE_ID = "space.nuvio.webos.plugin.service";
 var PLUGIN_SERVICE_PORT = 2721;
 var MAX_ACTIVE_REQUESTS = 10;
 var MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 var service = new Service(SERVICE_ID);
 var server = pluginHttp.createPluginHttpServer({ port: PLUGIN_SERVICE_PORT });
+var serverStartInFlight = false;
+var serverStartWaiters = [];
 
 function respond(message, payload) {
   if (message && typeof message.respond === "function") {
@@ -28,11 +30,41 @@ function startServer(callback) {
     callback(null);
     return;
   }
+  if (serverStartInFlight) {
+    serverStartWaiters.push(callback);
+    return;
+  }
+
+  serverStartInFlight = true;
+  var settled = false;
+  var finish = function (error) {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    serverStartInFlight = false;
+    var waiters = serverStartWaiters.splice(0);
+    [callback].concat(waiters).forEach(function (waiter) {
+      try {
+        waiter(error || null);
+      } catch (_) {
+        // One failed Luna caller must not prevent other callers from being
+        // notified about the same bind attempt.
+      }
+    });
+  };
+
   server.once("listening", function () {
-    callback(null);
+    finish(null);
   });
-  server.once("error", callback);
-  server.listen(PLUGIN_SERVICE_PORT, "127.0.0.1");
+  server.once("error", function (error) {
+    finish(error);
+  });
+  try {
+    server.listen(PLUGIN_SERVICE_PORT, "127.0.0.1");
+  } catch (error) {
+    finish(error);
+  }
 }
 
 service.register("ping", function (message) {

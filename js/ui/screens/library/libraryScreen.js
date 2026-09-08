@@ -35,6 +35,7 @@ import {
 } from "../../components/sidebarNavigation.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { scrollIntoNearestView } from "../../../platform/legacyDom.js";
+import { allowDpadRepeat, resetDpadRepeat } from "../../navigation/dpadRepeatThrottle.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const PICKER_MENU_EXIT_MS = 160;
@@ -126,7 +127,8 @@ function filterStructureSignature(state = {}) {
   return [
     state.sourceMode === "trakt" ? "trakt" : "local",
     Array.isArray(state.availableGenres) && state.availableGenres.length ? "genre" : "no-genre",
-    Array.isArray(state.availableYears) && state.availableYears.length ? "year" : "no-year"
+    Array.isArray(state.availableYears) && state.availableYears.length ? "year" : "no-year",
+    "watched"
   ].join("|");
 }
 
@@ -425,7 +427,9 @@ export const LibraryScreen = {
                 ? state.selectedGenre || "__all__"
                 : picker === "year"
                   ? state.selectedYear || "__all__"
-                  : state.selectedSortKey;
+                  : picker === "watched"
+                    ? state.selectedWatchedFilter
+                    : state.selectedSortKey;
     const selectedIndex = Math.max(
       0,
       options.findIndex((option) => option.value === currentValue)
@@ -521,7 +525,14 @@ export const LibraryScreen = {
             this.controller.getPickerOptions("year"),
             "library-picker-flex"
           )
-        : ""
+        : "",
+      this.renderPicker(
+        "watched",
+        t("library_filter_watched", {}, "Watched"),
+        this.controller.getSelectedWatchedLabel(),
+        this.controller.getPickerOptions("watched"),
+        "library-picker-flex"
+      )
     ]
       .filter(Boolean)
       .join("");
@@ -714,6 +725,7 @@ export const LibraryScreen = {
       sort: this.controller.getSelectedSortLabel(),
       genre: this.controller.getSelectedGenreLabel(),
       year: this.controller.getSelectedYearLabel(),
+      watched: this.controller.getSelectedWatchedLabel(),
       cloud_provider:
         this.controller.state.availableCloudProviders.find(
           (option) => option.key === this.controller.state.selectedCloudProviderId
@@ -2278,6 +2290,14 @@ export const LibraryScreen = {
       return;
     }
 
+    if (
+      !sidebarLocked &&
+      current?.matches?.(".library-grid-card.focusable") &&
+      !allowDpadRepeat(this, event, { horizontalMs: 80, verticalMs: 80 })
+    ) {
+      return;
+    }
+
     if (!sidebarLocked && this.handleGridNavigation(event, current)) {
       return;
     }
@@ -2317,6 +2337,9 @@ export const LibraryScreen = {
   },
 
   onKeyUp(event) {
+    if ([37, 38, 39, 40].includes(Number(event?.keyCode || 0))) {
+      resetDpadRepeat(this);
+    }
     if (this.suppressHoldMenuEnterUntilKeyUp) {
       this.suppressHoldMenuEnterUntilKeyUp = false;
       if (Number(event?.keyCode || 0) === 13) {
@@ -2337,6 +2360,7 @@ export const LibraryScreen = {
   },
 
   cleanup() {
+    resetDpadRepeat(this);
     this.cancelScheduledRender();
     this.clearClosingPicker();
     this.lastRenderedExpandedPicker = null;

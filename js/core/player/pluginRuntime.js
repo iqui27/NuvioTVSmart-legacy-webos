@@ -2,6 +2,11 @@ import { TMDB_API_KEY } from "../../config.js";
 import { PluginServiceClient } from "../../platform/pluginServiceClient.js";
 import { PLUGIN_QUOTAS } from "./pluginPolicy.js";
 import { PluginStore } from "../../data/local/pluginStore.js";
+import {
+  diagnosticError,
+  emitPluginDiagnostic,
+  emitPluginDiagnosticEvent
+} from "../diagnostics/pluginDiagnostics.js";
 
 const activeWorkers = new Set();
 const activeCancellers = new Map();
@@ -109,13 +114,54 @@ export const PluginRuntime = {
     skipService = false,
     signal = null
   } = {}) {
+    const runtimeDetails = {
+      filename: String(filename || "plugin.js").slice(0, 240),
+      scraperId: String(scraperId || "").slice(0, 128),
+      repositoryId: String(repositoryId || "").slice(0, 128),
+      profileId: String(profileId || "").slice(0, 64)
+    };
     if (byteLength(code) > Number(quota.maxCodeBytes || PLUGIN_QUOTAS.limited.maxCodeBytes)) {
-      throw new Error("Plugin code exceeds the platform quota");
+      const error = new Error("Plugin code exceeds the platform quota");
+      emitPluginDiagnosticEvent(
+        "plugin code rejected",
+        { ...runtimeDetails, error: diagnosticError(error) },
+        { prefix: "[Nuvio PluginRuntime]" }
+      );
+      throw error;
     }
-    if (!skipService) await PluginServiceClient.ensureReady();
-    if (typeof Worker !== "function") throw new Error("Worker API unavailable");
+    if (!skipService) {
+      try {
+        await PluginServiceClient.ensureReady();
+      } catch (error) {
+        emitPluginDiagnosticEvent(
+          "plugin service readiness failed",
+          { ...runtimeDetails, error: diagnosticError(error) },
+          { prefix: "[Nuvio PluginRuntime]" }
+        );
+        throw error;
+      }
+    }
+    if (typeof Worker !== "function") {
+      const error = new Error("Worker API unavailable");
+      emitPluginDiagnosticEvent(
+        "plugin worker unavailable",
+        { ...runtimeDetails, error: diagnosticError(error) },
+        { prefix: "[Nuvio PluginRuntime]" }
+      );
+      throw error;
+    }
 
-    const worker = new Worker(workerUrl());
+    let worker;
+    try {
+      worker = new Worker(workerUrl());
+    } catch (error) {
+      emitPluginDiagnosticEvent(
+        "plugin worker creation failed",
+        { ...runtimeDetails, error: diagnosticError(error) },
+        { prefix: "[Nuvio PluginRuntime]" }
+      );
+      throw error;
+    }
     activeWorkers.add(worker);
     const executionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const pendingRequestIds = new Set();
@@ -150,11 +196,45 @@ export const PluginRuntime = {
         return;
       }
       signal?.addEventListener?.("abort", abortListener, { once: true });
-      timeoutId = setTimeout(() => finish(new Error("Plugin execution timed out")), timeoutMs);
-      worker.onerror = (event) =>
-        finish(new Error(String(event?.message || "Plugin worker failed")));
+      timeoutId = setTimeout(() => {
+        const error = new Error("Plugin execution timed out");
+        emitPluginDiagnosticEvent(
+          "plugin execution timed out",
+          { ...runtimeDetails, timeoutMs, error: diagnosticError(error) },
+          { prefix: "[Nuvio PluginRuntime]" }
+        );
+        finish(error);
+      }, timeoutMs);
+      worker.onerror = (event) => {
+        const error = new Error(String(event?.message || "Plugin worker failed"));
+        emitPluginDiagnosticEvent(
+          "plugin worker failed",
+          {
+            ...runtimeDetails,
+            filename: event?.filename || runtimeDetails.filename,
+            lineNumber: event?.lineno || 0,
+            columnNumber: event?.colno || 0,
+            error: diagnosticError(error)
+          },
+          { prefix: "[Nuvio PluginRuntime]" }
+        );
+        finish(error);
+      };
       worker.onmessage = (event) => {
         const message = event?.data || {};
+        if (message.type === "pluginLog") {
+          const level = message.level === "error" ? "error" : "warn";
+          emitPluginDiagnostic(
+            level,
+            `provider ${level === "error" ? "error" : "warning"}`,
+            {
+              ...runtimeDetails,
+              message: String(message.message || "").slice(0, 4000)
+            },
+            { prefix: "[Nuvio Plugin]" }
+          );
+          return;
+        }
         if (message.type === "fetch") {
           const requestId = String(message.requestId || "");
           pendingRequestIds.add(requestId);
@@ -201,8 +281,15 @@ export const PluginRuntime = {
           finish(null, Array.isArray(message.results) ? message.results : []);
           return;
         }
-        if (message.type === "error")
-          finish(new Error(String(message.error || "Plugin execution failed")));
+        if (message.type === "error") {
+          const error = new Error(String(message.error || "Plugin execution failed"));
+          emitPluginDiagnosticEvent(
+            "plugin execution failed",
+            { ...runtimeDetails, error: diagnosticError(error) },
+            { prefix: "[Nuvio PluginRuntime]" }
+          );
+          finish(error);
+        }
       };
       try {
         worker.postMessage({
@@ -221,6 +308,11 @@ export const PluginRuntime = {
           deadline: Date.now() + Number(timeoutMs || 60000)
         });
       } catch (error) {
+        emitPluginDiagnosticEvent(
+          "plugin worker message failed",
+          { ...runtimeDetails, error: diagnosticError(error) },
+          { prefix: "[Nuvio PluginRuntime]" }
+        );
         finish(error);
       }
     });

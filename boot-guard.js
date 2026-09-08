@@ -433,7 +433,7 @@
     }
   }
 
-  function readTizenInfo() {
+  function readTizenInfo(includeDeviceDetails) {
     var platformVersion = "";
     var firmwareVersion = "";
     var modelName = "";
@@ -444,12 +444,14 @@
         );
       }
     } catch (ignored) {}
-    try {
-      if (window.webapis && window.webapis.productinfo) {
-        firmwareVersion = String(window.webapis.productinfo.getFirmware() || "");
-        modelName = String(window.webapis.productinfo.getModel() || "");
-      }
-    } catch (ignored) {}
+    if (includeDeviceDetails) {
+      try {
+        if (window.webapis && window.webapis.productinfo) {
+          firmwareVersion = String(window.webapis.productinfo.getFirmware() || "");
+          modelName = String(window.webapis.productinfo.getModel() || "");
+        }
+      } catch (ignored) {}
+    }
     if (!platformVersion) {
       platformVersion =
         (String((window.navigator && window.navigator.userAgent) || "").match(
@@ -501,10 +503,13 @@
     }
 
     if (options.platform === "tizen") {
-      info = readTizenInfo();
+      // ProductInfo is only used to enrich the unsupported-device screen.
+      // Avoid invoking Samsung's optional ProductInfo methods on supported
+      // devices, where some firmware logs a misleading numeric status.
+      info = readTizenInfo(false);
       decision = compatibilityDecision(info, options);
       if (decision === "unsupported") {
-        renderUnsupported(info);
+        renderUnsupported(readTizenInfo(true));
         return;
       }
       onSupported();

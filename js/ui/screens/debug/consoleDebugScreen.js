@@ -4,6 +4,7 @@ import {
   subscribeToConsoleDebugEvents
 } from "../../../core/diagnostics/consoleDebugBuffer.js";
 import { Platform } from "../../../platform/index.js";
+import { PluginServiceClient } from "../../../platform/pluginServiceClient.js";
 import { Router } from "../../navigation/router.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { focusWithoutScroll } from "../../../platform/legacyDom.js";
@@ -86,6 +87,15 @@ export const ConsoleDebugScreen = {
         const shouldStickToBottom = !list || maxScroll - Number(list.scrollTop || 0) < 96;
         void this.render({ stickToBottom: shouldStickToBottom });
       });
+    }
+    // The service has its own process console. Pull its bounded, redacted
+    // diagnostic ring when the user opens this screen so service-side
+    // provider failures are copied into the same Settings console as app-side
+    // warnings and errors.
+    try {
+      await PluginServiceClient.diagnostics();
+    } catch (_) {
+      // The client already emits a diagnostic for a failed diagnostics request.
     }
     await this.render({ stickToBottom: true });
   },

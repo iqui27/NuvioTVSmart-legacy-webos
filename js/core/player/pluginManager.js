@@ -28,6 +28,7 @@ import {
 import { PLUGIN_QUOTAS } from "./pluginPolicy.js";
 import { validatePluginUrl } from "./pluginSecurity.js";
 import { I18n } from "../../i18n/index.js";
+import { emitPluginDiagnosticEvent } from "../diagnostics/pluginDiagnostics.js";
 
 const singleFlight = new PluginExecutionFlight();
 const queuedExecutions = [];
@@ -111,10 +112,12 @@ function diagnosticState(state = {}) {
   };
 }
 
-// Keep the call sites inert in production. The user-facing test report remains
-// available through PluginManager.testScraper(), while startup/sync paths do
-// not emit verbose state snapshots.
-function logPluginDiagnostic() {}
+// Keep successful reconciliation/download state quiet. Failure and warning
+// events go through console.warn/error so they remain visible both in the TV
+// Inspector and in the in-app Settings > Console debug screen.
+function logPluginDiagnostic(event, details = {}) {
+  emitPluginDiagnosticEvent(event, details, { prefix: "[Nuvio PluginManager]" });
+}
 
 function canEdit(profileId = null) {
   return PluginStore.canEdit(profileId == null ? undefined : profileId);
@@ -496,7 +499,11 @@ async function resolvePluginShortCode(code) {
     const resolvedUrl = sanitizePluginRepositoryInput(response.url);
     if (response.ok && resolvedUrl && resolvedUrl !== shortUrl) return resolvedUrl;
   } catch (error) {
-    console.warn(`Plugin short-code resolution failed for ${normalizedCode}:`, error);
+    logPluginDiagnostic("plugin short-code resolution failed", {
+      shortCode: normalizedCode,
+      url: shortUrl,
+      error: diagnosticError(error)
+    });
   }
   return null;
 }
@@ -515,7 +522,10 @@ async function loadExternalMetadata(document, sourceUrl, quota) {
       if (Array.isArray(listDocument)) entries.push(...listDocument);
       else if (Array.isArray(listDocument?.plugins)) entries.push(...listDocument.plugins);
     } catch (error) {
-      console.warn("CloudStream metadata list refresh failed:", error);
+      logPluginDiagnostic("external metadata list refresh failed", {
+        url: listUrl,
+        error: diagnosticError(error)
+      });
     }
   }
   const seen = new Set();
@@ -643,10 +653,6 @@ async function classifyRemoteRepository(remote, quota) {
           input: diagnosticRepository(remote),
           error: diagnosticError(error)
         });
-        console.warn(
-          "Typed plugin repository detection failed; falling back to auto-detection:",
-          error
-        );
       }
     }
     if (
@@ -726,7 +732,6 @@ async function classifyRemoteRepository(remote, quota) {
       input: diagnosticRepository(remote),
       error: diagnosticError(error)
     });
-    console.warn("Plugin repository type detection failed:", error);
   }
   const result = { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
   logPluginDiagnostic("repository classified", {
@@ -788,7 +793,6 @@ async function downloadCode(scraper, repository, quota, profileId = null) {
       cachedCode: Boolean(existing?.code),
       error: diagnosticError(error)
     });
-    console.warn(`Plugin code download failed for ${repository.name}/${scraper.name}:`, error);
     return Boolean(existing?.code);
   }
 }
@@ -1090,7 +1094,12 @@ async function executeOne(
       return rawResults.map((entry) => resultToStream(entry, scraper)).filter(Boolean);
     })
     .catch((error) => {
-      console.warn(`Plugin scraper ${scraper.name} failed:`, error);
+      logPluginDiagnostic("plugin scraper execution failed", {
+        repository: diagnosticRepository(repository),
+        scraperId: String(scraper?.id || "").slice(0, 128),
+        scraperName: String(scraper?.name || "").slice(0, 120),
+        error: diagnosticError(error)
+      });
       if (throwOnError) throw error;
       return [];
     });
@@ -1670,12 +1679,20 @@ export const PluginManager = {
           (entry) => repositoryIdentity(entry.url) === remoteIdentity
         );
         // Android keeps an existing repository and its cached scrapers when an
-        // old cloud row does not declare repo_type. Do the same: a missing type
-        // is not evidence that a known local repository should be classified
-        // again, and classification would start the PluginService during sync.
+        // old cloud row does not declare repo_type. Do the same for known local
+        // repositories: a missing type is not evidence that they should be
+        // classified again. A stale UNKNOWN row is different: it has no usable
+        // local cache, so retry classification now that the pull has already
+        // gated on PluginService readiness. This repairs rows that were saved
+        // opaque after a transient service/network failure without reinterpreting
+        // an explicit future repository type.
         const typeHint = remoteRepositoryTypeHint(remote);
+        const shouldReclassifyUnknown =
+          existingByRemoteIdentity &&
+          typeHint === null &&
+          existingByRemoteIdentity.type === PLUGIN_REPOSITORY_TYPES.UNKNOWN;
         const detected =
-          existingByRemoteIdentity && typeHint === null
+          existingByRemoteIdentity && typeHint === null && !shouldReclassifyUnknown
             ? { type: existingByRemoteIdentity.type, url: existingByRemoteIdentity.url }
             : existingByRemoteIdentity && typeHint !== null
               ? { type: typeHint, url: remote.url }
@@ -1765,7 +1782,6 @@ export const PluginManager = {
                 remote: diagnosticRepository(remote),
                 error: diagnosticError(error)
               });
-              console.warn("Plugin sync JS repository rehydration failed:", error);
             }
           }
           continue;
@@ -1806,7 +1822,6 @@ export const PluginManager = {
               remote: diagnosticRepository(remote),
               error: diagnosticError(error)
             });
-            console.warn("Plugin sync JS repository hydration failed:", error);
             next.repositories = [
               ...next.repositories,
               createRemoteStub({ ...remote, repoType: type })
@@ -1980,7 +1995,11 @@ export const PluginManager = {
       try {
         emit(createGroup(scraper, repository, limited));
       } catch (error) {
-        console.warn("Plugin stream chunk callback failed", error);
+        logPluginDiagnostic("plugin stream chunk callback failed", {
+          repository: diagnosticRepository(repository),
+          scraperId: String(scraper?.id || "").slice(0, 128),
+          error: diagnosticError(error)
+        });
       }
     };
     await Promise.all(

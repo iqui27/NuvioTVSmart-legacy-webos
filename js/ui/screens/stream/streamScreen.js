@@ -1165,6 +1165,10 @@ export const StreamScreen = {
       return;
     }
     const delay = Math.max(0, Number(delayMs || 0));
+    if (delay === 0 && this.renderDelayTimer) {
+      clearTimeout(this.renderDelayTimer);
+      this.renderDelayTimer = null;
+    }
     if (delay > 0) {
       if (this.renderFrame || this.renderDelayTimer) {
         return;
@@ -1383,6 +1387,7 @@ export const StreamScreen = {
         ? this.sourceChips.map((chip) => ({ ...chip }))
         : [],
       addonLogoLookup: this.addonLogoLookup ? { ...this.addonLogoLookup } : {},
+      streamSearchCompleted: Boolean(this.streamSearchCompleted),
       listScrollTop: this.getListScrollTop(list)
     };
   },
@@ -1403,6 +1408,7 @@ export const StreamScreen = {
     this.listScrollTop = 0;
     this.error = "";
     this.loading = true;
+    this.streamSearchCompleted = false;
     this.streams = [];
     this.sourceChips = [];
     this.addonLogoLookup = {};
@@ -1414,7 +1420,11 @@ export const StreamScreen = {
     // Returning here from the player is a back navigation, not a fresh open, so
     // do not auto-resume or auto-play again. Otherwise exiting the player drops
     // back onto the stream list and immediately relaunches, looping forever.
-    const returningFromPlayer = Boolean(navigationContext?.isBackNavigation);
+    // Other back navigations must not inherit this behavior: opening the same
+    // title again from Detail is a new stream search.
+    const returningFromPlayer = Boolean(
+      navigationContext?.isBackNavigation && navigationContext?.previousRoute === "player"
+    );
     this.autoResumeAttempted = returningFromPlayer;
     const playerSettings = PlayerSettingsStore.get();
     const reusableStream = playerSettings.streamReuseLastLinkEnabled
@@ -1468,7 +1478,7 @@ export const StreamScreen = {
     // playback. A fresh open of the same item must start from the first source
     // instead of inheriting an old list scroll/focus snapshot.
     const restored =
-      navigationContext?.isBackNavigation &&
+      returningFromPlayer &&
       navigationContext?.restoredState &&
       typeof navigationContext.restoredState === "object"
         ? navigationContext.restoredState
@@ -1490,6 +1500,7 @@ export const StreamScreen = {
         restored.addonLogoLookup && typeof restored.addonLogoLookup === "object"
           ? normalizeAddonLogoLookup(restored.addonLogoLookup)
           : {};
+      this.streamSearchCompleted = Boolean(restored.streamSearchCompleted ?? !restored.loading);
       this.listScrollTop = Number(restored.listScrollTop || 0);
     }
 
@@ -1506,9 +1517,9 @@ export const StreamScreen = {
       }
     }
 
-    // A restored snapshot already holds the finished list, so settle `loading`
-    // before the first paint. Flipping it afterwards used to force a second
-    // full render of an identical list - ~170ms on a 180-stream result.
+    // A restored snapshot already holds visible stream results, so settle
+    // `loading` before the first paint. If its shared search is still running,
+    // the reattach below keeps filling the same list in the background.
     const restoringFromBack = Boolean(
       restored && navigationContext?.isBackNavigation && this.streams.length
     );
@@ -1519,26 +1530,43 @@ export const StreamScreen = {
     this.render();
 
     if (restoringFromBack) {
+      // Android keeps the stream collector alive while the player is on top of
+      // this screen. Reattach to the shared Web session when the restored
+      // snapshot is only a partial result, instead of discarding late addon or
+      // plugin groups after the player returns.
+      if (!this.streamSearchCompleted) {
+        void this.loadStreams({ preserveResults: true, forceRefresh: false });
+      }
       return;
     }
 
-    void this.loadStreams();
+    // A new visit from Detail must ask every source again. The repository
+    // cache remains available to the player source panel and to an in-flight
+    // return from playback, but it must not make this route display stale
+    // provider results or expired links.
+    void this.loadStreams({ forceRefresh: true });
   },
 
-  async loadStreams() {
+  async loadStreams({ preserveResults = false, forceRefresh = false } = {}) {
     const token = this.loadToken;
     const itemType = normalizeType(this.params?.itemType);
     const videoId = String(this.params?.videoId || this.params?.itemId || "");
+    const preserveExistingResults = Boolean(preserveResults && this.streams.length);
 
-    this.loading = true;
+    this.loading = preserveExistingResults ? false : true;
+    this.streamSearchCompleted = false;
     this.error = "";
-    this.streams = [];
-    this.addonFilter = "all";
-    this.focusState = { zone: "filter", index: 0 };
-    this.listScrollTop = 0;
-    this.addonLogoLookup = {};
+    if (!preserveExistingResults) {
+      this.streams = [];
+      this.addonFilter = "all";
+      this.focusState = { zone: "filter", index: 0 };
+      this.listScrollTop = 0;
+      this.addonLogoLookup = {};
+    }
 
-    this.sourceChips = [];
+    if (!preserveExistingResults) {
+      this.sourceChips = [];
+    }
     if (!this.hasRenderedStreamRouteShell) {
       this.requestRender();
     }
@@ -1662,13 +1690,15 @@ export const StreamScreen = {
       if (!chunkStreams.length) {
         return;
       }
-      await Promise.all([
+      // Android publishes the completed source group before badge/logo work.
+      // Keep those image warmups off the critical path so a slow image or
+      // proxy cannot delay the first usable stream card on Tizen.
+      void Promise.all([
         preloadMatchedStreamBadgeImages(chunkStreams, badgeSettings),
         ...(showAddonLogo ? [preloadAddonLogoImages(chunkStreams, this.addonLogoLookup)] : [])
-      ]);
-      if (token !== this.loadToken) {
-        return;
-      }
+      ]).catch((error) => {
+        console.warn("Stream badge/logo warmup failed", error);
+      });
       this.streams = mergeStreamItems(this.streams, chunkStreams);
       markSuccessfulSources(
         groups.map((group) => ({
@@ -1682,7 +1712,14 @@ export const StreamScreen = {
       if (this.streams.length && this.focusState?.zone !== "card") {
         this.focusState = { zone: "card", row: 0, action: "play" };
       }
-      this.requestRender({ delayMs: 120 });
+      const firstVisibleChunk = this.loading;
+      if (firstVisibleChunk) {
+        // Android's stream state leaves the loading phase as soon as the first
+        // successful source arrives. The producer continues below in the
+        // background for slower addons and local JS scrapers.
+        this.loading = false;
+      }
+      this.requestRender({ delayMs: firstVisibleChunk ? 0 : 120 });
       this.maybeAutoResumeStream();
       // Keep Android's timeout semantics: instant/bounded auto-play may select
       // from the streams available when its wait window expires. The list
@@ -1706,7 +1743,7 @@ export const StreamScreen = {
       itemId: String(this.params?.itemId || ""),
       season: this.params?.season ?? null,
       episode: this.params?.episode ?? null,
-      forceRefresh: false,
+      forceRefresh: Boolean(forceRefresh),
       onAddon: (addon) => {
         if (token !== this.loadToken) {
           return;
@@ -1748,21 +1785,23 @@ export const StreamScreen = {
         return key && !existingKeys.has(key);
       });
       if (missingStreams.length) {
-        await Promise.all([
+        void Promise.all([
           preloadMatchedStreamBadgeImages(missingStreams, badgeSettings),
           ...(showAddonLogo ? [preloadAddonLogoImages(missingStreams, this.addonLogoLookup)] : [])
-        ]);
-        if (token !== this.loadToken) {
-          return;
-        }
+        ]).catch((error) => {
+          console.warn("Stream badge/logo warmup failed", error);
+        });
         this.streams = mergeStreamItems(this.streams, missingStreams);
       }
       markSuccessfulSources(this.streams.map((stream) => stream.addonName));
       this.streams = sortStreamsByAddonOrder(this.streams, this.sourceChips);
       this.scheduleDebridPreparation();
       if (this.streams.length && showAddonLogo) {
-        await preloadAddonLogoImages(this.streams, this.addonLogoLookup);
+        void preloadAddonLogoImages(this.streams, this.addonLogoLookup).catch((error) => {
+          console.warn("Stream addon logo warmup failed", error);
+        });
       }
+      this.streamSearchCompleted = true;
       this.sourceChips = this.sourceChips.map((chip) =>
         chip.status === "loading" ? { ...chip, status: "error" } : chip
       );
@@ -1796,6 +1835,7 @@ export const StreamScreen = {
       if (token !== this.loadToken) {
         return;
       }
+      this.streamSearchCompleted = true;
       this.loading = false;
       this.autoResumeUiActive = false;
       this.error = error?.message || "Failed to load streams.";
@@ -1866,7 +1906,7 @@ export const StreamScreen = {
       void this.playStream(match.id);
       return;
     }
-    if (!allLoaded && this.loading) {
+    if (!allLoaded && !this.streamSearchCompleted) {
       return;
     }
     // The remembered source is no longer available. Fall back to the normal
@@ -3143,8 +3183,11 @@ export const StreamScreen = {
     const badgeSettings = StreamBadgeSettingsStore.snapshot();
     const showAddonLogo = badgeSettings.showAddonLogo === true;
     const addonLogosReady = !showAddonLogo || !filtered.length || this.areAddonLogosReady(filtered);
+    // Addon logos are presentation-only. Keep the Android-equivalent stream
+    // cards interactive while their images warm in the background; the card
+    // renderer already has a text fallback for a missing logo.
     const virtualizedStreamList = Boolean(
-      this.shouldUseStreamVirtualization(allStreams) && filtered.length && addonLogosReady
+      this.shouldUseStreamVirtualization(allStreams) && filtered.length
     );
     if (virtualizedStreamList && previousFocusedKey && !this.streamVirtualFocusReset) {
       const nextKeys = this.getStreamVirtualKeys(filtered);
@@ -3168,9 +3211,12 @@ export const StreamScreen = {
       filtered.length &&
       addonLogosReady &&
       allStreams.length &&
-      !virtualizedStreamList &&
-      (!showAddonLogo || this.areAddonLogosReady(allStreams))
+      !virtualizedStreamList
     );
+
+    if (filtered.length && showAddonLogo && !addonLogosReady) {
+      this.requestAddonLogoPrerender(filtered);
+    }
 
     let body = "";
     if (virtualizedStreamList) {
@@ -3188,7 +3234,7 @@ export const StreamScreen = {
         body += this.renderStableStreamLoadingRow();
       }
       body += this.renderStableStreamEmptyState();
-    } else if (filtered.length && addonLogosReady) {
+    } else if (filtered.length) {
       body = filtered
         .map((stream, index) =>
           this.renderStreamCard(stream, index, streamBadgesEnabled, badgeSettings)
@@ -3197,9 +3243,6 @@ export const StreamScreen = {
       if (hasPendingForFilter) {
         body += this.renderLoadingCards(1);
       }
-    } else if (filtered.length && showAddonLogo) {
-      this.requestAddonLogoPrerender(filtered);
-      body = this.renderLoadingCards(Math.min(3, filtered.length));
     } else if (hasPendingForFilter || hasPendingForAllSources) {
       body = this.renderLoadingCards();
     } else if (this.error) {

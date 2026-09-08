@@ -5,12 +5,16 @@ import { PluginStore, getEffectivePluginProfileId } from "../../data/local/plugi
 import { ProfileManager } from "./profileManager.js";
 import { isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
 import { getSyncClientId } from "../sync/syncClientIdentity.js";
+import { Platform } from "../../platform/index.js";
+import { TizenCapabilities } from "../../platform/tizen/tizenCapabilities.js";
+import { PluginServiceClient } from "../../platform/pluginServiceClient.js";
 import {
   canonicalizePluginUrl,
   isExternalDexRepository,
   normalizePluginRepositoryType,
   PLUGIN_REPOSITORY_TYPES
 } from "../player/pluginModels.js";
+import { emitPluginDiagnosticEvent } from "../diagnostics/pluginDiagnostics.js";
 
 const TABLE = "plugins";
 const PUSH_RPC = "sync_push_plugins";
@@ -18,6 +22,42 @@ let lastPullStatus = "idle";
 let lastPullError = null;
 const pullInFlightByProfile = new Map();
 const syncOperationByProfile = new Map();
+let pluginServiceReadyPromise = null;
+
+function areTizenPluginsSupported() {
+  return !Platform.isTizen() || TizenCapabilities.canUsePlugins();
+}
+
+function createPluginServiceNotReadyError(cause) {
+  const detail = String(cause?.message || cause || "PluginService health check failed");
+  const error = new Error(`PluginService must be ready before plugin sync: ${detail}`);
+  error.code = "PLUGIN_SERVICE_NOT_READY";
+  error.cause = cause;
+  return error;
+}
+
+function ensurePluginServiceReady({ force = true } = {}) {
+  // The readiness barrier belongs to the TV service transports. Browser test
+  // and development runs use the direct transport and must not be rejected by
+  // the absence of a packaged TV service.
+  if (
+    (!Platform.isTizen() && !Platform.isWebOS()) ||
+    !areTizenPluginsSupported() ||
+    !AuthManager.isAuthenticated
+  ) {
+    return Promise.resolve({ status: "skipped" });
+  }
+
+  if (!pluginServiceReadyPromise) {
+    pluginServiceReadyPromise = PluginServiceClient.ensureReady({ force }).finally(() => {
+      pluginServiceReadyPromise = null;
+    });
+  }
+
+  return pluginServiceReadyPromise.catch((error) => {
+    throw createPluginServiceNotReadyError(error);
+  });
+}
 
 function diagnosticError(error) {
   const details = {
@@ -79,9 +119,12 @@ function diagnosticState(state = {}) {
   };
 }
 
-// Sync diagnostics are exposed through the returned sync state/errors, not as
-// a verbose console stream.
-function logPluginSyncDiagnostic() {}
+// Keep successful sync state quiet. Warnings and failures are emitted through
+// console.warn/error so they are visible in Inspector and in Settings >
+// Console debug, which captures those two console levels.
+function logPluginSyncDiagnostic(event, details = {}) {
+  emitPluginDiagnosticEvent(event, details, { prefix: "[Nuvio PluginSync]" });
+}
 
 function normalizeProfileId(profileId = null) {
   const raw = Number(profileId == null ? getEffectivePluginProfileId() : profileId);
@@ -211,6 +254,9 @@ function runProfileExclusive(profileId, task) {
 }
 
 async function pushProfile(requestedId, targetProfileId, { requireCurrentProfile = false } = {}) {
+  if (!areTizenPluginsSupported()) {
+    return false;
+  }
   const backoffActive = isSyncBackoffActive();
   const authenticated = AuthManager.isAuthenticated;
   logPluginSyncDiagnostic("push requested", {
@@ -277,7 +323,6 @@ async function pushProfile(requestedId, targetProfileId, { requireCurrentProfile
       hasUnsupportedRepositoryState: hasUnsupportedState,
       ...diagnosticState(state)
     });
-    console.warn("Plugin sync push skipped: state contains unsupported repository metadata");
     return false;
   }
   const rows = buildPluginPushRows(state);
@@ -327,12 +372,15 @@ async function pushProfile(requestedId, targetProfileId, { requireCurrentProfile
       stateRevision,
       error: diagnosticError(error)
     });
-    console.warn("Plugin sync push failed; local state retained", error);
     return false;
   }
 }
 
 export const PluginSyncService = {
+  ensureReadyForPull({ force = true } = {}) {
+    return ensurePluginServiceReady({ force });
+  },
+
   getLastPullStatus() {
     return lastPullStatus;
   },
@@ -342,6 +390,11 @@ export const PluginSyncService = {
   },
 
   async pull(profileId = null) {
+    if (!areTizenPluginsSupported()) {
+      lastPullStatus = "unsupported";
+      lastPullError = null;
+      return PluginManager.listRepositories();
+    }
     const requestedId = requestedProfileId(profileId);
     const targetProfileId = String(getEffectivePluginProfileId(requestedId) || "1");
     const pullKey = `${requestedId}:${targetProfileId}`;
@@ -414,6 +467,11 @@ export const PluginSyncService = {
         });
         return PluginManager.listRepositories();
       }
+
+      // The Tizen Web Service start API only acknowledges that startup was
+      // queued. Require PluginServiceClient to complete its /health probe
+      // before opening the remote-sync transaction or fetching any manifest.
+      await ensurePluginServiceReady({ force: true });
 
       // Keep local writes from starting a competing push until the complete
       // remote snapshot has been reconciled, matching Android's
@@ -541,6 +599,16 @@ export const PluginSyncService = {
     try {
       return await requestPromise;
     } catch (error) {
+      if (error?.code === "PLUGIN_SERVICE_NOT_READY") {
+        lastPullStatus = "service-not-ready";
+        lastPullError = error;
+        logPluginSyncDiagnostic("pull blocked by PluginService readiness", {
+          requestedProfileId: requestedId,
+          targetProfileId,
+          error: diagnosticError(error)
+        });
+        throw error;
+      }
       lastPullStatus = "error";
       lastPullError = error;
       logPluginSyncDiagnostic("pull failed", {
@@ -548,7 +616,6 @@ export const PluginSyncService = {
         targetProfileId,
         error: diagnosticError(error)
       });
-      console.warn("Plugin sync pull failed", error);
       return PluginManager.listRepositories();
     } finally {
       if (pullInFlightByProfile.get(pullKey) === requestPromise) {

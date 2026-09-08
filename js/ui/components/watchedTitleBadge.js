@@ -1,4 +1,5 @@
 import { I18n } from "../../i18n/index.js";
+import { watchedItemIdentityValues } from "../../data/repository/watchedIdentity.js";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -11,40 +12,6 @@ function escapeHtml(value) {
 
 function watchedBadgeLabel() {
   return I18n.t("episodes_cd_watched", {}, { fallback: "Watched" });
-}
-
-function addIdentityValue(set, value) {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    return;
-  }
-  set.add(normalized);
-  set.add(normalized.toLowerCase());
-}
-
-function addPrefixedIdentityValue(set, prefix, value) {
-  const normalized = String(value ?? "")
-    .trim()
-    .replace(new RegExp(`^${prefix}:`, "i"), "");
-  if (!normalized) {
-    return;
-  }
-  addIdentityValue(set, `${prefix}:${normalized}`);
-}
-
-function watchedItemIdentityValues(item = {}) {
-  const values = new Set();
-  addIdentityValue(values, item.contentId);
-  addIdentityValue(values, item.id);
-
-  const imdbId = String(item.imdbId ?? "")
-    .trim()
-    .replace(/^imdb:/i, "");
-  addIdentityValue(values, imdbId);
-  addPrefixedIdentityValue(values, "tmdb", item.tmdbId);
-  addPrefixedIdentityValue(values, "trakt", item.traktId);
-  addIdentityValue(values, item.slug);
-  return values;
 }
 
 export function buildWatchedTitleIdSet(watchedItems = []) {

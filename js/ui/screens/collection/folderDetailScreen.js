@@ -5,6 +5,7 @@ import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerfo
 import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { CollectionsStore } from "../../../data/local/collectionsStore.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { TmdbService } from "../../../core/tmdb/tmdbService.js";
@@ -960,6 +961,22 @@ export const FolderDetailScreen = {
     return true;
   },
 
+  async refreshWatchedTitleIds(items = null, baseWatchedItems = null) {
+    const watchedItems = Array.isArray(baseWatchedItems)
+      ? baseWatchedItems
+      : await watchedItemsRepository.getAll(5000).catch(() => []);
+    const folderItems = Array.isArray(items)
+      ? items
+      : (this.tabs || []).flatMap((tab) => (Array.isArray(tab?.items) ? tab.items : []));
+    const projectedItems = await watchedTitleStateRepository
+      .getTitleWatchedItems(folderItems, {
+        baseWatchedItems: watchedItems,
+        limit: 5000
+      })
+      .catch(() => watchedItems);
+    this.watchedTitleIds = buildWatchedTitleIdSet(projectedItems);
+  },
+
   async mount(params = {}, navigationContext = {}) {
     this.container = document.getElementById("folderDetail");
     this.cancelScheduledRender();
@@ -1103,12 +1120,11 @@ export const FolderDetailScreen = {
           this.loadTab(index, { background: true, loadToken: folderLoadToken })
         )
       );
-      if (
-        tabsToLoad.length &&
-        folderLoadToken === this.folderLoadToken &&
-        Router.getCurrent() === "folderDetail"
-      ) {
-        this.render();
+      if (folderLoadToken === this.folderLoadToken && Router.getCurrent() === "folderDetail") {
+        await this.refreshWatchedTitleIds(null, watchedItems);
+        if (tabsToLoad.length) {
+          this.render();
+        }
       }
     })().catch((error) => {
       if (folderLoadToken === this.folderLoadToken && Router.getCurrent() === "folderDetail") {
@@ -1212,11 +1228,22 @@ export const FolderDetailScreen = {
       return;
     }
     this.rebuildAllTab();
+    const refreshWatchedPromise = background ? null : this.refreshWatchedTitleIds();
     if (background) {
       this.scheduleRender();
     } else {
       this.render();
     }
+    void refreshWatchedPromise?.then(() => {
+      if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+        return;
+      }
+      if (background) {
+        this.scheduleRender();
+      } else {
+        this.render();
+      }
+    });
   },
 
   getSelectedTab() {

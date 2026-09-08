@@ -151,23 +151,23 @@ export const PluginsScreen = {
     this.pendingScraperEnable = null;
     this.keyboardVisible = false;
     this.ensureStartupSyncSubscription();
-    const deferRuntimeProbe = Platform.isTizen();
-    if (!deferRuntimeProbe) {
-      this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
-      const runtimeProbeGeneration = this.runtimeProbeGeneration;
-      // Match Android's initial-state rendering: runtime capabilities only
-      // gate executable actions and must not delay the management screen.
-      void this.probeRuntime().then(() => {
-        if (
-          runtimeProbeGeneration !== this.runtimeProbeGeneration ||
-          Router.getCurrent() !== "plugins" ||
-          this.hasActiveTextInput()
-        ) {
-          return;
-        }
-        this.render();
-      });
-    }
+    this.runtimeProbeGeneration = Number(this.runtimeProbeGeneration || 0) + 1;
+    const runtimeProbeGeneration = this.runtimeProbeGeneration;
+    // Match Android's initial-state rendering: runtime capabilities only gate
+    // executable actions and must not delay the management screen. Tizen also
+    // probes here; its PluginService is already protected by the startup
+    // health barrier, and the asynchronous QuickJS self-test is what turns a
+    // provisional `unknown` state into the real limited/ready state.
+    void this.probeRuntime().then(() => {
+      if (
+        runtimeProbeGeneration !== this.runtimeProbeGeneration ||
+        Router.getCurrent() !== "plugins" ||
+        this.hasActiveTextInput()
+      ) {
+        return;
+      }
+      this.render();
+    });
     this.bindEvents();
     this.render();
   },

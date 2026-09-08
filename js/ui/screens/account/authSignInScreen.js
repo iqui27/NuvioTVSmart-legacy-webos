@@ -108,7 +108,9 @@ export const AuthSignInScreen = {
       if (email && password) {
         try {
           await AuthManager.signInWithEmail(email, password);
-          Router.navigate("profileSelection");
+          // AuthManager's authenticated-state subscriber owns post-login
+          // routing. Do not navigate here as well: the two async routes can
+          // mount and clean up the profile screen concurrently on Tizen.
         } catch (error) {
           console.error("SignIn failed", error);
         }

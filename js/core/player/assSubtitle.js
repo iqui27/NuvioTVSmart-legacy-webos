@@ -141,11 +141,46 @@ function formatVttTimestamp(totalSeconds) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(milliseconds, 3)}`;
 }
 
+// Track drawing mode across override blocks. Drawing coordinates are not
+// dialogue and must not leak into the plain-text fallback, while every
+// balanced block that does not change drawing mode remains display-safe.
 function sanitizeAssDialogueText(text) {
-  return String(text || "")
+  const source = String(text || "");
+  let drawing = false;
+  let output = "";
+  let offset = 0;
+  const blocks = /\{([^}]*)\}/g;
+  let match;
+  while ((match = blocks.exec(source))) {
+    if (!drawing) {
+      output += source.slice(offset, match.index);
+    }
+    const block = match[1];
+    let depth = 0;
+    for (let index = 0; index < block.length; index += 1) {
+      const character = block[index];
+      if (character === "(") {
+        depth += 1;
+      } else if (character === ")") {
+        depth = Math.max(0, depth - 1);
+      } else if (character === "\\" && depth === 0) {
+        const tag = block.slice(index + 1);
+        const mode = /^p(-?\d+)(?=\\|\s|$)/.exec(tag);
+        if (mode) {
+          drawing = Number(mode[1]) > 0;
+        } else if (tag[0] === "r") {
+          drawing = false;
+        }
+      }
+    }
+    offset = blocks.lastIndex;
+  }
+  if (!drawing) {
+    output += source.slice(offset);
+  }
+  return output
     .replace(/\\[Nn]/g, "\n")
     .replace(/\\h/g, " ")
-    .replace(/\{[^}]*\}/g, "")
     .trim();
 }
 

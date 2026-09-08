@@ -20,6 +20,8 @@ import { preloadStreamBadgeImages } from "./ui/screens/stream/streamScreen.js";
 import { warmStreamingLibs } from "./runtime/loadStreamingLibs.js";
 import { warmScreenChunks } from "./runtime/loadScreenChunks.js";
 import { Platform } from "./platform/index.js";
+import { TizenCapabilities } from "./platform/tizen/tizenCapabilities.js";
+import { PluginServiceClient } from "./platform/pluginServiceClient.js";
 import { getTvRuntimePerformanceProfile } from "./platform/tvRuntimePerformance.js";
 import { LocalStore } from "./core/storage/localStore.js";
 import { I18n } from "./i18n/index.js";
@@ -61,6 +63,18 @@ function markBootStage(stage) {
   if (guard && typeof guard.stage === "function") {
     guard.stage(stage);
   }
+}
+
+function loginTrace(event, data) {
+  try {
+    globalThis.__NUVIO_TIZEN_LOGIN_TRACE__?.(event, data);
+  } catch (_) {
+    // Login diagnostics must never change the application flow.
+  }
+}
+
+function shouldDisableTizenPluginSupport() {
+  return Platform.isTizen() && !TizenCapabilities.canUsePlugins();
 }
 
 async function waitForInitialRoute(timeoutMs = UPDATE_ROUTE_WAIT_TIMEOUT_MS) {
@@ -167,10 +181,16 @@ function applyPerformanceMode() {
   // Keep the Tizen class as a platform-layout fallback; performance gating is
   // handled exclusively by the runtime profile above.
   const legacyTizen = Platform.isTizen();
+  // Smart-TV input remains Android-compatible, but the Home camera/card motion
+  // is intentionally reduced on webOS/Tizen because a modern TV runtime can
+  // still have a much slower compositor than the Android reference device.
+  const smartTvMotionReduced = tvRuntime.isTvRuntime;
   const rootClasses = document.documentElement.classList;
   const modernSidebarBlurCapable = !rootClasses.contains("no-backdrop-filter") && !constrained;
   document.documentElement.classList.toggle("performance-constrained", constrained);
   document.body.classList.toggle("performance-constrained", constrained);
+  document.documentElement.classList.toggle("smart-tv-motion-reduced", smartTvMotionReduced);
+  document.body.classList.toggle("smart-tv-motion-reduced", smartTvMotionReduced);
   document.documentElement.classList.toggle(
     "modern-sidebar-blur-capable",
     modernSidebarBlurCapable
@@ -267,6 +287,9 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
       console.warn("Stream badge image prerender failed", error);
     });
   }
+  // On supported Tizen this is the final PluginService readiness gate; on
+  // older Tizen the coordinator returns skipped because plugins are disabled.
+  await StartupSyncService.ensurePluginServiceReady();
   const experienceRoute = activeProfile ? await resolveExperienceRoute(activeProfile.id) : "home";
   const resumeRoute =
     restoreWebOsRoute && typeof Router.consumeWebOsResumeRoute === "function"
@@ -296,7 +319,9 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
 }
 
 async function routeAfterAuthentication() {
+  loginTrace("authenticated route begin", { currentRoute: Router.getCurrent() || "" });
   const profileRoute = await shouldShowProfileSelection();
+  loginTrace("authenticated route profile decision", { show: profileRoute.show === true });
   if (profileRoute.show) {
     await Router.navigate("profileSelection", {
       skipInitialProfileSync: true,
@@ -489,12 +514,59 @@ function setupPluginRuntimeLifecycle() {
   document.addEventListener("nuvio:beforeExitApp", cancel);
 }
 
+function setupPluginServiceLifecycle() {
+  if (!Platform.isTizen() || shouldDisableTizenPluginSupport()) {
+    return;
+  }
+
+  const checkWhenForegrounded = () => {
+    if (document.visibilityState === "hidden" || document.webkitHidden === true) {
+      return;
+    }
+    void PluginServiceClient.checkLifecycleNow({ force: true }).catch(() => {
+      // The lifecycle client emits one deduplicated warning for a failed
+      // recovery round; foreground transitions must not duplicate it.
+    });
+  };
+
+  // A foreground transition should recover a service that was killed while
+  // the TV suspended the UI, without waiting for the next watchdog tick.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      checkWhenForegrounded();
+    }
+  });
+  document.addEventListener("webkitvisibilitychange", () => {
+    if (document.webkitHidden !== true) {
+      checkWhenForegrounded();
+    }
+  });
+  window.addEventListener("pageshow", checkWhenForegrounded);
+  window.addEventListener("focus", checkWhenForegrounded);
+
+  // Do not stop the service on app-specific navigation/visibility events. The
+  // monitor belongs to the whole UI lifecycle and is stopped only on unload.
+  window.addEventListener("beforeunload", () => {
+    PluginServiceClient.stopLifecycleMonitor();
+  });
+}
+
 async function bootstrapApp() {
   markBootStage("Rendering application shell");
   renderAppShell();
   appShellRendered = true;
   markBootStage("Initializing TV platform");
   Platform.init();
+  setupPluginServiceLifecycle();
+  if (shouldDisableTizenPluginSupport()) {
+    markBootStage("PluginService disabled on Tizen below 6.0");
+  } else {
+    markBootStage("Starting essential PluginService");
+    // The WRT bridge has already been loaded by index.html. Platform.init() is
+    // therefore the first stable point at which the service can be started;
+    // startLifecycleMonitor() blocks boot until the real /health response.
+    await PluginServiceClient.startLifecycleMonitor();
+  }
   applyPerformanceMode();
   markBootStage("Loading language resources");
   await I18n.init();
@@ -571,11 +643,17 @@ async function bootstrapApp() {
     }
 
     if (state === AuthState.AUTHENTICATED) {
+      loginTrace("authenticated subscriber begin", { currentRoute: Router.getCurrent() || "" });
       markBootStage("Loading profiles");
       LocalStore.remove(GUEST_QR_BYPASS_KEY);
       StartupSyncService.start({ runInitialPull: false });
+      loginTrace("authenticated subscriber sync scheduled");
       routeAfterAuthentication().catch((error) => {
         console.warn("Failed to resolve authenticated route", error);
+        if (error?.code === "PLUGIN_SERVICE_NOT_READY") {
+          renderFatalError(error);
+          return;
+        }
         Router.navigate("profileSelection");
       });
     }

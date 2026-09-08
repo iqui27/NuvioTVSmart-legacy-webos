@@ -106,15 +106,14 @@ export function getPluginCapabilitySnapshot() {
     const capabilities = TizenCapabilities.get();
     const tizenVersion = parseVersion(capabilities.tizenVersion);
     const chrome = capabilities.chromiumMajorVersion || chromiumVersion();
-    const wasmTier = tizenVersion >= 505 || chrome >= 69;
     const appSupported = tizenVersion === 0 || tizenVersion >= 400;
     const pluginServicePackaged = globalThis.__NUVIO_TIZEN_PLUGIN_SERVICE_ENABLED__ !== false;
-    if (!wasmTier) {
+    if (!capabilities.tizenPluginVersionSupported) {
       return {
         ...snapshotFields(platform, PLUGIN_QUOTAS.limited, {
           appSupported,
           normalAddonsSupported: appSupported,
-          reason: "Samsung WebAssembly support starts at Tizen 5.5"
+          reason: "Tizen plugin support starts at Tizen 6.0"
         }),
         tizenVersion: capabilities.tizenVersion,
         chromiumMajorVersion: chrome,
@@ -135,10 +134,8 @@ export function getPluginCapabilitySnapshot() {
         pluginServicePackaged
       };
     }
-    const quota =
-      tizenVersion >= 600 || chrome >= 76 ? PLUGIN_QUOTAS.modern : PLUGIN_QUOTAS.limited;
     return {
-      ...snapshotFields(platform, quota, {
+      ...snapshotFields(platform, PLUGIN_QUOTAS.modern, {
         appSupported,
         normalAddonsSupported: appSupported,
         candidate: true,

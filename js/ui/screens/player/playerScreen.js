@@ -223,6 +223,29 @@ function isLocalEngineFsUrl(value = "") {
   }
 }
 
+function getP2pInfoHash(stream = {}) {
+  const values = [
+    stream?.infoHash,
+    stream?.raw?.infoHash,
+    stream?.clientResolve?.infoHash,
+    stream?.raw?.clientResolve?.infoHash,
+    stream?.torrentMagnetUri,
+    stream?.magnetUri,
+    stream?.url,
+    stream?.externalUrl,
+    stream?.raw?.url,
+    stream?.raw?.externalUrl,
+    stream?.raw?.clientResolve?.magnetUri
+  ];
+  for (const value of values) {
+    const match = String(value || "").match(/(?:xt=urn:btih:)?([0-9a-f]{40})/i);
+    if (match?.[1]) {
+      return match[1].toLowerCase();
+    }
+  }
+  return "";
+}
+
 function buildPendingPlaybackRestore(params = {}) {
   if (params?.startFromBeginning) {
     return null;
@@ -836,6 +859,7 @@ function isSubRipSubtitleCodec(value) {
     "srt",
     "stext/utf8",
     "stext/srt",
+    "text/utf8",
     "text/srt",
     "text/xsubrip",
     "application/xsubrip"
@@ -1035,6 +1059,24 @@ function isAssSubtitleCodec(value) {
     /^S_TEXT\/(?:ASS|SSA)$/i.test(text) ||
     /^(?:text\/x-ass|application\/x-ass|text\/x-ssa|application\/x-ssa)$/i.test(text) ||
     /^(?:ass|ssa|advanced substation alpha|substation alpha)$/i.test(text)
+  );
+}
+
+function isEmbeddedTextSubtitleSourceTrack(track = {}) {
+  const codec = cleanDisplayText(
+    track?.codec ||
+      track?.subtitleCodec ||
+      track?.codec_name ||
+      track?.codecId ||
+      track?.codec_id ||
+      track?.format ||
+      ""
+  );
+  return (
+    /^S_TEXT\//i.test(codec) ||
+    /^TEXT\//i.test(codec) ||
+    isSubRipSubtitleCodec(codec) ||
+    isAssSubtitleCodec(codec)
   );
 }
 
@@ -4782,6 +4824,9 @@ export const PlayerScreen = {
     return {
       itemId: this.params.itemId || null,
       itemType: normalizeItemType(this.params.itemType || "movie"),
+      imdbId: this.params.imdbId || this.params.imdb_id || null,
+      tmdbId: this.params.tmdbId || this.params.tmdb_id || null,
+      traktId: this.params.traktId || this.params.trakt_id || null,
       videoId: this.params.videoId || null,
       season: this.params.season == null ? null : Number(this.params.season),
       episode: this.params.episode == null ? null : Number(this.params.episode),
@@ -6109,7 +6154,6 @@ export const PlayerScreen = {
   },
 
   stopEngineFsKeepAlive() {
-    const token = String(this.engineFsKeepAliveToken || "").trim();
     if (this.engineFsKeepAliveHandle) {
       try {
         this.engineFsKeepAliveHandle.cancel?.();
@@ -6118,12 +6162,10 @@ export const PlayerScreen = {
       }
       this.engineFsKeepAliveHandle = null;
     }
-    if (token) {
-      requestWebOsCompanionService({
-        method: "enginefsKeepAliveStop",
-        parameters: { token }
-      }).catch(() => null);
-    }
+    // The Luna subscription cancellation is the authoritative stop signal.
+    // Do not send a second one-shot stop request here: if the service was
+    // already evicted, that request would start it again just to stop a token
+    // that no longer exists.
     this.engineFsKeepAliveToken = "";
   },
 
@@ -6369,6 +6411,7 @@ export const PlayerScreen = {
   normalizeEmbeddedSubtitleTracks(rawTracks = []) {
     const isTizenAvPlayMetadata = Environment.isTizen();
     let nativeTrackIndex = 0;
+    let tizenEmbeddedTextTrackOrdinal = 0;
     return rawTracks
       .filter((track) => {
         const type = String(track?.type || track?.track || track?.codecType || "").toLowerCase();
@@ -6404,10 +6447,14 @@ export const PlayerScreen = {
             ? rawAvPlayTrackIndex
             : sequentialNativeTrackIndex;
         const sourceTrackId = Number(track?.id);
-        // Tizen's /tracks endpoint exposes id as a zero-based ordinal within
-        // the media type; the Matroska fallback resolves that ordinal to the
-        // actual TrackNumber before reading blocks.
-        const sourceTrackOrdinal = sourceTrackId;
+        // Tizen's /tracks endpoint exposes id as the Matroska TrackNumber,
+        // while the embedded-text fallback accepts a zero-based ordinal among
+        // text tracks. Keep both identities separate.
+        const sourceTrackOrdinal = isTizenAvPlayMetadata
+          ? isEmbeddedTextSubtitleSourceTrack(track)
+            ? tizenEmbeddedTextTrackOrdinal++
+            : -1
+          : sourceTrackId;
         const rawLanguage = getTrackLanguageValue(track);
         const normalizedLanguage = normalizeTrackLanguageCode(rawLanguage);
         const languageKey = normalizeSubtitleLanguageKey(
@@ -8235,8 +8282,21 @@ export const PlayerScreen = {
       });
       return Promise.resolve();
     }
+    // Keep the candidate as a defensive source of truth. A route can be
+    // rebuilt with a context that no longer contains requestHeaders, while
+    // the plugin metadata is still present on the selected stream.
+    const candidateHeaders = this.getCurrentStreamRequestHeaders(sourceCandidate);
+    const contextHeaders =
+      context?.requestHeaders && typeof context.requestHeaders === "object"
+        ? context.requestHeaders
+        : {};
+    const requestHeaders = { ...candidateHeaders, ...contextHeaders };
+    const playbackContext = {
+      ...(context && typeof context === "object" ? context : {}),
+      ...(Object.keys(requestHeaders).length ? { requestHeaders } : {})
+    };
     PlayerController.setStartupPresentationAudioMuted?.(true);
-    return Promise.resolve(PlayerController.play(playbackUrl, context)).catch((error) => {
+    return Promise.resolve(PlayerController.play(playbackUrl, playbackContext)).catch((error) => {
       if (!this.isActiveMountToken(mountToken) || this.isExternalFrameMode()) {
         return;
       }
@@ -9619,7 +9679,7 @@ export const PlayerScreen = {
       return false;
     }
     const shouldShow = this.getNextEpisodeCardThresholdReached(currentSeconds, durationSeconds);
-    if (this.nextEpisodeCardTriggered && !shouldShow) {
+    if (this.nextEpisodeCardTriggered && !this.nextEpisodeLaunching && !shouldShow) {
       this.resetNextEpisodeCardCycle({ render: false });
       return false;
     }
@@ -11119,6 +11179,16 @@ export const PlayerScreen = {
         if (this.selectedEmbeddedSubtitleTrackIndex !== selectedIndex) {
           return;
         }
+        // Keep the native refresh from racing an app-owned renderer. The
+        // activation key also covers the existing async HTML-overlay path,
+        // which claims ownership before the renderer flags are committed.
+        if (
+          this.webOsEmbeddedTextSubtitleUsingAss ||
+          this.webOsEmbeddedTextSubtitleUsingHtml ||
+          this.webOsEmbeddedHtmlSubtitleActivationKey
+        ) {
+          return;
+        }
         PlayerController.setWebOsEmbeddedSubtitleTrack(targetTrackIndex, selectedIndex);
       }, 50);
       this.embeddedSubtitleCueRefreshTimers.add(timerId);
@@ -11272,6 +11342,12 @@ export const PlayerScreen = {
           this.scheduleLoadingCompletionCheck(250);
           return;
         }
+        // AVPlay returns from this platform-specific branch before the shared
+        // browser playback path below. Keep the Android start-scrobble event at
+        // the first real playing state on Tizen as well.
+        if (TrackingScrobbleService.isEnabled()) {
+          TrackingScrobbleService.start(this.buildScrobbleContext());
+        }
         this.markPlaybackProgress();
         this.paused = false;
         this.seekOverlaySuppressControlsUntil = 0;
@@ -11294,6 +11370,8 @@ export const PlayerScreen = {
       }
       if (this.currentEngineFsStream && !this.hasPresentedPlaybackFrame) {
         this.lastPlaybackErrorAt = 0;
+        this.engineFsStartupErrorRetries = 0;
+        this.lastEngineFsStartupErrorStats = null;
         this.sourcesError = "";
         this.paused = false;
         this.updateMediaSessionPlaybackState();
@@ -11492,8 +11570,9 @@ export const PlayerScreen = {
       if (
         this.trackDiscoveryInProgress &&
         !embeddedAudioDiscoveryPending &&
-        this.hasAudioTracksAvailable() &&
-        this.hasSubtitleTracksAvailable()
+        this.hasAudioTracksAvailable({ includeImplicit: false }) &&
+        this.hasSubtitleTracksAvailable() &&
+        !this.isWebOsEngineFsEmbeddedTrackDiscoveryPending()
       ) {
         this.trackDiscoveryInProgress = false;
         this.clearTrackDiscoveryTimer();
@@ -14106,7 +14185,8 @@ export const PlayerScreen = {
       return;
     }
     streamRepository.setLocalPluginSearchPaused(true);
-    let targetUrl = streamDirectPlaybackUrl(streamCandidate);
+    const forceEngineFsResolve = options?.forceEngineFsResolve === true;
+    let targetUrl = forceEngineFsResolve ? "" : streamDirectPlaybackUrl(streamCandidate);
     if (!targetUrl) {
       const resolveContext = {
         season: this.params?.season == null ? null : Number(this.params.season),
@@ -14122,6 +14202,17 @@ export const PlayerScreen = {
       let fallbackError = "";
       let resolveFailureStatus = "";
       let resolveFailureDetail = "";
+      let preResolveEngineFsKeepAliveToken = "";
+      const stopPreResolveEngineFsKeepAlive = () => {
+        if (
+          !preResolveEngineFsKeepAliveToken ||
+          this.engineFsKeepAliveToken !== preResolveEngineFsKeepAliveToken ||
+          this.currentEngineFsStream
+        ) {
+          return;
+        }
+        this.stopEngineFsKeepAlive();
+      };
 
       if (DirectDebridResolver.canResolveStream(streamCandidate, resolveContext)) {
         const result = await DirectDebridResolver.resolve(streamCandidate, resolveContext);
@@ -14176,10 +14267,26 @@ export const PlayerScreen = {
       }
 
       if (!targetUrl && canUseP2p) {
+        if (canUseEngineFs && !this.currentEngineFsStream && !this.engineFsKeepAliveToken) {
+          const infoHash = getP2pInfoHash(streamCandidate);
+          if (infoHash) {
+            this.startEngineFsKeepAlive({
+              kind: "webos-enginefs",
+              infoHash,
+              fileIdx: streamCandidate.fileIdx ?? streamCandidate.raw?.fileIdx ?? null
+            });
+            preResolveEngineFsKeepAliveToken = this.engineFsKeepAliveToken;
+            logEngineFsDebug("EngineFS keepalive started before P2P resolve", {
+              infoHash,
+              fileIdx: streamCandidate.fileIdx ?? streamCandidate.raw?.fileIdx ?? null
+            });
+          }
+        }
         const result = canUseEngineFs
           ? await WebOsEngineFsResolver.resolve(streamCandidate, resolveContext)
           : await TizenStreamingServerResolver.resolve(streamCandidate, resolveContext);
         if (!this.isActiveMountToken(mountToken)) {
+          stopPreResolveEngineFsKeepAlive();
           const resolvedEngineFs = result?.stream?.engineFs || null;
           if (resolvedEngineFs?.infoHash) {
             void this.cleanupEngineFsState(resolvedEngineFs, "stale-p2p-resolve", {
@@ -14216,6 +14323,8 @@ export const PlayerScreen = {
               "",
             fileIdx: streamCandidate.fileIdx ?? streamCandidate.raw?.fileIdx ?? null
           });
+
+          stopPreResolveEngineFsKeepAlive();
         }
       }
 
@@ -14817,6 +14926,17 @@ export const PlayerScreen = {
     const sourceCandidate =
       this.getStreamCandidateByUrl(retryUrl) || this.getCurrentStreamCandidate();
     const snapshot = this.getEngineFsStallSnapshot(stats);
+    const startupMediaErrorWithEmptyEngine =
+      Number(mediaErrorCode) > 0 &&
+      snapshot &&
+      snapshot.downloaded <= 0 &&
+      snapshot.progress <= 0 &&
+      snapshot.downloadSpeed <= 0;
+    const recreateLocalEngineFs =
+      (!stats || (startupMediaErrorWithEmptyEngine && retry <= 3)) &&
+      Environment.isWebOS() &&
+      this.currentEngineFsStream.kind === "webos-enginefs" &&
+      Boolean(sourceCandidate);
 
     this.lastPlaybackErrorAt = 0;
     this.loadingVisible = true;
@@ -14828,13 +14948,19 @@ export const PlayerScreen = {
     this.setControlsVisible(false, { focus: false });
     this.schedulePlaybackStallGuard({ timeoutMs: delayMs + 12000 });
 
-    logEngineFsDebug("EngineFS startup decode error while buffering; retrying same source", {
-      retry,
-      delayMs,
-      mediaErrorCode,
-      playbackUrl: retryUrl,
-      stats: snapshot
-    });
+    logEngineFsDebug(
+      recreateLocalEngineFs
+        ? "EngineFS startup unavailable; recreating local torrent before retry"
+        : "EngineFS startup decode error while buffering; retrying same source",
+      {
+        retry,
+        delayMs,
+        mediaErrorCode,
+        playbackUrl: retryUrl,
+        recreateLocalEngineFs,
+        stats: snapshot
+      }
+    );
 
     this.engineFsStartupRetryTimer = setTimeout(() => {
       this.engineFsStartupRetryTimer = null;
@@ -14843,6 +14969,15 @@ export const PlayerScreen = {
         this.activePlaybackUrl !== retryUrl ||
         !this.currentEngineFsStream
       ) {
+        return;
+      }
+      if (recreateLocalEngineFs) {
+        void this.playStreamCandidate(sourceCandidate, {
+          preservePanel: true,
+          resetSilentAudioState: false,
+          preservePendingRestore: Boolean(this.pendingPlaybackRestore),
+          forceEngineFsResolve: true
+        });
         return;
       }
       void this.playStreamByUrl(retryUrl, {
@@ -14952,6 +15087,13 @@ export const PlayerScreen = {
 
       if (startup && this.currentEngineFsStream) {
         const stats = await this.fetchCurrentEngineFsStats();
+        if (
+          !stats &&
+          Environment.isWebOS() &&
+          this.scheduleEngineFsStartupRetry({ mediaErrorCode: 0, stats: null })
+        ) {
+          return;
+        }
         if (this.shouldDeferEngineFsStartupStall(stats)) {
           this.engineFsStallExtensions = Number(this.engineFsStallExtensions || 0) + 1;
           logEngineFsDebug("EngineFS startup still buffering; extending stall guard", {
@@ -15363,7 +15505,7 @@ export const PlayerScreen = {
       .join("||");
   },
 
-  hasAudioTracksAvailable() {
+  hasAudioTracksAvailable({ includeImplicit = true } = {}) {
     let dashCount = 0;
     try {
       dashCount =
@@ -15400,15 +15542,22 @@ export const PlayerScreen = {
     } catch (_) {
       nativeCount = 0;
     }
-    return (
+    const hasConcreteAudioTracks =
       dashCount > 0 ||
       avplayCount > 0 ||
       hlsCount > 0 ||
       nativeCount > 0 ||
       (this.canDiscoverEmbeddedAudioTracks() && this.embeddedAudioTracks.length > 0) ||
-      this.manifestAudioTracks.length > 0 ||
-      Boolean(this.getImplicitAudioEntry())
-    );
+      this.manifestAudioTracks.length > 0;
+    if (hasConcreteAudioTracks) {
+      return true;
+    }
+
+    // The implicit entry describes the stream candidate, not a track that the
+    // native player or the embedded-track probe has exposed. It is useful for
+    // the audio UI fallback, but it must not complete startup discovery before
+    // WebOS has had a chance to return the embedded streams.
+    return includeImplicit && Boolean(this.getImplicitAudioEntry());
   },
 
   hasSubtitleTracksAvailable() {
@@ -15496,20 +15645,25 @@ export const PlayerScreen = {
         this.embeddedAudioTracks.length <= 0 &&
         !this.embeddedSubtitleLoading &&
         !this.embeddedAudioLoading;
+      const webOsEngineFsEmbeddedTrackDiscoveryPending =
+        this.isWebOsEngineFsEmbeddedTrackDiscoveryPending();
       if (shouldRetryEmbeddedTracks && now - Number(this.lastEmbeddedTrackRetryAt || 0) >= 1200) {
         this.lastEmbeddedTrackRetryAt = now;
         this.loadEmbeddedSubtitleTracks();
       }
 
       const doneByData =
-        (this.hasSubtitleTracksAvailable() || this.hasAudioTracksAvailable()) &&
-        !shouldRetryEmbeddedTracks;
+        (this.hasSubtitleTracksAvailable() ||
+          this.hasAudioTracksAvailable({ includeImplicit: false })) &&
+        !shouldRetryEmbeddedTracks &&
+        !webOsEngineFsEmbeddedTrackDiscoveryPending;
       const doneByIdle =
         !this.subtitleLoading &&
         !this.embeddedSubtitleLoading &&
         !this.embeddedAudioLoading &&
         !this.manifestLoading &&
         !shouldRetryEmbeddedTracks &&
+        !webOsEngineFsEmbeddedTrackDiscoveryPending &&
         now - Number(this.trackDiscoveryStartedAt || 0) >= 1200;
       const trackDiscoveryElapsedMs = now - Number(this.trackDiscoveryStartedAt || 0);
       const webOsStartupPreferenceUnresolved = Boolean(
@@ -15808,9 +15962,32 @@ export const PlayerScreen = {
     if (!Number.isFinite(targetIndex) || targetIndex < 0) {
       return null;
     }
-    return (
-      this.ensureEmbeddedTrackLookupCache().embeddedSubtitleByNativeIndex.get(targetIndex) || null
+    const directTrack =
+      this.ensureEmbeddedTrackLookupCache().embeddedSubtitleByNativeIndex.get(targetIndex) || null;
+    const rawTizenAvPlayIndex = directTrack?.raw?.index;
+    const hasExplicitTizenAvPlayIndex =
+      rawTizenAvPlayIndex !== undefined &&
+      rawTizenAvPlayIndex !== null &&
+      Number.isFinite(Number(rawTizenAvPlayIndex));
+    if (directTrack && (!Environment.isTizen() || hasExplicitTizenAvPlayIndex)) {
+      return directTrack;
+    }
+    if (!Environment.isTizen()) {
+      return null;
+    }
+
+    // Tizen's /tracks metadata currently has no AVPlay stream index. Both
+    // lists preserve the source text-stream order, so resolve the AVPlay raw
+    // index to the corresponding local text ordinal only when direct mapping
+    // is unavailable.
+    const avplayTracks =
+      typeof PlayerController.getAvPlaySubtitleTracks === "function"
+        ? PlayerController.getAvPlaySubtitleTracks()
+        : [];
+    const avplayOrdinal = avplayTracks.findIndex(
+      (track) => Number(track?.avplayTrackIndex) === targetIndex
     );
+    return avplayOrdinal >= 0 ? this.embeddedSubtitleTracks[avplayOrdinal] || null : null;
   },
 
   getEmbeddedSubtitleTrackByEmbeddedIndex(index) {
@@ -16812,13 +16989,29 @@ export const PlayerScreen = {
             this.destroyAssSubtitleRenderer();
             return false;
           }
+          // Claim webOS app ownership before the native-hide round trip so a
+          // queued native refresh cannot re-enable the renderer in parallel.
+          const wasUsingHtml = this.webOsEmbeddedTextSubtitleUsingHtml;
+          const canClaimWebOsAssOwnership = Environment.isWebOS();
+          if (canClaimWebOsAssOwnership) {
+            this.webOsEmbeddedTextSubtitleUsingAss = true;
+            this.webOsEmbeddedTextSubtitleUsingHtml = false;
+          }
           const nativeRendererHidden = await Promise.resolve(
             PlayerController.setWebOsEmbeddedSubtitleNativeVisibility(
               false,
               this.selectedEmbeddedSubtitleTrackIndex
             )
           );
-          if (!nativeRendererHidden) {
+          if (
+            !nativeRendererHidden ||
+            requestToken !== this.webOsEmbeddedTextSubtitleLoadToken ||
+            this.webOsEmbeddedTextSubtitleTrack !== track
+          ) {
+            if (canClaimWebOsAssOwnership) {
+              this.webOsEmbeddedTextSubtitleUsingAss = false;
+              this.webOsEmbeddedTextSubtitleUsingHtml = wasUsingHtml;
+            }
             this.destroyAssSubtitleRenderer();
             return false;
           }
@@ -16852,6 +17045,13 @@ export const PlayerScreen = {
       }
 
       if (!this.webOsEmbeddedTextSubtitleUsingHtml) {
+        // Tizen uses a synchronous AVPlay render-mode switch; keep its
+        // existing ordering while claiming ownership early on webOS, where
+        // the native hide is asynchronous.
+        const canClaimWebOsHtmlOwnership = Environment.isWebOS();
+        if (canClaimWebOsHtmlOwnership) {
+          this.webOsEmbeddedTextSubtitleUsingHtml = true;
+        }
         const nativeRendererHidden = isTizenEmbeddedTextSubtitleFallbackTrack(track)
           ? Boolean(PlayerController.applyAvPlaySubtitleRenderMode?.("html"))
           : typeof PlayerController.setWebOsEmbeddedSubtitleNativeVisibility === "function"
@@ -16867,9 +17067,14 @@ export const PlayerScreen = {
           this.webOsEmbeddedTextSubtitleTrack !== track ||
           !nativeRendererHidden
         ) {
+          if (canClaimWebOsHtmlOwnership) {
+            this.webOsEmbeddedTextSubtitleUsingHtml = false;
+          }
           return false;
         }
-        this.webOsEmbeddedTextSubtitleUsingHtml = true;
+        if (!canClaimWebOsHtmlOwnership) {
+          this.webOsEmbeddedTextSubtitleUsingHtml = true;
+        }
       }
 
       this.htmlSubtitleCues = cues;
@@ -18541,6 +18746,42 @@ export const PlayerScreen = {
     return Number(this.trackDiscoveryDeadline || 0) > Date.now();
   },
 
+  isWebOsEngineFsEmbeddedTrackDiscoveryPending() {
+    if (!Environment.isWebOS() || !this.currentEngineFsStream) {
+      return false;
+    }
+
+    const probeUrl = this.getTrackProbeUrl();
+    if (
+      !probeUrl ||
+      this.isCurrentSourceAdaptiveManifest() ||
+      !this.isTrackDiscoveryWindowPending()
+    ) {
+      return false;
+    }
+
+    const canDiscoverEmbeddedTracks =
+      this.canDiscoverEmbeddedSubtitleTracks() || this.canDiscoverEmbeddedAudioTracks();
+    if (!canDiscoverEmbeddedTracks) {
+      // EngineFS can expose a playable URL before the native WebOS player has
+      // exposed metadata. Keep the startup decision pending until that probe
+      // becomes possible instead of treating candidate metadata as a track.
+      return true;
+    }
+
+    if (this.embeddedSubtitleLoading || this.embeddedAudioLoading) {
+      return true;
+    }
+    if (this.embeddedSubtitleTracks.length > 0 || this.embeddedAudioTracks.length > 0) {
+      return false;
+    }
+
+    // An empty successful response is a valid result (the file may have no
+    // embedded tracks). An unattempted probe must remain pending so a later
+    // response cannot be hidden by an early "off" decision.
+    return this.lastEmbeddedTrackProbeUrl !== probeUrl;
+  },
+
   isAudioPreferenceDiscoveryPending() {
     return Boolean(
       this.embeddedAudioLoading ||
@@ -18626,11 +18867,14 @@ export const PlayerScreen = {
     const hasSubtitleOptions = this.collectSubtitleOptionItems().some(
       (entry) => entry.languageKey !== SUBTITLE_LANGUAGE_OFF_KEY
     );
+    const webOsEngineFsEmbeddedTrackDiscoveryPending =
+      this.isWebOsEngineFsEmbeddedTrackDiscoveryPending();
     return Boolean(
       this.subtitleLoading ||
       this.embeddedSubtitleLoading ||
       this.manifestLoading ||
       this.trackDiscoveryInProgress ||
+      webOsEngineFsEmbeddedTrackDiscoveryPending ||
       (!hasSubtitleOptions && this.isTrackDiscoveryWindowPending())
     );
   },

@@ -37,6 +37,7 @@ const WEBOS_AUDIO_TRACK_SELECTION_TIMEOUT_MS = 4000;
 const AVPLAY_BUFFER_FOR_PLAY_SECONDS = 5;
 const AVPLAY_BUFFER_FOR_RESUME_SECONDS = 4;
 const AVPLAY_BUFFERING_TIMEOUT_SECONDS = 10;
+const TIZEN_AVPLAY_DISPLAY_RECT_STATES = new Set(["IDLE", "READY", "PLAYING", "PAUSED"]);
 // Tizen keeps Samsung's default 20-second buffering timeout; allow a short
 // grace period for the seek callback before treating the native session as stuck.
 const AVPLAY_SEEK_TIMEOUT_MS = 30_000;
@@ -155,6 +156,9 @@ export const PlayerController = {
   isPlaying: false,
   currentItemId: null,
   currentItemType: null,
+  currentImdbId: null,
+  currentTmdbId: null,
+  currentTraktId: null,
   currentVideoId: null,
   currentSeason: null,
   currentEpisode: null,
@@ -609,7 +613,6 @@ export const PlayerController = {
   },
 
   stopWebOsPlaybackKeepAlive() {
-    const token = String(this.webOsPlaybackKeepAliveToken || "").trim();
     if (this.webOsPlaybackKeepAliveHandle) {
       try {
         this.webOsPlaybackKeepAliveHandle.cancel?.();
@@ -618,12 +621,9 @@ export const PlayerController = {
       }
       this.webOsPlaybackKeepAliveHandle = null;
     }
-    if (token) {
-      requestWebOsCompanionService({
-        method: "mediaPlaybackKeepAliveStop",
-        parameters: { token }
-      }).catch(() => null);
-    }
+    // Cancelling the Luna subscription is enough to trigger the service-side
+    // cancel handler. Avoid a second stop request that could relaunch an
+    // evicted on-demand service during teardown.
     this.webOsPlaybackKeepAliveToken = "";
   },
 
@@ -1470,10 +1470,12 @@ export const PlayerController = {
   },
 
   logAvPlaySubtitleDiagnostic(stage, detail = {}) {
-    if (!Platform.isTizen() || !this.isUsingAvPlay()) {
+    // Selection requests and successful state transitions are normal player
+    // activity. Keep a warning only when the native selection actually fails.
+    if (stage !== "select-error" || !Platform.isTizen() || !this.isUsingAvPlay()) {
       return;
     }
-    console.warn("[Nuvio AVPlay subtitle trace]", {
+    console.warn("[Nuvio AVPlay subtitle selection failed]", {
       stage,
       ...detail,
       current: this.getAvPlaySubtitleDiagnosticSnapshot(),
@@ -2436,6 +2438,22 @@ export const PlayerController = {
       this.avplayDisplayRect = targetRect;
       syncTizenAvPlayObjectStyle(targetRect);
     }
+    if (Platform.isTizen()) {
+      let state = "";
+      try {
+        state = String(avplay.getState?.() || "")
+          .trim()
+          .toUpperCase();
+      } catch (_) {
+        return;
+      }
+      // Samsung rejects setDisplayRect/setDisplayMethod in NONE or other
+      // transitional states. Keep the desired rectangle above and apply it
+      // on the next IDLE/READY callback instead of issuing an invalid call.
+      if (!TIZEN_AVPLAY_DISPLAY_RECT_STATES.has(state)) {
+        return;
+      }
+    }
     try {
       avplay.setDisplayRect?.(targetRect.x, targetRect.y, targetRect.width, targetRect.height);
     } catch (_) {
@@ -2616,7 +2634,6 @@ export const PlayerController = {
 
     this.teardownAvPlay();
 
-    this.avplayActive = true;
     this.avplayUrl = String(url || "");
     this.avplayReady = false;
     this.avplayEnded = false;
@@ -2628,6 +2645,9 @@ export const PlayerController = {
 
     try {
       avplay.open(this.avplayUrl);
+      // Do not expose the AVPlay session to resize/focus callbacks until open
+      // has moved the native object out of NONE and into IDLE.
+      this.avplayActive = true;
       this.configureAvPlayForSource(requestHeaders);
       this.configureAvPlayBuffering();
     } catch (error) {
@@ -2638,8 +2658,6 @@ export const PlayerController = {
       this.playbackEngine = "none";
       return false;
     }
-
-    this.setAvPlayDisplayRect();
 
     try {
       avplay.setListener?.({
@@ -2652,9 +2670,6 @@ export const PlayerController = {
           }
           this.avplayBufferingProgress = null;
           this.avplayReady = false;
-          if (Platform.isTizen()) {
-            console.warn("[Nuvio AVPlay buffering start]", this.getAvPlayDiagnosticSnapshot());
-          }
           this.emitVideoEvent("waiting", { playbackEngine: this.playbackEngine });
         },
         onbufferingprogress: (percent) => {
@@ -2780,6 +2795,10 @@ export const PlayerController = {
     } catch (_) {
       // Ignore listener setup failures; prepareAsync/play may still work.
     }
+
+    // Samsung recommends installing the listener while AVPlay is IDLE before
+    // configuring the display and starting prepareAsync.
+    this.setAvPlayDisplayRect();
 
     const onPrepared = () => {
       if (!this.isUsingAvPlay() || !this.isPlaybackRequestActive(playToken, url)) {
@@ -3400,6 +3419,9 @@ export const PlayerController = {
     this.play(url, {
       itemId: this.currentItemId,
       itemType: this.currentItemType || "movie",
+      imdbId: this.currentImdbId,
+      tmdbId: this.currentTmdbId,
+      traktId: this.currentTraktId,
       videoId: this.currentVideoId,
       season: this.currentSeason,
       episode: this.currentEpisode,
@@ -3548,10 +3570,19 @@ export const PlayerController = {
     }
 
     const candidates = [];
+    const isRemoteDirectHttpSource = this.isRemoteDirectHttpSource(url);
     if (isTizenRuntime && canUseAvPlay) {
       pushCandidate(candidates, avplayEngine);
     }
-    pushCandidate(candidates, "native-file");
+    // Android keeps progressive network playback in a native Media3/OkHttp
+    // pipeline. On Tizen, retrying a remote AVPlay failure with the browser
+    // video element creates a second, misleading CORS/Same-Origin failure.
+    // Keep the HTML fallback for local EngineFS URLs and non-Tizen platforms;
+    // if AVPlay is unavailable, choosePlaybackEngine() keeps the remote source
+    // on the AVPlay path and reports a controlled platform error.
+    if (!isTizenRuntime || !isRemoteDirectHttpSource) {
+      pushCandidate(candidates, "native-file");
+    }
     if (!isTizenRuntime && canUseAvPlay) {
       pushCandidate(candidates, avplayEngine);
     }
@@ -3583,6 +3614,21 @@ export const PlayerController = {
       return /\/([0-9a-f]{40})\/\d+(?:\/|$)/i.test(parsedUrl.pathname);
     } catch (_) {
       return false;
+    }
+  },
+
+  isRemoteDirectHttpSource(url = "") {
+    const normalizedUrl = String(url || "").trim();
+    if (!/^https?:\/\//i.test(normalizedUrl)) {
+      return false;
+    }
+    try {
+      const hostname = String(new URL(normalizedUrl).hostname || "")
+        .toLowerCase()
+        .replace(/^\[|\]$/g, "");
+      return !["127.0.0.1", "localhost", "::1"].includes(hostname);
+    } catch (_) {
+      return !/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(normalizedUrl);
     }
   },
 
@@ -3740,7 +3786,7 @@ export const PlayerController = {
       initialLiveManifestSize: isWebOs && isLivePlayback ? WEBOS_LIVE_INITIAL_MANIFEST_SIZE : 1,
       backBufferLength: isWebOs ? 30 : 90,
       maxBufferLength: isWebOs ? 18 : 30,
-      maxMaxBufferLength: isWebOs ? 24 : 60,
+      maxMaxBufferLength: isWebOs ? (isLivePlayback ? 24 : 80) : 60,
       maxBufferHole: 0.5,
       startFragPrefetch: false,
       fragLoadingTimeOut: isWebOs ? 18000 : 20000,
@@ -4888,6 +4934,12 @@ export const PlayerController = {
     if (this.canUseAvPlay()) {
       return this.getPlatformAvplayEngineName();
     }
+    if (Platform.isTizen() && this.isRemoteDirectHttpSource(url)) {
+      // Keep remote progressive playback on the AVPlay path even when the
+      // native API is unavailable, so the caller reports a controlled
+      // unsupported-platform error instead of leaking the URL to <video>.
+      return this.getPlatformAvplayEngineName();
+    }
     return "native-file";
   },
 
@@ -5110,6 +5162,9 @@ export const PlayerController = {
     {
       itemId = null,
       itemType = "movie",
+      imdbId = null,
+      tmdbId = null,
+      traktId = null,
       videoId = null,
       season = null,
       episode = null,
@@ -5148,6 +5203,9 @@ export const PlayerController = {
 
     this.currentItemId = itemId;
     this.currentItemType = itemType;
+    this.currentImdbId = imdbId || null;
+    this.currentTmdbId = tmdbId || null;
+    this.currentTraktId = traktId || null;
     this.currentVideoId = videoId;
     this.currentSeason = season == null ? null : Number(season);
     this.currentEpisode = episode == null ? null : Number(episode);
@@ -5257,6 +5315,23 @@ export const PlayerController = {
     if (preferredEngine === this.getPlatformAvplayEngineName()) {
       const avplayStarted = this.playWithAvPlay(playbackUrl, requestHeaders, sourceType, playToken);
       if (!avplayStarted) {
+        const isRemoteProgressiveTizenSource =
+          Platform.isTizen() &&
+          nativeFallbackEngine === "native-file" &&
+          this.isRemoteDirectHttpSource(playbackUrl);
+        if (isRemoteProgressiveTizenSource) {
+          if (!this.isPlaybackRequestActive(playToken, playbackUrl)) {
+            return;
+          }
+          this.isPlaying = false;
+          this.stopProgressSaving();
+          this.emitVideoEvent("error", {
+            playbackEngine: this.getPlatformAvplayEngineName(),
+            mediaErrorCode: this.getLastPlaybackErrorCode() || 4,
+            avplayError: "AVPlay startup failed before prepareAsync"
+          });
+          return;
+        }
         this.applyNativeSource(playbackUrl, sourceType || null, nativeFallbackEngine);
         this.attemptVideoPlay({
           warningLabel: "Playback start rejected",
@@ -5520,6 +5595,9 @@ export const PlayerController = {
     this.syncWebOsPlaybackKeepAwake();
     this.currentItemId = null;
     this.currentItemType = null;
+    this.currentImdbId = null;
+    this.currentTmdbId = null;
+    this.currentTraktId = null;
     this.currentVideoId = null;
     this.currentSeason = null;
     this.currentEpisode = null;
@@ -5550,6 +5628,9 @@ export const PlayerController = {
     return {
       itemId: this.currentItemId,
       itemType,
+      imdbId: this.currentImdbId,
+      tmdbId: this.currentTmdbId,
+      traktId: this.currentTraktId,
       // Android stores movie progress at content level and episode progress at
       // the exact season/episode identity. A movie's discovery video ID can
       // vary between addons and must not split resume state by source.
@@ -5717,6 +5798,9 @@ export const PlayerController = {
       await watchedItemsRepository.mark({
         contentId: active.itemId,
         contentType: active.itemType || "movie",
+        imdbId: active.imdbId || null,
+        tmdbId: active.tmdbId || null,
+        traktId: active.traktId || null,
         title: active.episodeTitle || active.title || active.itemId,
         season: active.season,
         episode: active.episode,
@@ -5730,6 +5814,9 @@ export const PlayerController = {
           {
             contentId: active.itemId,
             contentType: active.itemType || "movie",
+            imdbId: active.imdbId || null,
+            tmdbId: active.tmdbId || null,
+            traktId: active.traktId || null,
             videoId: active.videoId || null,
             season: active.season,
             episode: active.episode,
@@ -5777,6 +5864,9 @@ export const PlayerController = {
       {
         contentId: active.itemId,
         contentType: active.itemType || "movie",
+        imdbId: active.imdbId || null,
+        tmdbId: active.tmdbId || null,
+        traktId: active.traktId || null,
         videoId: active.videoId || null,
         season: active.season,
         episode: active.episode,

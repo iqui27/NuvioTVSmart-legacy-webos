@@ -19035,6 +19035,29 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   box-shadow: none !important;
 }
 
+/* Keep Android's focus/navigation contract on Smart TVs while removing the
+   card-size and focus paint transitions that overlap with D-pad input. The
+   Home asset pipeline and Hero crossfade remain unchanged. */
+.smart-tv-motion-reduced .home-screen-shell .home-content-card,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-card,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-frame,
+.smart-tv-motion-reduced .home-screen-shell .home-seeall-card-inner,
+.smart-tv-motion-reduced .home-screen-shell .home-continue-media,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-card .content-poster,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-card .home-poster-expanded-backdrop,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-focus-gif,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-landscape-copy {
+  transition: none !important;
+}
+
+.smart-tv-motion-reduced .home-screen-shell .home-continue-media-loading,
+.smart-tv-motion-reduced .home-screen-shell .home-continue-card-loading,
+.smart-tv-motion-reduced .home-screen-shell .home-continue-card-loading .home-continue-progress,
+.smart-tv-motion-reduced .home-screen-shell .home-continue-skeleton-line,
+.smart-tv-motion-reduced .home-screen-shell .home-poster-card-loading .home-poster-frame::before {
+  animation: none !important;
+}
+
 .performance-constrained .home-continue-media-loading,
 .performance-constrained .home-continue-card-loading,
 .performance-constrained .home-continue-card-loading .home-continue-progress,
@@ -21860,6 +21883,15 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 /* The legacy Tizen build cannot resolve clamp() through this custom property. */
 html.tizen-tv.no-css-math .cast-detail-shell {
   padding: 26px 69.12px 38px;
+}
+
+/* Tizen 5 drops padding declarations that contain min()/clamp(). Keep the
+   Android-TV safe-area spacing on the legacy engine without changing modern
+   Tizen or browser layouts. */
+html.tizen-tv.no-css-math .addons-route-shell,
+html.tizen-tv.no-css-math .plugins-route-shell,
+html.tizen-tv.no-css-math .trakt-route-shell {
+  padding: 56px 96px;
 }
 
 .cast-detail-shell::-webkit-scrollbar {

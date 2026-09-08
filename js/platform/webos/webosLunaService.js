@@ -184,6 +184,9 @@ export const WebOsLunaService = {
         method: String(method || "").trim(),
         parameters: parameters && typeof parameters === "object" ? { ...parameters } : {},
         subscribe: true,
+        // A live playback keep-alive subscription is also the recovery hook:
+        // webOS can recreate the service if the service process disappears.
+        resubscribe: true,
         onSuccess: (result) => {
           if (typeof onSuccess === "function") {
             onSuccess(result || {});

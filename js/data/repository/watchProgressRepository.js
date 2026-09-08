@@ -13,6 +13,8 @@ import { TraktAuthService } from "./traktAuthService.js";
 import { SimklAuthStore } from "../local/simklAuthStore.js";
 import { SimklSyncService } from "./simklSyncService.js";
 import { metaRepository } from "./metaRepository.js";
+import { watchedItemsRepository } from "./watchedItemsRepository.js";
+import { watchedItemIdentityValues, watchedItemsShareIdentity } from "./watchedIdentity.js";
 import { mapWithConcurrency } from "../../core/network/mapWithConcurrency.js";
 import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
 import {
@@ -142,7 +144,7 @@ function isCloudProgressItem(item = {}) {
 
 function matchesProgressTarget(item = {}, contentId, videoId = null) {
   const wantedContentId = String(contentId || "").trim();
-  if (!wantedContentId || String(item.contentId || "").trim() !== wantedContentId) {
+  if (!wantedContentId || !watchedItemsShareIdentity(item, { contentId: wantedContentId })) {
     return false;
   }
   if (videoId == null) {
@@ -268,11 +270,13 @@ function deduplicateInProgress(items = []) {
         return;
       }
 
-      const contentId = String(item?.contentId || "").trim();
-      if (!contentId || seenContentIds.has(contentId)) {
+      const identities = Array.from(watchedItemIdentityValues(item))
+        .map((value) => value.toLowerCase())
+        .filter(Boolean);
+      if (!identities.length || identities.some((identity) => seenContentIds.has(identity))) {
         return;
       }
-      seenContentIds.add(contentId);
+      identities.forEach((identity) => seenContentIds.add(identity));
       // Decide Continue Watching eligibility only after selecting the newest
       // episode state for the series. Otherwise a completed episode is removed
       // first and an older partial record can reappear beside the real Next Up.
@@ -301,8 +305,7 @@ function normalizeContentIdList(values = []) {
 }
 
 function matchesAnyContentId(item = {}, contentIds = []) {
-  const normalized = String(item?.contentId || "").trim();
-  return Boolean(normalized && contentIds.includes(normalized));
+  return contentIds.some((contentId) => watchedItemsShareIdentity(item, { contentId }));
 }
 
 function matchesResumeTarget(item = {}, { videoId = null, season = null, episode = null } = {}) {
@@ -371,7 +374,14 @@ function toProgressItemFromTraktHistory(historyItem) {
   const isEpisode = historyItem.type === "episode";
   const tmdbId = isEpisode ? historyItem.showTmdbId : historyItem.tmdbId;
   const traktId = isEpisode ? historyItem.showTraktId : historyItem.traktId;
-  const contentId = tmdbId ? `tmdb:${tmdbId}` : traktId ? `trakt:${traktId}` : null;
+  const imdbId = isEpisode ? historyItem.showImdbId : historyItem.imdbId;
+  const contentId = imdbId
+    ? imdbId
+    : tmdbId
+      ? `tmdb:${tmdbId}`
+      : traktId
+        ? `trakt:${traktId}`
+        : null;
   if (!contentId) return null;
   const watchedAtMs = historyItem.watchedAt
     ? new Date(historyItem.watchedAt).getTime()
@@ -383,7 +393,7 @@ function toProgressItemFromTraktHistory(historyItem) {
     contentType: isEpisode ? "series" : "movie",
     title: isEpisode ? historyItem.showTitle : historyItem.title,
     year: isEpisode ? historyItem.showYear : historyItem.year,
-    imdbId: isEpisode ? historyItem.showImdbId : historyItem.imdbId,
+    imdbId,
     tmdbId: tmdbId || null,
     traktId: traktId || null,
     source: "trakt_history",
@@ -533,7 +543,11 @@ async function fetchTraktProgressSnapshot() {
         console.warn("[CW] Trakt playback state fetch failed", err);
         return [];
       }),
-      withTimeout(TraktAuthService.fetchWatchedShows(), TRAKT_API_TIMEOUT_MS, []).catch((err) => {
+      withTimeout(
+        watchedItemsRepository.getRemoteTraktWatchedShows(),
+        TRAKT_API_TIMEOUT_MS,
+        []
+      ).catch((err) => {
         console.warn("[CW] Trakt watched shows fetch failed", err);
         return [];
       })
@@ -671,7 +685,11 @@ class WatchProgressRepository {
   }
 
   async getProgressByContentId(contentId) {
-    return WatchProgressStore.findByContentId(contentId, activeProfileId());
+    return (
+      WatchProgressStore.listForProfile(activeProfileId()).find((item) =>
+        watchedItemsShareIdentity(item, { contentId })
+      ) || null
+    );
   }
 
   async getResumeByContentIds(contentIds, target = {}) {
@@ -701,7 +719,14 @@ class WatchProgressRepository {
     const removedItems = WatchProgressStore.listForProfile(pid).filter((item) =>
       matchesProgressTarget(item, contentId, videoId)
     );
-    WatchProgressStore.remove(contentId, videoId, pid);
+    if (removedItems.length) {
+      const remaining = WatchProgressStore.listForProfile(pid).filter(
+        (item) => !matchesProgressTarget(item, contentId, videoId)
+      );
+      WatchProgressStore.replaceForProfile(pid, remaining);
+    } else {
+      WatchProgressStore.remove(contentId, videoId, pid);
+    }
     await deleteWatchProgressFromCloud(removedItems, pid);
     invalidateContinueWatchingDisplaySnapshot();
     queueWatchProgressCloudSync(pid);

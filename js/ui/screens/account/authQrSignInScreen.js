@@ -184,7 +184,9 @@ export const AuthQrSignInScreen = {
             LocalStore.remove(GUEST_QR_BYPASS_KEY);
             LocalStore.set("hasSeenAuthQrOnFirstLaunch", true);
             this.isSignedIn = true;
-            Router.navigate("profileSelection");
+            // AuthManager's authenticated-state subscriber owns post-login
+            // routing. Do not navigate here as well: the two async routes can
+            // mount and clean up the profile screen concurrently on Tizen.
           } else {
             this.setStatus(this.toFriendlyQrError(QrLoginService.getLastError()));
           }

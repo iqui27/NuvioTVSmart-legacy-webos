@@ -6,8 +6,6 @@ var PORT_CANDIDATES = serverHost.PORT_CANDIDATES;
 var bootLocalRuntime = serverHost.bootLocalRuntime;
 var probeLocalServer = serverHost.probeLocalServer;
 var requestLocalHttp = serverHost.requestLocalHttp;
-var requestActiveServerHttp = serverHost.requestActiveServerHttp;
-var requestActiveServerPath = serverHost.requestActiveServerPath;
 var SUPABASE_PROXY_PATH = require("./supabaseProxy").SUPABASE_PROXY_PATH;
 var getDeviceMemoryProfile = require("./deviceMemory").getDeviceMemoryProfile;
 var bitmapSubtitles = require("./bitmapSubtitles");
@@ -16,6 +14,7 @@ var getEmbeddedTextSubtitleWindow = bitmapSubtitles.getEmbeddedTextSubtitleWindo
 var prepareBitmapSubtitleSource = bitmapSubtitles.prepareBitmapSubtitleSource;
 
 var RUNTIME_PATH = path.resolve(__dirname, "..", "runtime", "media-http.cjs");
+var RUNTIME_RESTART_COOLDOWN_MS = 1500;
 
 // Default window for a track probe when the caller does not ask for one. The
 // probe reads from the front of the container, which on a cold torrent may not
@@ -66,6 +65,7 @@ var service = createService();
 var runtimeState = {
   booted: false,
   bootTimestamp: null,
+  bootAtMs: 0,
   bootCount: 0,
   error: null,
   // "enginefs" when the full media runtime loaded, "proxy-only" when it could
@@ -79,8 +79,21 @@ function ensureRuntimeStarted(force) {
   if (!force && (runtimeState.booted || runtimeState.error)) {
     return;
   }
+  if (runtimeState.starting) {
+    return;
+  }
+  if (
+    force &&
+    runtimeState.booted &&
+    runtimeState.bootAtMs > 0 &&
+    Date.now() - runtimeState.bootAtMs < RUNTIME_RESTART_COOLDOWN_MS
+  ) {
+    return;
+  }
 
+  runtimeState.starting = true;
   runtimeState.bootTimestamp = new Date().toISOString();
+  runtimeState.bootAtMs = Date.now();
 
   try {
     if (force) {
@@ -92,6 +105,7 @@ function ensureRuntimeStarted(force) {
     }
     var boot = bootLocalRuntime(RUNTIME_PATH) || { mode: "enginefs", runtimeError: null };
     runtimeState.booted = true;
+    runtimeState.error = null;
     runtimeState.bootCount += 1;
     runtimeState.mode = boot.mode;
     runtimeState.runtimeError = boot.runtimeError;
@@ -101,27 +115,58 @@ function ensureRuntimeStarted(force) {
       "mode=" + boot.mode
     );
   } catch (error) {
+    runtimeState.booted = false;
     runtimeState.error = {
       message: String(error && error.message ? error.message : error),
       stack: String(error && error.stack ? error.stack : "")
     };
     console.error("[" + SERVICE_ID + "] failed to boot local media runtime:", error);
+  } finally {
+    runtimeState.starting = false;
   }
 }
 
 function probeLocalServerWithRecovery(callback, includeBody) {
   ensureRuntimeStarted();
   probeLocalServer(function (_, status) {
-    if (status || runtimeState.error) {
+    if (status) {
       callback(status);
       return;
     }
-    ensureRuntimeStarted(true);
+    // A successful require() does not mean that listen() has emitted its
+    // event yet. Wait once before forcing a new runtime load; this avoids
+    // creating a second listener during a normal cold start.
     setTimeout(function () {
       probeLocalServer(function (__, recoveredStatus) {
-        callback(recoveredStatus);
+        if (recoveredStatus) {
+          callback(recoveredStatus);
+          return;
+        }
+        ensureRuntimeStarted(true);
+        setTimeout(function () {
+          probeLocalServer(function (___, restartedStatus) {
+            callback(restartedStatus);
+          });
+        }, 300);
       });
     }, 300);
+  });
+}
+
+function requestReadyLocalHttp(pathname, options, callback) {
+  probeLocalServerWithRecovery(function (status) {
+    if (!status || !status.port) {
+      callback(
+        new Error(
+          (runtimeState.error && runtimeState.error.message) || "Local media server unavailable"
+        )
+      );
+      return;
+    }
+    // Readiness is recovered before the operation is sent. Do not retry the
+    // operation itself: callers such as torrentCreate may use POST and must
+    // never be duplicated by a transport-level recovery loop.
+    requestLocalHttp(status.port, pathname, options || {}, callback);
   });
 }
 
@@ -216,12 +261,6 @@ function registerCommand(commandName, includeBody) {
 
 function registerSafeHttpProxyCommand(commandName) {
   service.register(commandName, function (message) {
-    ensureRuntimeStarted();
-    if (runtimeState.error) {
-      respond(message, buildErrorPayload(runtimeState.error));
-      return;
-    }
-
     var payload = getMessagePayload(message);
     var proxyRequest = {
       url: payload.url,
@@ -229,7 +268,7 @@ function registerSafeHttpProxyCommand(commandName) {
       headers: payload.headers,
       body: typeof payload.body === "string" ? payload.body : null
     };
-    requestActiveServerHttp(
+    requestReadyLocalHttp(
       SUPABASE_PROXY_PATH,
       {
         method: "POST",
@@ -274,10 +313,11 @@ function registerSafeHttpProxyCommand(commandName) {
 
 function stopKeepAlive(token) {
   var key = String(token || "").trim();
-  if (!key || !keepAliveIntervals[key]) {
+  var keepAlive = key ? keepAliveIntervals[key] : null;
+  if (!keepAlive) {
     return false;
   }
-  clearInterval(keepAliveIntervals[key]);
+  clearInterval(keepAlive.intervalId || keepAlive);
   delete keepAliveIntervals[key];
   return true;
 }
@@ -294,29 +334,67 @@ function buildKeepAlivePayload(token, status) {
 }
 
 function registerKeepAliveCommands(commandName, stopCommandName) {
-  service.register(commandName, function (message) {
-    var payload = getMessagePayload(message);
-    var token = String(payload.token || Date.now() + "-" + Math.random()).trim();
-    var intervalMs = Math.max(
-      5000,
-      Math.min(30000, Math.trunc(Number(payload.intervalMs || 10000)))
-    );
+  // Register the cancel handler through webos-service's Method object. LG
+  // documents this as the service-side subscription contract; a plain
+  // callback does not receive subscription cancellation and can leave an
+  // interval (and therefore the service) alive after playback has ended.
+  var keepAliveMethod = service.register(commandName);
+  if (keepAliveMethod && typeof keepAliveMethod.on === "function") {
+    keepAliveMethod.on("request", function (message) {
+      var payload = getMessagePayload(message);
+      var token = String(payload.token || Date.now() + "-" + Math.random()).trim();
+      var intervalMs = Math.max(
+        5000,
+        Math.min(30000, Math.trunc(Number(payload.intervalMs || 10000)))
+      );
+      var isSubscription = message && message.isSubscription === true;
+      var keepAlive = {
+        message: message,
+        uniqueToken: String((message && message.uniqueToken) || ""),
+        intervalId: null
+      };
 
-    stopKeepAlive(token);
-    probeLocalServerWithRecovery(function (status) {
-      respond(message, buildKeepAlivePayload(token, status));
-    });
+      stopKeepAlive(token);
+      if (isSubscription) {
+        keepAliveIntervals[token] = keepAlive;
+      }
 
-    keepAliveIntervals[token] = setInterval(function () {
-      probeLocalServerWithRecovery(function (status) {
+      var report = function (status) {
+        if (isSubscription && keepAliveIntervals[token] !== keepAlive) {
+          return;
+        }
         try {
           respond(message, buildKeepAlivePayload(token, status));
         } catch (error) {
           stopKeepAlive(token);
         }
+        if (!isSubscription) {
+          delete keepAliveIntervals[token];
+        }
+      };
+
+      probeLocalServerWithRecovery(report);
+      if (isSubscription) {
+        keepAlive.intervalId = setInterval(function () {
+          probeLocalServerWithRecovery(report);
+        }, intervalMs);
+      }
+    });
+    keepAliveMethod.on("cancel", function (message) {
+      var uniqueToken = String((message && message.uniqueToken) || "");
+      Object.keys(keepAliveIntervals).forEach(function (token) {
+        if (keepAliveIntervals[token].uniqueToken === uniqueToken) {
+          stopKeepAlive(token);
+        }
       });
-    }, intervalMs);
-  });
+    });
+  } else {
+    // The fallback mock is only used outside webOS. Keep registration
+    // harmless there without reintroducing the old un-cancellable timer.
+    service.register(commandName, function (message) {
+      respond(message, buildBasePayload());
+    });
+  }
 
   service.register(stopCommandName, function (message) {
     var payload = getMessagePayload(message);
@@ -442,7 +520,7 @@ function registerSubtitleTextCommand() {
     }
 
     var subtitlePath = "/subtitles.vtt?from=" + encodeURIComponent(subtitleUrl);
-    requestActiveServerHttp(
+    requestReadyLocalHttp(
       subtitlePath,
       {
         timeoutMs: 15000,
@@ -595,7 +673,7 @@ function registerTorrentProxyCommand(commandName, buildPath) {
     }
 
     var proxiedPath = buildPath(payload, infoHash);
-    requestActiveServerHttp(
+    requestReadyLocalHttp(
       proxiedPath,
       {
         method: "GET",
@@ -659,7 +737,7 @@ function registerTorrentCreateCommand() {
       Math.min(1048576, Math.trunc(Number(payload.maxBodyBytes || 262144)))
     );
 
-    requestActiveServerHttp(
+    requestReadyLocalHttp(
       createRequest.path,
       {
         method: "POST",
@@ -728,7 +806,7 @@ function delay(ms) {
 
 function requestRuntime(pathname, options) {
   return new Promise(function (resolve, reject) {
-    requestActiveServerHttp(pathname, options || {}, function (error, result) {
+    requestReadyLocalHttp(pathname, options || {}, function (error, result) {
       if (error) {
         reject(error);
         return;

@@ -4,12 +4,16 @@ function normalizeIdentityValue(value) {
 
 export function shouldApplyLateContinueWatchingFocus({
   background = false,
+  initialContinueWatchingPending = false,
   hasUserInteracted = false,
   suppressInitialFocus = false,
   hasAppliedInitialFocus = false
 } = {}) {
   return Boolean(
-    !background && !hasUserInteracted && !suppressInitialFocus && !hasAppliedInitialFocus
+    (!background || initialContinueWatchingPending) &&
+    !hasUserInteracted &&
+    !suppressInitialFocus &&
+    !hasAppliedInitialFocus
   );
 }
 

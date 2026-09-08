@@ -2,10 +2,12 @@ import { I18n } from "../../i18n/index.js";
 import { savedLibraryRepository } from "../../data/repository/savedLibraryRepository.js";
 import { libraryRepository, LibrarySourceMode } from "../../data/repository/libraryRepository.js";
 import { watchedItemsRepository } from "../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../data/repository/watchedTitleStateRepository.js";
 import { watchProgressRepository } from "../../data/repository/watchProgressRepository.js";
 import { watchedSeriesReconciliationService } from "../../data/repository/watchedSeriesReconciliationService.js";
 import { supportsMembershipFor } from "../../core/tracking/trackingLibraryMembership.js";
 import { NuvioDialog } from "./nuvioDialog.js";
+import { buildWatchedTitleIdSet, isTitleItemWatched } from "./watchedTitleBadge.js";
 
 function t(key, params = {}, fallback = key) {
   return I18n.t(key, params, { fallback });
@@ -68,6 +70,9 @@ export async function createPosterOptionsState(item, options = {}) {
   const watchedItems = Array.isArray(options.watchedItems)
     ? options.watchedItems
     : await watchedItemsRepository.getAll(2000).catch(() => []);
+  const projectedWatchedItems = await watchedTitleStateRepository
+    .getTitleWatchedItems([item], { baseWatchedItems: watchedItems, limit: 2000 })
+    .catch(() => watchedItems);
   const sourceMode = await libraryRepository.getSourceMode().catch(() => LibrarySourceMode.LOCAL);
   const libraryItem = toLibraryItem(item);
   const membershipSnapshot = await libraryRepository
@@ -85,9 +90,7 @@ export async function createPosterOptionsState(item, options = {}) {
     isSaved:
       isInMembership(membershipSnapshot) ||
       (await savedLibraryRepository.isSaved(item.id).catch(() => false)),
-    isWatched: watchedItems.some(
-      (entry) => String(entry?.contentId || "") === String(item.id || "")
-    ),
+    isWatched: isTitleItemWatched(item, buildWatchedTitleIdSet(projectedWatchedItems)),
     optionIndex: 0,
     focusKey: options.focusKey || "",
     itemIndex: Number.isFinite(Number(options.itemIndex)) ? Number(options.itemIndex) : -1
@@ -151,7 +154,9 @@ export async function activatePosterOption(state, action, _options = {}) {
   if (action === "toggleWatched") {
     if (isSeriesType(item.type)) {
       if (state.isWatched) {
-        await watchedSeriesReconciliationService.unmarkSeriesWatched(item.id);
+        await watchedSeriesReconciliationService.unmarkSeriesWatched(item.id, {
+          contentType: item.type || "series"
+        });
       } else {
         await watchedSeriesReconciliationService.markSeriesWatched(item.id, item.type || "series", {
           title: item.title || item.name || item.id || "Untitled"
@@ -160,18 +165,30 @@ export async function activatePosterOption(state, action, _options = {}) {
       return { type: "updated", state: { ...state, isWatched: !state.isWatched } };
     }
     if (state.isWatched) {
-      await watchedItemsRepository.unmark(item.id);
+      await watchedItemsRepository.unmark(item.id, {
+        contentType: item.type || "movie",
+        imdbId: item.imdbId || null,
+        tmdbId: item.tmdbId || null,
+        traktId: item.traktId || null,
+        title: item.title || item.name || item.id || "Untitled"
+      });
       await watchProgressRepository.removeProgress(item.id);
       return { type: "updated", state: { ...state, isWatched: false } };
     }
     await watchedItemsRepository.mark({
       contentId: item.id,
       contentType: item.type || "movie",
+      imdbId: item.imdbId || null,
+      tmdbId: item.tmdbId || null,
+      traktId: item.traktId || null,
       title: item.title || item.name || item.id || "Untitled",
       watchedAt: Date.now()
     });
     await watchProgressRepository.saveProgress({
       contentId: item.id,
+      imdbId: item.imdbId || null,
+      tmdbId: item.tmdbId || null,
+      traktId: item.traktId || null,
       contentType: item.type || "movie",
       videoId: null,
       positionMs: 100,

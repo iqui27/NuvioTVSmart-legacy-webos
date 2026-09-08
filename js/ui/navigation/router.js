@@ -24,6 +24,7 @@ import { CatalogSeeAllScreen } from "../screens/catalog/catalogSeeAllScreen.js";
 import { TmdbEntityBrowseScreen } from "../screens/tmdb/tmdbEntityBrowseScreen.js";
 import { FolderDetailScreen } from "../screens/collection/folderDetailScreen.js";
 import { Platform } from "../../platform/index.js";
+import { TizenCapabilities } from "../../platform/tizen/tizenCapabilities.js";
 import { RouteStateStore } from "./routeStateStore.js";
 import { LocalStore } from "../../core/storage/localStore.js";
 import { LazyRouteRegistry } from "../../runtime/lazyRoutes.js";
@@ -677,6 +678,9 @@ export const Router = {
   },
 
   async navigate(routeName, params = {}, options = {}) {
+    if (routeName === "plugins" && Platform.isTizen() && !TizenCapabilities.canUsePlugins()) {
+      return;
+    }
     const navigationStart = ROUTER_PERF_DEBUG ? routerPerfNow() : 0;
 
     const fromHistory = Boolean(options?.fromHistory);

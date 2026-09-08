@@ -22,6 +22,7 @@ import { YOUTUBE_PROXY_URL } from "../../../config.js";
 import { metaRepository } from "../../../data/repository/metaRepository.js";
 import { mdbListRepository } from "../../../data/repository/mdbListRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { watchProgressRepository } from "../../../data/repository/watchProgressRepository.js";
 import { isWatchProgressCompleted } from "../../../domain/model/watchProgress.js";
 import {
@@ -1255,7 +1256,7 @@ export class PostPlayRecommendationController {
     const traktWatchedMoviesPromise =
       selectedWatchSource === WatchProgressSource.TRAKT
         ? withTimeout(
-            TraktAuthService.fetchWatchedMovies(),
+            TraktAuthService.fetchWatchedMovies().catch(() => []),
             POST_PLAY_RECOMMENDATION_WATCHED_TIMEOUT_MS,
             []
           )
@@ -1272,6 +1273,19 @@ export class PostPlayRecommendationController {
     const watchedItems = Array.isArray(watchedItemsRaw) ? watchedItemsRaw : [];
     const progressItems = Array.isArray(progressItemsRaw) ? progressItemsRaw : [];
     const traktWatchedMovies = Array.isArray(traktWatchedMoviesRaw) ? traktWatchedMoviesRaw : [];
+    const seriesSeeds = normalizedSeeds.filter(
+      (candidate) => normalizeContentType(candidate?.type || candidate?.contentType) === "series"
+    );
+    const watchedItemsForRecommendations = seriesSeeds.length
+      ? await withTimeout(
+          watchedTitleStateRepository.getTitleWatchedItems(seriesSeeds, {
+            baseWatchedItems: watchedItems,
+            limit: 5000
+          }),
+          POST_PLAY_RECOMMENDATION_WATCHED_TIMEOUT_MS,
+          watchedItems
+        )
+      : watchedItems;
     const watchedIds = watchedIdentitySet(
       [...watchedItems, ...traktWatchedMovies],
       "movie",
@@ -1284,7 +1298,11 @@ export class PostPlayRecommendationController {
     traktWatchedMovies.forEach((item) => {
       idVariants(item?.imdbId).forEach((value) => watchedIds.add(value));
     });
-    const watchedSeriesIds = watchedIdentitySet(watchedItems, "series", "watched");
+    const watchedSeriesIds = watchedIdentitySet(
+      watchedItemsForRecommendations,
+      "series",
+      "watched"
+    );
     // Android excludes merely started items from its watched sets. Only a
     // completed progress record can suppress a recommendation; root watched
     // records are handled by the dedicated watched-items repository above.

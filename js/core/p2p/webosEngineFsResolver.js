@@ -4,9 +4,14 @@ import {
   requestWebOsCompanionService
 } from "../../platform/webos/webosCompanionService.js";
 import { getPeerSearchBudget, primeLowMemoryProfile } from "./lowMemoryStreamingProfile.js";
+import { TorrentSettingsStore } from "../../data/local/torrentSettingsStore.js";
 
 const ENGINEFS_CREATE_TIMEOUT_MS = 60000;
 const ENGINEFS_KIND = "webos-enginefs";
+
+function isP2pEnabledForActiveProfile() {
+  return Boolean(TorrentSettingsStore.get().p2pEnabled);
+}
 const LOCAL_HOST_NAMES = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function logEngineFsDebug(...args) {
@@ -108,12 +113,23 @@ function isMagnetUri(value = "") {
     .startsWith("magnet:");
 }
 
+function isLocalEngineFsPlaybackUrl(value = "") {
+  if (!isLocalHostUrl(value)) {
+    return false;
+  }
+  try {
+    return /^\/[0-9a-f]{40}\/-?\d+(?:\/|$)/i.test(new URL(String(value)).pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
 function getDirectPlaybackUrl(stream = {}) {
   const candidates = [stream.url, stream.externalUrl];
   return (
     candidates.find((value) => {
       const url = String(value || "").trim();
-      return url && !isMagnetUri(url);
+      return url && !isMagnetUri(url) && !isLocalEngineFsPlaybackUrl(url);
     }) || ""
   );
 }
@@ -729,7 +745,12 @@ function buildResolvedStream(
 
 export const WebOsEngineFsResolver = {
   canResolveStream(stream = {}) {
-    return Platform.isWebOS() && isWebOsCompanionServiceAvailable() && Boolean(getInfoHash(stream));
+    return (
+      Platform.isWebOS() &&
+      isWebOsCompanionServiceAvailable() &&
+      isP2pEnabledForActiveProfile() &&
+      Boolean(getInfoHash(stream))
+    );
   },
 
   getResolvedStreamState(stream = {}) {
@@ -743,6 +764,12 @@ export const WebOsEngineFsResolver = {
   async resolve(stream = {}, context = {}) {
     if (getDirectPlaybackUrl(stream)) {
       return { status: "success", stream };
+    }
+    if (Platform.isWebOS() && !isP2pEnabledForActiveProfile()) {
+      return {
+        status: "disabled",
+        detail: "P2P is disabled for the active profile"
+      };
     }
     if (!this.canResolveStream(stream)) {
       return { status: "unsupported" };
@@ -773,7 +800,7 @@ export const WebOsEngineFsResolver = {
       let statusError = "";
       try {
         const statusResult = await withTimeout(
-          requestWebOsCompanionService({ method: "status", parameters: {} }),
+          requestWebOsCompanionService({ method: "status", parameters: {}, timeoutMs: 5000 }),
           5000,
           "webOS companion status request timed out"
         );

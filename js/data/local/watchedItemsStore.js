@@ -10,11 +10,26 @@ function normalizeEpisodeNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function normalizeExternalId(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : String(value).trim() || null;
+}
+
 function normalizeItem(item = {}, profileId) {
+  const ids = item.ids || item.externalIds || item.external_ids || {};
   return {
     profileId: String(profileId || 1),
     contentId: String(item.contentId || ""),
     contentType: String(item.contentType || "movie"),
+    // Keep tracker aliases with the local canonical ID so later unmark and
+    // reconciliation calls can match the same title across catalog sources.
+    imdbId: item.imdbId || item.imdb_id || ids.imdb || null,
+    tmdbId: normalizeExternalId(item.tmdbId ?? item.tmdb_id ?? ids.tmdb),
+    traktId: normalizeExternalId(item.traktId ?? item.trakt_id ?? ids.trakt),
+    slug: item.slug || ids.slug || null,
     title: String(item.title || ""),
     season: normalizeEpisodeNumber(item.season),
     episode: normalizeEpisodeNumber(item.episode),

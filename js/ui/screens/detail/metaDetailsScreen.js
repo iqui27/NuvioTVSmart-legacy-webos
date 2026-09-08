@@ -4,6 +4,8 @@ import { metaRepository } from "../../../data/repository/metaRepository.js";
 import { watchProgressRepository } from "../../../data/repository/watchProgressRepository.js";
 import { savedLibraryRepository } from "../../../data/repository/savedLibraryRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedItemsShareIdentity } from "../../../data/repository/watchedIdentity.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import {
   libraryRepository,
   LibrarySourceMode
@@ -59,6 +61,7 @@ import {
   PosterOptionsDialogController
 } from "../../components/posterOptionsMenu.js";
 import { StreamPreferencesStore } from "../../../data/local/streamPreferencesStore.js";
+import { buildWatchedTitleIdSet, isTitleItemWatched } from "../../components/watchedTitleBadge.js";
 import {
   WATCH_PROGRESS_COMPLETED_THRESHOLD,
   getWatchProgressFraction,
@@ -360,6 +363,44 @@ function isSeriesDetailMeta(meta = {}, episodes = null) {
   // Match Android TV: addon-defined types such as `other` are episodic when
   // their full meta contains videos, even if the addon omitted episode fields.
   return resolvedEpisodes.length > 0;
+}
+
+function resolveWatchedProjectionType(itemType, meta = {}) {
+  const candidate = String(meta?.type || itemType || "")
+    .trim()
+    .toLowerCase();
+  return ["series", "tv", "anime", "show", "tvshow"].includes(candidate) ? candidate : "series";
+}
+
+function buildDetailContentReference(contentId, meta = {}, params = {}) {
+  return {
+    ...meta,
+    contentId,
+    id: contentId,
+    imdbId: resolveMetaImdbId(meta, params),
+    tmdbId: resolveMetaTmdbId(meta, params),
+    traktId: resolveMetaTraktId(meta, params)
+  };
+}
+
+async function isDetailTitleWatched(itemId, itemType, meta, baseWatchedItems) {
+  if (!isSeriesDetailMeta(meta)) {
+    return false;
+  }
+  const titleItem = {
+    ...meta,
+    id: itemId,
+    contentId: itemId,
+    type: resolveWatchedProjectionType(itemType, meta),
+    apiType: meta?.apiType || itemType || "series"
+  };
+  const projectedItems = await watchedTitleStateRepository
+    .getTitleWatchedItems([titleItem], {
+      baseWatchedItems,
+      limit: 5000
+    })
+    .catch(() => baseWatchedItems);
+  return isTitleItemWatched(titleItem, buildWatchedTitleIdSet(projectedItems));
 }
 
 function resolvePlayableDetailType(itemType, meta = {}) {
@@ -1965,6 +2006,15 @@ export const MetaDetailsScreen = {
     if (meta && !meta.logo && this.params?.fallbackLogo) {
       meta.logo = this.params.fallbackLogo;
     }
+    const projectedTitleWatched = await isDetailTitleWatched(
+      itemId,
+      itemType,
+      meta,
+      allWatchedItems
+    );
+    if (token !== this.detailLoadToken) {
+      return;
+    }
     this.resumeContentIds = buildResumeContentIds(meta, this.params);
     let progress = initialProgress;
     if (!progress && this.resumeContentIds.length > 1) {
@@ -1981,6 +2031,7 @@ export const MetaDetailsScreen = {
     this.resumeProgress = progress && isWatchProgressInProgress(progress) ? progress : null;
     this.isSavedInLibrary = isSaved;
     this.isMarkedWatched = Boolean(
+      projectedTitleWatched ||
       watchedItem ||
       (progress &&
         Number(progress.durationMs || 0) > 0 &&
@@ -2449,12 +2500,17 @@ export const MetaDetailsScreen = {
 
   getLatestSeriesProgress(progress = null, progressItems = []) {
     const contentId = String(this.params?.itemId || "").trim();
+    const contentReference = buildDetailContentReference(contentId, this.meta, this.params);
     const candidates = [];
-    if (progress && String(progress?.contentId || contentId) === contentId) {
+    if (
+      progress &&
+      (!String(progress?.contentId || "").trim() ||
+        watchedItemsShareIdentity(progress, contentReference))
+    ) {
       candidates.push(progress);
     }
     (Array.isArray(progressItems) ? progressItems : []).forEach((entry) => {
-      if (String(entry?.contentId || "").trim() !== contentId) {
+      if (!watchedItemsShareIdentity(entry, contentReference)) {
         return;
       }
       if (
@@ -2583,10 +2639,11 @@ export const MetaDetailsScreen = {
     const progressMap = new Map();
     const watchedKeys = new Set();
     const contentId = String(this.params?.itemId || "");
+    const contentReference = buildDetailContentReference(contentId, this.meta, this.params);
     this.enrichedWatchedState = remoteWatchedMap instanceof Map ? remoteWatchedMap : null;
 
     (Array.isArray(progressItems) ? progressItems : []).forEach((entry) => {
-      if (String(entry?.contentId || "") !== contentId) {
+      if (!watchedItemsShareIdentity(entry, contentReference)) {
         return;
       }
       const season = Number(entry?.season || 0);
@@ -2605,7 +2662,7 @@ export const MetaDetailsScreen = {
       const season = Number(entry?.season || 0);
       const episode = Number(entry?.episode || 0);
       if (
-        String(entry?.contentId || "") === contentId &&
+        watchedItemsShareIdentity(entry, contentReference) &&
         Number.isFinite(season) &&
         season >= 0 &&
         Number.isFinite(episode) &&
@@ -5465,10 +5522,16 @@ export const MetaDetailsScreen = {
     if (!targets.length) {
       return false;
     }
+    const providerIds = {
+      imdbId: resolveMetaImdbId(this.meta, this.params),
+      tmdbId: resolveMetaTmdbId(this.meta, this.params),
+      traktId: resolveMetaTraktId(this.meta, this.params)
+    };
     for (const episode of targets) {
       if (watched) {
         await watchedItemsRepository.mark({
           contentId: this.params?.itemId,
+          ...providerIds,
           contentType: "series",
           title: this.meta?.name || this.params?.fallbackTitle || episode.title || "Untitled",
           season: episode.season,
@@ -5478,6 +5541,7 @@ export const MetaDetailsScreen = {
         });
         await watchProgressRepository.saveProgress({
           contentId: this.params?.itemId,
+          ...providerIds,
           contentType: "series",
           videoId: episode.id,
           season: episode.season,
@@ -5488,6 +5552,8 @@ export const MetaDetailsScreen = {
         });
       } else {
         await watchedItemsRepository.unmark(this.params?.itemId, {
+          ...providerIds,
+          contentType: "series",
           season: episode.season,
           episode: episode.episode,
           videoId: episode.id
@@ -5539,8 +5605,15 @@ export const MetaDetailsScreen = {
       watchedItemsRepository.getAll(),
       watchedItemsRepository.isWatched(this.params?.itemId)
     ]);
+    const projectedTitleWatched = await isDetailTitleWatched(
+      this.params?.itemId,
+      this.params?.itemType,
+      this.meta,
+      allWatchedItems
+    );
     this.resumeProgress = progress && isWatchProgressInProgress(progress) ? progress : null;
     this.isMarkedWatched = Boolean(
+      projectedTitleWatched ||
       watchedItem ||
       (progress &&
         Number(progress.durationMs || 0) > 0 &&
@@ -5557,9 +5630,15 @@ export const MetaDetailsScreen = {
     if (!episode?.id) {
       return false;
     }
+    const providerIds = {
+      imdbId: resolveMetaImdbId(this.meta, this.params),
+      tmdbId: resolveMetaTmdbId(this.meta, this.params),
+      traktId: resolveMetaTraktId(this.meta, this.params)
+    };
     if (watched) {
       await watchedItemsRepository.mark({
         contentId: this.params?.itemId,
+        ...providerIds,
         contentType: "series",
         title: this.meta?.name || this.params?.fallbackTitle || episode.title || "Untitled",
         season: episode.season,
@@ -5569,6 +5648,7 @@ export const MetaDetailsScreen = {
       });
       await watchProgressRepository.saveProgress({
         contentId: this.params?.itemId,
+        ...providerIds,
         contentType: "series",
         videoId: episode.id,
         season: episode.season,
@@ -5579,6 +5659,8 @@ export const MetaDetailsScreen = {
       });
     } else {
       await watchedItemsRepository.unmark(this.params?.itemId, {
+        ...providerIds,
+        contentType: "series",
         season: episode.season,
         episode: episode.episode,
         videoId: episode.id
@@ -7506,6 +7588,7 @@ export const MetaDetailsScreen = {
       traktId,
       contentLanguage,
       returnToSearchOnBack: Boolean(this.params?.returnToSearchOnBack),
+      returnToStreamOnBack: false,
       videoId: pending.videoId,
       season: pending.episode?.season ?? null,
       episode: pending.episode?.episode ?? null,
@@ -7686,6 +7769,7 @@ export const MetaDetailsScreen = {
       traktId,
       contentLanguage,
       returnToSearchOnBack: Boolean(this.params?.returnToSearchOnBack),
+      returnToStreamOnBack: false,
       season: null,
       episode: null,
       playerTitle:
@@ -9351,17 +9435,33 @@ export const MetaDetailsScreen = {
           );
         }
       } else if (this.isMarkedWatched) {
-        await watchedItemsRepository.unmark(this.params?.itemId);
+        const providerIds = {
+          imdbId: resolveMetaImdbId(this.meta, this.params),
+          tmdbId: resolveMetaTmdbId(this.meta, this.params),
+          traktId: resolveMetaTraktId(this.meta, this.params)
+        };
+        await watchedItemsRepository.unmark(this.params?.itemId, {
+          ...providerIds,
+          contentType: this.params?.itemType || "movie",
+          title: this.meta?.name || this.params?.fallbackTitle || "Untitled"
+        });
         await watchProgressRepository.removeProgress(this.params?.itemId);
       } else {
+        const providerIds = {
+          imdbId: resolveMetaImdbId(this.meta, this.params),
+          tmdbId: resolveMetaTmdbId(this.meta, this.params),
+          traktId: resolveMetaTraktId(this.meta, this.params)
+        };
         await watchedItemsRepository.mark({
           contentId: this.params?.itemId,
+          ...providerIds,
           contentType: this.params?.itemType || "movie",
           title: this.meta?.name || this.params?.fallbackTitle || "Untitled",
           watchedAt: Date.now()
         });
         await watchProgressRepository.saveProgress({
           contentId: this.params?.itemId,
+          ...providerIds,
           contentType: this.params?.itemType || "movie",
           videoId: null,
           positionMs: 100,
@@ -9402,6 +9502,7 @@ export const MetaDetailsScreen = {
         traktId,
         contentLanguage,
         returnToSearchOnBack: Boolean(this.params?.returnToSearchOnBack),
+        returnToStreamOnBack: false,
         season: this.nextEpisodeToWatch?.season ?? null,
         episode: this.nextEpisodeToWatch?.episode ?? null,
         playerTitle:

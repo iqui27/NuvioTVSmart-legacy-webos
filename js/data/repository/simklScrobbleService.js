@@ -75,6 +75,9 @@ async function send(action, context) {
         {
           contentId: context.contentId,
           contentType: context.contentType,
+          imdbId: context.imdbId || null,
+          tmdbId: context.tmdbId || null,
+          traktId: context.traktId || null,
           title: context.title,
           season: context.contentType === "series" ? context.seasonNumber : null,
           episode: context.contentType === "series" ? context.episodeNumber : null,

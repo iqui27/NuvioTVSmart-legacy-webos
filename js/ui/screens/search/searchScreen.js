@@ -3,11 +3,13 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 import { I18n } from "../../../i18n/index.js";
 import { Platform } from "../../../platform/index.js";
 import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import { MODERN_HOME_CONSTANTS } from "../home/modernHomeLayout.js";
+import { allowDpadRepeat, resetDpadRepeat } from "../../navigation/dpadRepeatThrottle.js";
 import {
   activateLegacySidebarAction,
   bindRootSidebarEvents,
@@ -407,9 +409,18 @@ export const SearchScreen = {
     });
   },
 
-  async refreshWatchedTitleIds() {
+  async refreshWatchedTitleIds(items = null) {
     const watchedItems = await watchedItemsRepository.getAll(5000).catch(() => []);
-    this.watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
+    const catalogItems = Array.isArray(items)
+      ? items
+      : (this.rows || []).flatMap((row) => (Array.isArray(row?.items) ? row.items : []));
+    const projectedItems = await watchedTitleStateRepository
+      .getTitleWatchedItems(catalogItems, {
+        baseWatchedItems: watchedItems,
+        limit: 5000
+      })
+      .catch(() => watchedItems);
+    this.watchedTitleIds = buildWatchedTitleIdSet(projectedItems);
   },
 
   captureLiveViewState() {
@@ -568,6 +579,11 @@ export const SearchScreen = {
       this.rows = [];
     }
     if (token !== this.loadToken) return;
+    void this.refreshWatchedTitleIds().then(() => {
+      if (token === this.loadToken && Router.getCurrent() === "search") {
+        this.requestRender();
+      }
+    });
     if (this.shouldPatchResultsWithoutReplacingInput()) {
       this.renderResultsOnly();
       return;
@@ -1592,6 +1608,10 @@ export const SearchScreen = {
     }
     const zone = String(current.dataset.navZone || "");
 
+    if (!allowDpadRepeat(this, event, { horizontalMs: 80, verticalMs: 112 })) {
+      return true;
+    }
+
     event?.preventDefault?.();
 
     if (zone === "header") {
@@ -2100,6 +2120,9 @@ export const SearchScreen = {
   },
 
   onKeyUp(event) {
+    if ([37, 38, 39, 40].includes(Number(event?.keyCode || 0))) {
+      resetDpadRepeat(this);
+    }
     if (this.suppressHoldMenuEnterUntilKeyUp) {
       this.suppressHoldMenuEnterUntilKeyUp = false;
       if (Number(event?.keyCode || 0) === 13) {
@@ -2121,6 +2144,7 @@ export const SearchScreen = {
   },
 
   cleanup() {
+    resetDpadRepeat(this);
     this.cancelScheduledRender();
     this.cancelPendingPosterHold();
     this.posterOptionsMenu = null;

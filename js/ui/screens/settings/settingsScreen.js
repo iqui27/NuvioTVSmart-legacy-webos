@@ -793,6 +793,10 @@ function t(key, params = {}, fallback = key) {
   return I18n.t(key, params, { fallback });
 }
 
+function arePluginsSupported() {
+  return TizenCapabilities.canUsePlugins();
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -1816,6 +1820,9 @@ function getVisibleSections(model) {
   const isEssential = model?.experience?.mode === "ESSENTIAL";
   return SECTION_META.filter((section) => {
     if (section.hideFromNav) {
+      return false;
+    }
+    if (section.id === "plugins" && !arePluginsSupported()) {
       return false;
     }
     // Android keeps Fusion/stream presentation controls inside the advanced
@@ -4397,6 +4404,9 @@ export const SettingsScreen = {
   },
 
   renderPluginsSection(model = {}) {
+    if (!arePluginsSupported()) {
+      return "";
+    }
     const summary = model.pluginSummary || PluginManager.getSummary();
     const runtime = summary.runtime || {};
     this.actionMap.set("plugins:open", async () => {
@@ -4436,9 +4446,11 @@ export const SettingsScreen = {
     this.actionMap.set("contentDiscovery:addons", async () => {
       await Router.navigate("plugin");
     });
-    this.actionMap.set("contentDiscovery:plugins", async () => {
-      await Router.navigate("plugins");
-    });
+    if (arePluginsSupported()) {
+      this.actionMap.set("contentDiscovery:plugins", async () => {
+        await Router.navigate("plugins");
+      });
+    }
 
     return `
       ${this.renderSectionHeader(SECTION_META.find((item) => item.id === "contentDiscovery"))}
@@ -4455,7 +4467,7 @@ export const SettingsScreen = {
             leadingIcon: "grid_view"
           })}
           ${
-            ExperienceModeStore.isEssential()
+            ExperienceModeStore.isEssential() || !arePluginsSupported()
               ? ""
               : this.renderActionRow({
                   focusKey: "contentDiscovery:plugins",
@@ -5985,23 +5997,25 @@ export const SettingsScreen = {
           PlayerSettingsStore.set({ streamAutoPlaySelectedAddons: selectedIds })
       });
     });
-    this.actionMap.set("playback:autoStreamPlugins", () => {
-      const options = (PluginManager.pluginsEnabled ? PluginManager.listScrapers() : [])
-        .filter((scraper) => scraper?.type === "NUVIO_JS" && scraper?.enabled !== false)
-        .map((scraper) => String(scraper?.name || "").trim())
-        .filter(Boolean)
-        .filter((name, index, names) => names.indexOf(name) === index)
-        .sort((left, right) => left.localeCompare(right))
-        .map((name) => ({ id: name, label: name }));
-      this.openMultiChoiceDialog({
-        title: t("autoplay_allowed_plugins", {}, "Allowed Plugins"),
-        options,
-        selectedIds: PlayerSettingsStore.get().streamAutoPlaySelectedPlugins,
-        returnFocusKey: "playback:autoStreamPlugins",
-        onToggle: (selectedIds) =>
-          PlayerSettingsStore.set({ streamAutoPlaySelectedPlugins: selectedIds })
+    if (arePluginsSupported()) {
+      this.actionMap.set("playback:autoStreamPlugins", () => {
+        const options = (PluginManager.pluginsEnabled ? PluginManager.listScrapers() : [])
+          .filter((scraper) => scraper?.type === "NUVIO_JS" && scraper?.enabled !== false)
+          .map((scraper) => String(scraper?.name || "").trim())
+          .filter(Boolean)
+          .filter((name, index, names) => names.indexOf(name) === index)
+          .sort((left, right) => left.localeCompare(right))
+          .map((name) => ({ id: name, label: name }));
+        this.openMultiChoiceDialog({
+          title: t("autoplay_allowed_plugins", {}, "Allowed Plugins"),
+          options,
+          selectedIds: PlayerSettingsStore.get().streamAutoPlaySelectedPlugins,
+          returnFocusKey: "playback:autoStreamPlugins",
+          onToggle: (selectedIds) =>
+            PlayerSettingsStore.set({ streamAutoPlaySelectedPlugins: selectedIds })
+        });
       });
-    });
+    }
     this.actionMap.set("playback:audioLanguage", () => {
       this.openOptionDialog({
         title: t("settings.dialogs.preferredAudioLanguage"),
@@ -6602,6 +6616,7 @@ export const SettingsScreen = {
             : ""
         }
         ${
+          arePluginsSupported() &&
           String(model.player.streamAutoPlaySource || "ALL_SOURCES") !== "INSTALLED_ADDONS_ONLY"
             ? this.renderActionRow({
                 focusKey: "playback:autoStreamPlugins",
