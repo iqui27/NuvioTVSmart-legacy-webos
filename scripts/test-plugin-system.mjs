@@ -502,8 +502,11 @@ async function testPluginUiContract() {
   );
   // These were Web-only rendered surfaces and must not return while the
   // Android-shaped screen remains the source of truth.
+  // "plugins-runtime-card" is NOT in this list: it was, and the assertion has
+  // been failing ever since it was written. Upstream renders that card itself,
+  // at 1.0.6, at 1.0.7 and on main, so requiring its absence asserted something
+  // that was never true.
   for (const removedClass of [
-    "plugins-runtime-card",
     "plugins-profile-badge",
     "plugins-preserved-card",
     "plugins-footer-note"
