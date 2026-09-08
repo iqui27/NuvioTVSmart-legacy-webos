@@ -5,6 +5,7 @@ import { I18n } from "../../../i18n/index.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
 import { ProfileManager } from "../../../core/profile/profileManager.js";
 import { StartupSyncService } from "../../../core/profile/startupSyncService.js";
+import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import {
   isExternalDexRepository,
   isVideoEasyScraper,
@@ -54,7 +55,8 @@ function button({
   icon = "",
   disabled = false,
   destructive = false,
-  focusableWhileBusy = false
+  focusableWhileBusy = false,
+  loading = false
 }) {
   const nativeDisabled = disabled && !focusableWhileBusy;
   return `
@@ -63,7 +65,7 @@ function button({
             data-action="${escapeHtml(action)}"
             aria-disabled="${disabled ? "true" : "false"}"
             ${nativeDisabled ? "disabled" : ""}>
-      ${icon ? `<span class="material-icons" aria-hidden="true">${escapeHtml(icon)}</span>` : ""}
+      ${loading ? renderLoadingIndicator({ className: "plugins-action-loading-spinner" }) : icon ? `<span class="material-icons" aria-hidden="true">${escapeHtml(icon)}</span>` : ""}
       <span>${escapeHtml(label)}</span>
     </button>
   `;
@@ -142,6 +144,7 @@ export const PluginsScreen = {
     this.addDraft = this.addDraft || "";
     this.routeEnterPending = true;
     this.busy = false;
+    this.busyAction = "";
     this.statusMessage = "";
     this.statusKind = "";
     this.statusTimer = 0;
@@ -299,6 +302,27 @@ export const PluginsScreen = {
     return !model?.readOnly && !this.busy;
   },
 
+  beginBusyAction(action) {
+    const operationToken = Number(this.busyOperationToken || 0) + 1;
+    this.busyOperationToken = operationToken;
+    this.busyAction = String(action || "");
+    this.busy = true;
+    return operationToken;
+  },
+
+  finishBusyAction(operationToken) {
+    if (Number(this.busyOperationToken || 0) !== Number(operationToken || 0)) {
+      return false;
+    }
+    this.busyAction = "";
+    this.busy = false;
+    return true;
+  },
+
+  isBusyActionActive(operationToken) {
+    return Number(this.busyOperationToken || 0) === Number(operationToken || 0);
+  },
+
   visibleProviders(repositoryId, model = this.model) {
     return (model?.scrapers || []).filter(
       (entry) => entry.repositoryId === repositoryId && (!model.readOnly || entry.enabled !== false)
@@ -390,7 +414,8 @@ export const PluginsScreen = {
                 label: t("plugin_test_btn", {}, "Test"),
                 icon: "play_arrow",
                 disabled: !testable,
-                focusableWhileBusy: this.busy
+                focusableWhileBusy: this.busy,
+                loading: this.busyAction === `test-scraper:${provider.id}`
               })}
               ${
                 model.readOnly
@@ -653,7 +678,14 @@ export const PluginsScreen = {
                          spellcheck="false"
                          placeholder="${escapeHtml(t("plugin_url_or_short_code_placeholder", {}, "URL or short code"))}"
                          value="${escapeHtml(this.addDraft)}" />
-                  ${button({ focusKey: "add:submit", action: "add-repository", label: t("plugin_add_btn", {}, "Add"), icon: "add" })}
+                  ${button({
+                    focusKey: "add:submit",
+                    action: "add-repository",
+                    label: t("plugin_add_btn", {}, "Add"),
+                    icon: "add",
+                    disabled: this.busy,
+                    loading: this.busyAction === "add-repository"
+                  })}
                 </div>
                 ${this.statusMessage && !["success", "error"].includes(this.statusKind) ? `<p class="plugins-status-message">${escapeHtml(this.statusMessage)}</p>` : ""}
               </section>`
@@ -910,11 +942,12 @@ export const PluginsScreen = {
       this.render();
       return;
     }
-    this.busy = true;
+    const operationToken = this.beginBusyAction("add-repository");
     this.setStatus(t("plugin_adding", {}, "Adding repository…"));
     this.render();
     try {
       const repository = await PluginManager.addRepository(value);
+      if (!this.isBusyActionActive(operationToken)) return;
       const providerCount = PluginManager.listScrapers(repository.id).length;
       this.addDraft = "";
       this.setStatus(
@@ -926,6 +959,7 @@ export const PluginsScreen = {
         "success"
       );
     } catch (error) {
+      if (!this.isBusyActionActive(operationToken)) return;
       this.setStatus(
         String(
           error?.message || error || t("plugin_error_add_repo", {}, "Failed to add repository")
@@ -933,18 +967,20 @@ export const PluginsScreen = {
         "error"
       );
     } finally {
-      this.busy = false;
-      this.render();
+      if (this.finishBusyAction(operationToken)) {
+        this.render();
+      }
     }
   },
 
   async refreshRepository(repositoryId) {
     if (this.busy) return;
-    this.busy = true;
+    const operationToken = this.beginBusyAction(`refresh:${repositoryId}`);
     this.setStatus(t("plugin_refreshing", {}, "Refreshing…"));
     this.render();
     try {
       const result = await PluginManager.refreshRepository(repositoryId);
+      if (!this.isBusyActionActive(operationToken)) return;
       this.setStatus(
         result?.ok === false
           ? result.reason
@@ -952,19 +988,21 @@ export const PluginsScreen = {
         result?.ok === false ? "error" : "success"
       );
     } catch (error) {
+      if (!this.isBusyActionActive(operationToken)) return;
       this.setStatus(
         String(error?.message || error || t("plugin_error_refresh", {}, "Failed to refresh")),
         "error"
       );
     } finally {
-      this.busy = false;
-      this.render();
+      if (this.finishBusyAction(operationToken)) {
+        this.render();
+      }
     }
   },
 
   async testScraper(scraperId) {
     if (this.busy) return;
-    this.busy = true;
+    const operationToken = this.beginBusyAction(`test-scraper:${scraperId}`);
     this.testResult = null;
     this.diagnosticsProviderId = null;
     const controller = typeof AbortController === "function" ? new AbortController() : null;
@@ -975,6 +1013,7 @@ export const PluginsScreen = {
       const result = await PluginManager.testScraper(scraperId, {
         signal: controller?.signal || null
       });
+      if (!this.isBusyActionActive(operationToken)) return;
       this.testResult = { scraperId, ...result };
       const count = Array.isArray(result?.results) ? result.results.length : 0;
       this.setStatus(
@@ -984,6 +1023,7 @@ export const PluginsScreen = {
         count ? "success" : ""
       );
     } catch (error) {
+      if (!this.isBusyActionActive(operationToken)) return;
       this.testResult = null;
       this.setStatus(
         t(
@@ -995,8 +1035,9 @@ export const PluginsScreen = {
       );
     } finally {
       if (this.testAbortController === controller) this.testAbortController = null;
-      this.busy = false;
-      this.render();
+      if (this.finishBusyAction(operationToken)) {
+        this.render();
+      }
     }
   },
 
@@ -1096,7 +1137,9 @@ export const PluginsScreen = {
     this.statusTimer = 0;
     this.testAbortController?.abort?.();
     this.testAbortController = null;
+    this.busyOperationToken = Number(this.busyOperationToken || 0) + 1;
     this.busy = false;
+    this.busyAction = "";
     this.testResult = null;
     this.diagnosticsProviderId = null;
     this.pendingScraperEnable = null;

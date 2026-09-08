@@ -6,6 +6,7 @@ import { addonRepository } from "./addonRepository.js";
 class CatalogRepository {
   constructor() {
     this.catalogCache = new Map();
+    this.cacheGeneration = 0;
   }
 
   async getCatalog({
@@ -23,6 +24,7 @@ class CatalogRepository {
   }) {
     const normalizedSkipStep = this.normalizeSkipStep(skipStep);
     const cacheKey = this.buildCacheKey({
+      addonBaseUrl,
       addonId,
       type,
       catalogId,
@@ -48,6 +50,7 @@ class CatalogRepository {
       extraArgs
     });
 
+    const cacheGeneration = this.cacheGeneration;
     return safeApiCall(() =>
       CatalogApi.getCatalog(url, signal ? { signal } : {}).then((dto) => {
         const { metas, rawItemCount } = selectCatalogEntries(dto?.metas);
@@ -76,10 +79,15 @@ class CatalogRepository {
           nextSkip: hasMore ? skip + rawItemCount : skip
         };
 
-        this.catalogCache.set(cacheKey, row);
+        if (cacheGeneration === this.cacheGeneration) this.catalogCache.set(cacheKey, row);
         return row;
       })
     );
+  }
+
+  clearCache() {
+    this.cacheGeneration += 1;
+    this.catalogCache.clear();
   }
 
   buildCatalogUrl({ baseUrl, type, catalogId, skip = 0, extraArgs = {} }) {
@@ -108,6 +116,7 @@ class CatalogRepository {
   }
 
   buildCacheKey({
+    addonBaseUrl = "",
     addonId,
     type,
     catalogId,
@@ -121,7 +130,16 @@ class CatalogRepository {
       .map(([key, value]) => `${key}=${value}`)
       .join("&");
 
-    return `${addonId}_${type}_${catalogId}_${skip}_${skipStep}_${supportsSkip ? "skip" : "no-skip"}_${normalizedArgs}`;
+    return JSON.stringify([
+      addonRepository.canonicalizeUrl(addonBaseUrl),
+      addonId,
+      type,
+      catalogId,
+      skip,
+      skipStep,
+      supportsSkip,
+      normalizedArgs
+    ]);
   }
 
   normalizeSkipStep(value = 100) {

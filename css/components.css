@@ -11461,6 +11461,11 @@ html.legacy-webos .debug-console-log-frame {
   font-size: 21px;
 }
 
+.plugins-action-loading-spinner {
+  width: 24px;
+  height: 24px;
+}
+
 .plugins-action.is-destructive {
   color: #f19a9a;
 }
