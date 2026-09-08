@@ -39,6 +39,7 @@ import { ProfileManager } from "../../../core/profile/profileManager.js";
 import { StartupSyncService } from "../../../core/profile/startupSyncService.js";
 import { Platform } from "../../../platform/index.js";
 import { WatchProgressSource } from "../../../data/local/traktSettingsStore.js";
+import { watchProgressCompletedThreshold } from "../../../domain/model/watchProgress.js";
 import {
   getTvHeroTransitionMode,
   getTvRuntimePerformanceProfile
@@ -63,6 +64,7 @@ import {
   renderModernHomeLayout
 } from "./modernHomeLayout.js";
 import { formatHomeRuntimeText, shouldPreserveHomeRuntimeText } from "./homeRuntime.js";
+import { shouldKeepNextUpForAiringSetting } from "./nextUpAiringVisibility.js";
 import {
   buildCatalogDisableKey,
   buildCatalogOrderKey,
@@ -104,7 +106,6 @@ import {
   CW_META_TIMEOUT_TV_MS,
   CW_NEXT_UP_META_TIMEOUT_MS,
   CW_NEXT_UP_NEW_SEASON_UNAIRED_WINDOW_DAYS,
-  CW_PROGRESS_END_THRESHOLD,
   CW_PROGRESS_START_THRESHOLD,
   CW_RENDER_BATCH_ITEMS_CONSTRAINED,
   CW_RENDER_BATCH_ITEMS_DEFAULT,
@@ -815,6 +816,23 @@ function preloadHeroAssets(hero, layoutMode = "modern") {
   return Promise.all([preloadImageSource(display?.backdrop), preloadImageSource(display?.logo)]);
 }
 
+function prepareHeroImageEnter(image, enterClass) {
+  // A reused image is already opaque. Without an immediate reset, changing src
+  // flashes the new artwork while CSS starts fading from 1 towards 0; the next
+  // animation frame then reverses that fade instead of entering from 0.
+  const transition = image.style.getPropertyValue("transition");
+  const priority = image.style.getPropertyPriority("transition");
+  image.style.setProperty("transition", "none", "important");
+  image.classList.remove("is-visible");
+  image.classList.add(enterClass);
+  void image.offsetWidth;
+  if (transition) {
+    image.style.setProperty("transition", transition, priority);
+  } else {
+    image.style.removeProperty("transition");
+  }
+}
+
 function animateHeroBackdropSwap(
   backdrop,
   nextSrc,
@@ -882,7 +900,7 @@ function animateHeroBackdropSwap(
         backdrop.classList.remove("placeholder");
         return;
       }
-      backdrop.classList.add("home-hero-backdrop-transition-enter");
+      prepareHeroImageEnter(backdrop, "home-hero-backdrop-transition-enter");
       backdrop.classList.remove("placeholder");
       backdrop.setAttribute("src", normalizedSrc);
       backdrop.setAttribute("alt", normalizedAlt);
@@ -915,11 +933,12 @@ function animateHeroBackdropSwap(
     let ghost = null;
     if (parent && currentSrc) {
       ghost = backdrop.cloneNode(false);
+      ghost.classList.remove("home-hero-backdrop-transition-enter", "is-visible");
       ghost.classList.add("home-hero-backdrop-transition-ghost");
       parent.insertBefore(ghost, backdrop);
     }
 
-    backdrop.classList.add("home-hero-backdrop-transition-enter");
+    prepareHeroImageEnter(backdrop, "home-hero-backdrop-transition-enter");
     backdrop.classList.remove("placeholder");
     backdrop.setAttribute("src", normalizedSrc);
     backdrop.setAttribute("alt", normalizedAlt);
@@ -999,7 +1018,7 @@ function animateHeroLogoSwap(
         logoNode.setAttribute("alt", normalizedAlt);
         return;
       }
-      logoNode.classList.add("home-hero-logo-transition-enter");
+      prepareHeroImageEnter(logoNode, "home-hero-logo-transition-enter");
       logoNode.setAttribute("src", normalizedSrc);
       logoNode.setAttribute("alt", normalizedAlt);
       requestAnimationFrame(() => {
@@ -1030,11 +1049,12 @@ function animateHeroLogoSwap(
     let ghost = null;
     if (parent && currentSrc) {
       ghost = logoNode.cloneNode(false);
+      ghost.classList.remove("home-hero-logo-transition-enter", "is-visible");
       ghost.classList.add("home-hero-logo-transition-ghost");
       parent.insertBefore(ghost, logoNode);
     }
 
-    logoNode.classList.add("home-hero-logo-transition-enter");
+    prepareHeroImageEnter(logoNode, "home-hero-logo-transition-enter");
     logoNode.setAttribute("src", normalizedSrc);
     logoNode.setAttribute("alt", normalizedAlt);
 
@@ -1485,12 +1505,14 @@ function isPosterWatchedType(type) {
 }
 
 function isCompletedForContinueWatching(item = {}) {
-  return progressFractionForContinueWatching(item) >= CW_PROGRESS_END_THRESHOLD;
+  return progressFractionForContinueWatching(item) >= watchProgressCompletedThreshold(item);
 }
 
 function isInProgressForContinueWatching(item = {}) {
   const fraction = progressFractionForContinueWatching(item);
-  return fraction >= CW_PROGRESS_START_THRESHOLD && fraction < CW_PROGRESS_END_THRESHOLD;
+  return (
+    fraction >= CW_PROGRESS_START_THRESHOLD && fraction < watchProgressCompletedThreshold(item)
+  );
 }
 
 function shouldTreatAsInProgressForContinueWatching(item = {}) {
@@ -1530,7 +1552,8 @@ function normalizeEpisodeEntry(video = {}) {
     ),
     overview: firstNonEmpty(video?.overview, video?.description),
     released: firstNonEmpty(video?.released, video?.releaseInfo),
-    runtimeMinutes: parseRuntimeMinutes(video?.runtimeMinutes ?? video?.runtime ?? 0)
+    runtimeMinutes: parseRuntimeMinutes(video?.runtimeMinutes ?? video?.runtime ?? 0),
+    available: typeof video?.available === "boolean" ? video.available : null
   };
 }
 
@@ -1832,6 +1855,9 @@ function shouldShowNextUpEpisodeForContinueWatching(
   // same setting gate so missing metadata cannot make an upcoming episode
   // appear as an already aired Next Up item.
   if (releaseTime == null) {
+    if (candidate?.available === false) {
+      return false;
+    }
     return showUnairedNextUp;
   }
   if (releaseTime <= Date.now()) {
@@ -2291,8 +2317,10 @@ function readContinueWatchingDisplaySnapshot(scopeKey) {
   if (Date.now() - Number(entry.savedAt || 0) > CW_DISPLAY_SNAPSHOT_MAX_AGE_MS) {
     return [];
   }
+  const showUnairedNextUp = LayoutPreferences.get()?.showUnairedNextUp !== false;
   return entry.items
     .map((item) => refreshContinueWatchingReleaseState(item))
+    .filter((item) => shouldKeepNextUpForAiringSetting(item, showUnairedNextUp))
     .filter((item) => {
       if (!isCloudContinueWatchingItem(item)) {
         return true;
@@ -4889,6 +4917,15 @@ export const HomeScreen = {
     if (!display) {
       return;
     }
+    const previousHeroId = String(heroNode.dataset.itemId || "").trim();
+    const previousHeroType = String(heroNode.dataset.itemType || "")
+      .trim()
+      .toLowerCase();
+    const nextHeroId = String(hero?.id || "").trim();
+    const nextHeroType = String(hero?.type || "movie")
+      .trim()
+      .toLowerCase();
+    const isNewHero = previousHeroId !== nextHeroId || previousHeroType !== nextHeroType;
     heroNode.dataset.itemId = hero?.id || "";
     heroNode.dataset.itemType = hero?.type || "movie";
     heroNode.dataset.itemTitle = hero?.name || "Untitled";
@@ -4907,7 +4944,9 @@ export const HomeScreen = {
       const src = display.backdrop || "";
       if (backdrop instanceof HTMLImageElement) {
         const shouldFreezeBackdrop =
-          Boolean(hero?.heroMetaEnriching) && String(backdrop.getAttribute("src") || "").trim();
+          Boolean(hero?.heroMetaEnriching) &&
+          !isNewHero &&
+          String(backdrop.getAttribute("src") || "").trim();
         if (!shouldFreezeBackdrop) {
           animateHeroBackdropSwap(backdrop, src, display.title || "featured", heroCrossfadeMs, {
             transitionMode: heroTransitionMode
@@ -6636,14 +6675,33 @@ export const HomeScreen = {
         if (!latestHero || buildHeroIdentity(latestHero) !== scheduledHeroIdentity) {
           return;
         }
-        if (shouldEnrichModernHero(latestHero)) {
-          void this.enrichCurrentHeroAsync(latestHero, focusToken, { deferCommit: true });
+        const shouldEnrichHero = shouldEnrichModernHero(latestHero);
+        const focusedHero = shouldEnrichHero
+          ? { ...latestHero, heroMetaEnriching: true }
+          : { ...latestHero, heroMetaEnriching: false };
+
+        // Android publishes the newly focused preview as soon as focus settles;
+        // metadata enrichment remains an independent background update. Waiting
+        // for the addon request here leaves the previous backdrop on screen for
+        // several seconds on a slow TV and makes the later swap look like a
+        // flicker.
+        this.heroItem = focusedHero;
+        const matchedIndex = this.heroCandidates.findIndex(
+          (item) => String(item?.id || "") === String(focusedHero.id || "")
+        );
+        if (matchedIndex >= 0) {
+          this.heroIndex = matchedIndex;
+        }
+        this.applyHeroToDom();
+
+        if (shouldEnrichHero) {
+          void this.enrichCurrentHeroAsync(focusedHero, focusToken, { deferCommit: true });
           return;
         }
-        // Commit the hero as one scene. Updating the copy before the matching
-        // backdrop/logo are ready lets a fast D-pad sequence show new text over
-        // the previous movie's artwork on slower TV engines.
-        await preloadHeroAssets(latestHero, "modern");
+
+        // Each media layer starts/reuses its own guarded preload before
+        // swapping, matching Android's independent AsyncImage loading path.
+        void preloadHeroAssets(focusedHero, "modern");
         if (Number(this.heroFocusToken || 0) !== focusToken) {
           return;
         }
@@ -6659,14 +6717,9 @@ export const HomeScreen = {
         if (!settledHero || buildHeroIdentity(settledHero) !== scheduledHeroIdentity) {
           return;
         }
-        this.heroItem = settledHero;
-        const matchedIndex = this.heroCandidates.findIndex(
-          (item) => String(item?.id || "") === String(settledHero.id || "")
-        );
-        if (matchedIndex >= 0) {
-          this.heroIndex = matchedIndex;
+        if (buildHeroIdentity(this.heroItem) !== scheduledHeroIdentity) {
+          return;
         }
-        this.applyHeroToDom();
       });
     };
     this.heroFocusDelayTimer = setTimeout(commitHeroWhenSettled, delay);
@@ -6920,6 +6973,10 @@ export const HomeScreen = {
       return;
     }
     node.classList.remove("is-focus-gif-active");
+    // Match Android's focused-only GIF lifecycle: hiding the overlay is not
+    // enough on TV browsers because an <img> with src keeps decoding/animating.
+    // Preserve data-src so the asset can be loaded again on the next focus.
+    gifNode.removeAttribute("src");
   },
 
   syncFocusedCollectionCardState() {
@@ -11969,15 +12026,8 @@ export const HomeScreen = {
         if (!meta) {
           return null;
         }
-        meta = await this.enrichContinueWatchingMetaWithTmdb(meta, {
-          contentId,
-          contentType,
-          season: progressEntry?.season,
-          episode: progressEntry?.episode
-        });
-
         const watchedEpisodeKeys = watchedEpisodeIndex.get(contentId) || new Set();
-        const nextEpisode = this.resolveNextUpEpisode(
+        const resolvedNextEpisode = this.resolveNextUpEpisode(
           meta,
           progressEntry,
           allProgress,
@@ -11986,6 +12036,22 @@ export const HomeScreen = {
             showUnairedNextUp: this.layoutPrefs?.showUnairedNextUp
           }
         );
+        if (!resolvedNextEpisode) {
+          return null;
+        }
+
+        // Android resolves the next episode from addon metadata first, then
+        // enriches that exact season/episode. This also keeps season rollover
+        // release dates on the same TMDB path as mid-season episodes.
+        meta = await this.enrichContinueWatchingMetaWithTmdb(meta, {
+          contentId,
+          contentType,
+          season: resolvedNextEpisode.season,
+          episode: resolvedNextEpisode.episode
+        });
+        const nextEpisode =
+          findEpisodeEntry(meta?.videos, resolvedNextEpisode.season, resolvedNextEpisode.episode) ||
+          resolvedNextEpisode;
         if (!nextEpisode) {
           return null;
         }
@@ -12070,9 +12136,14 @@ export const HomeScreen = {
       }
     );
 
-    return nextUpItems.sort(
-      (left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0)
-    );
+    // The episode search already applied this setting to the addon release
+    // date. Check it again here because TMDB release dates are merged in after
+    // that, so this is the first point where the card's final release state is
+    // known.
+    const showUnairedNextUp = this.layoutPrefs?.showUnairedNextUp !== false;
+    return nextUpItems
+      .filter((item) => shouldKeepNextUpForAiringSetting(item, showUnairedNextUp))
+      .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
   },
 
   persistContinueWatchingSnapshot() {
@@ -12121,7 +12192,8 @@ export const HomeScreen = {
       if (!tmdbId) {
         return meta;
       }
-      const enrichment = await withTimeout(
+      const isSeries = isSeriesTypeForContinueWatching(contentType);
+      const enrichmentPromise = withTimeout(
         TmdbMetadataService.fetchEnrichment({
           tmdbId,
           contentType,
@@ -12129,14 +12201,13 @@ export const HomeScreen = {
         }),
         2200,
         null
-      );
-      if (!enrichment) {
-        return meta;
-      }
-      const isSeries = isSeriesTypeForContinueWatching(contentType);
-      const episodeMap =
-        settings.useEpisodes && isSeries && item.season != null && Number(item.season) >= 0
-          ? await withTimeout(
+      ).catch(() => null);
+      const episodeMapPromise =
+        isSeries &&
+        (settings.useEpisodes || settings.useReleaseDates) &&
+        item.season != null &&
+        Number(item.season) >= 0
+          ? withTimeout(
               TmdbMetadataService.fetchEpisodeEnrichment({
                 tmdbId,
                 seasonNumbers: [Number(item.season)],
@@ -12144,8 +12215,13 @@ export const HomeScreen = {
               }),
               1800,
               new Map()
-            )
-          : new Map();
+            ).catch(() => new Map())
+          : Promise.resolve(new Map());
+      const [enrichment, episodeMap] = await Promise.all([enrichmentPromise, episodeMapPromise]);
+      if (!enrichment && !episodeMap.size) {
+        return meta;
+      }
+      const showEnrichment = enrichment || {};
       const videos =
         episodeMap.size && Array.isArray(meta.videos)
           ? meta.videos.map((video) => {
@@ -12163,13 +12239,17 @@ export const HomeScreen = {
               }
               return {
                 ...video,
-                title: episode.title || video.title,
-                overview: episode.overview || video.overview,
+                title: settings.useEpisodes ? episode.title || video.title : video.title,
+                overview: settings.useEpisodes
+                  ? episode.overview || video.overview
+                  : video.overview,
                 released: settings.useReleaseDates
                   ? episode.airDate || video.released
                   : video.released,
-                thumbnail: episode.thumbnail || video.thumbnail,
-                runtime: episode.runtime || video.runtime
+                thumbnail: settings.useEpisodes
+                  ? episode.thumbnail || video.thumbnail
+                  : video.thumbnail,
+                runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime
               };
             })
           : meta.videos;
@@ -12178,29 +12258,37 @@ export const HomeScreen = {
       );
       return {
         ...meta,
-        name: settings.useBasicInfo ? enrichment.localizedTitle || meta.name : meta.name,
+        name: settings.useBasicInfo ? showEnrichment.localizedTitle || meta.name : meta.name,
         description: settings.useBasicInfo
-          ? enrichment.description || meta.description
+          ? showEnrichment.description || meta.description
           : meta.description,
-        background: settings.useArtwork ? enrichment.backdrop || meta.background : meta.background,
-        backdrop: settings.useArtwork ? enrichment.backdrop || meta.backdrop : meta.backdrop,
-        poster: settings.useArtwork ? enrichment.poster || meta.poster : meta.poster,
-        thumbnail: settings.useArtwork ? enrichment.poster || meta.thumbnail : meta.thumbnail,
-        logo: settings.useArtwork ? enrichment.logo || meta.logo : meta.logo,
+        background: settings.useArtwork
+          ? showEnrichment.backdrop || meta.background
+          : meta.background,
+        backdrop: settings.useArtwork ? showEnrichment.backdrop || meta.backdrop : meta.backdrop,
+        poster: settings.useArtwork ? showEnrichment.poster || meta.poster : meta.poster,
+        thumbnail: settings.useArtwork ? showEnrichment.poster || meta.thumbnail : meta.thumbnail,
+        logo: settings.useArtwork ? showEnrichment.logo || meta.logo : meta.logo,
         genres:
-          settings.useBasicInfo && enrichment.genres?.length ? enrichment.genres : meta.genres,
+          settings.useBasicInfo && showEnrichment.genres?.length
+            ? showEnrichment.genres
+            : meta.genres,
         releaseInfo: settings.useReleaseDates
-          ? enrichment.releaseInfo || meta.releaseInfo
+          ? showEnrichment.releaseInfo || meta.releaseInfo
           : meta.releaseInfo,
-        released: settings.useReleaseDates ? enrichment.released || meta.released : meta.released,
-        runtime: settings.useDetails ? enrichment.runtime || meta.runtime : meta.runtime,
-        country: settings.useDetails ? enrichment.country || meta.country : meta.country,
-        language: settings.useDetails ? enrichment.language || meta.language : meta.language,
-        ageRating: settings.useDetails ? enrichment.ageRating || meta.ageRating : meta.ageRating,
-        status: settings.useDetails ? enrichment.status || meta.status : meta.status,
+        released: settings.useReleaseDates
+          ? showEnrichment.released || meta.released
+          : meta.released,
+        runtime: settings.useDetails ? showEnrichment.runtime || meta.runtime : meta.runtime,
+        country: settings.useDetails ? showEnrichment.country || meta.country : meta.country,
+        language: settings.useDetails ? showEnrichment.language || meta.language : meta.language,
+        ageRating: settings.useDetails
+          ? showEnrichment.ageRating || meta.ageRating
+          : meta.ageRating,
+        status: settings.useDetails ? showEnrichment.status || meta.status : meta.status,
         tmdbRating:
-          settings.useBasicInfo && typeof enrichment.rating === "number"
-            ? Number(enrichment.rating.toFixed(1))
+          settings.useBasicInfo && typeof showEnrichment.rating === "number"
+            ? Number(showEnrichment.rating.toFixed(1))
             : meta.tmdbRating,
         episodeThumbnail: settings.useArtwork
           ? currentEpisode?.thumbnail || meta.episodeThumbnail
@@ -13944,11 +14032,15 @@ export const HomeScreen = {
       // Keep the rendered TV Home alive while another screen is shown. Rebuilding
       // a large catalog after display:none forces a full parse/layout/paint on
       // constrained TV browsers, while Android keeps the Home back-stack state.
+      // Keep the DOM cached, but remove it from the compositor completely. Some
+      // TV runtimes can still present composited descendants after visibility and
+      // transform changes, which lets the old Home bleed through a new route.
       this.container.style.position = "absolute";
       this.container.style.top = "0";
       this.container.style.right = "0";
       this.container.style.bottom = "0";
       this.container.style.left = "0";
+      this.container.style.display = "none";
       this.container.style.visibility = "hidden";
       this.container.style.pointerEvents = "none";
       this.container.classList.add("home-dom-preserved");

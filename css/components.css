@@ -2520,6 +2520,7 @@ button:focus-visible {
    retained layer offscreen as well as hiding it: some composited descendants
    can outlive ancestor visibility changes while the next route is mounting. */
 #home.home-dom-preserved {
+  display: none !important;
   z-index: -1;
   transform: translateX(-200vw) !important;
 }
@@ -7042,6 +7043,7 @@ button:focus-visible {
 
 .home-screen-shell.home-layout-modern .home-poster-card {
   transition:
+    transform 160ms cubic-bezier(0.2, 0, 0, 1),
     flex-basis 180ms ease-out,
     min-width 180ms ease-out,
     max-width 180ms ease-out,
@@ -15176,6 +15178,9 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 .player-subtitle-overlay-grid {
   display: grid;
   grid-template-columns: 220px 1fr 280px;
+  /* Bound the implicit row on Chromium 69: percentage-height rails otherwise
+     expand to their contents and never become scrollable (Android LazyColumn). */
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   flex: 1 1 0;
   height: auto;
@@ -20999,15 +21004,16 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   background-color: transparent !important;
 }
 
-/* Keep poster focus feedback aligned with Android TV without restoring the
-   expensive home-wide animation set on constrained TV runtimes. */
-.performance-constrained .home-screen-shell.home-layout-classic .home-poster-card,
-.performance-constrained .home-screen-shell.home-layout-grid .home-poster-card {
+/* Android's PosterCardStyle uses a 1.02 focus scale independently of backdrop
+   expansion. Keep this targeted feedback on every layout and runtime. */
+.home-screen-shell.home-layout-classic .home-poster-card,
+.home-screen-shell.home-layout-grid .home-poster-card {
   transition: transform 160ms cubic-bezier(0.2, 0, 0, 1) !important;
 }
 
-.performance-constrained .home-screen-shell.home-layout-classic .home-poster-card.focused,
-.performance-constrained .home-screen-shell.home-layout-grid .home-poster-card.focused {
+.home-screen-shell.home-layout-classic .home-poster-card.focused,
+.home-screen-shell.home-layout-grid .home-poster-card.focused,
+.home-screen-shell.home-layout-modern .home-poster-card.focused {
   transform: translateZ(0) scale(1.02) !important;
 }
 
@@ -21015,6 +21021,7 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
    stays out of the D-pad scrolling path while preserving the Android motion. */
 .performance-constrained .home-screen-shell.home-layout-modern .home-poster-card {
   transition:
+    transform 160ms cubic-bezier(0.2, 0, 0, 1),
     flex-basis 180ms cubic-bezier(0.2, 0, 0, 1),
     min-width 180ms cubic-bezier(0.2, 0, 0, 1),
     max-width 180ms cubic-bezier(0.2, 0, 0, 1),
@@ -24689,6 +24696,8 @@ html.no-css-grid .player-subtitle-overlay-grid > .player-subtitle-style-rail {
 
 html.no-css-grid .player-subtitle-rail {
   gap: 8px;
+  /* Stretch to the final flex row, not its pre-shrink percentage height. */
+  height: auto;
   padding: 16px 0;
 }
 
@@ -25721,7 +25730,50 @@ html.tizen-tv #player.post-play-visible .tizen-avplay-object {
   }
 }
 
+/* Android TV's FocusMarqueeText keeps episode card nodes stable and only
+   scrolls the focused title when its text overflows. The wrapper is the clip
+   viewport; only the text span moves, so no duplicate title layer is painted. */
+.series-episode-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.series-episode-title-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.series-episode-title.is-marquee-active .series-episode-title-text {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  will-change: transform;
+  animation: nuvioEpisodeTitleMarquee var(--episode-marquee-duration, 1000ms) linear 3;
+}
+
+@keyframes nuvioEpisodeTitleMarquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+
+  88%,
+  100% {
+    transform: translateX(var(--episode-marquee-distance, 0px));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .series-episode-title-text {
+    animation: none !important;
+  }
+
   .player-post-play-recommendation,
   .player-post-play-backdrop-image,
   .player-post-play-summary,

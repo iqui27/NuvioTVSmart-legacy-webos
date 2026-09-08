@@ -1,7 +1,4 @@
-import {
-  WATCH_PROGRESS_COMPLETED_THRESHOLD,
-  WATCH_PROGRESS_STARTED_THRESHOLD
-} from "../../../domain/model/watchProgress.js";
+import { WATCH_PROGRESS_STARTED_THRESHOLD } from "../../../domain/model/watchProgress.js";
 
 export const HERO_ROTATE_FIRST_DELAY_MS = 20000;
 export const HERO_ROTATE_INTERVAL_MS = 10000;
@@ -18,7 +15,6 @@ export const CW_RENDER_BATCH_ITEMS_LEGACY_TV = 12;
 export const CW_RENDER_LOAD_AHEAD_ITEMS = 4;
 export const CW_DAYS_CAP = 60;
 export const CW_PROGRESS_START_THRESHOLD = WATCH_PROGRESS_STARTED_THRESHOLD;
-export const CW_PROGRESS_END_THRESHOLD = WATCH_PROGRESS_COMPLETED_THRESHOLD;
 export const CW_ENTER_DELAY_MS = 320;
 export const CW_HOLD_DELAY_MS = 650;
 export const CW_META_TIMEOUT_MS = 1800;

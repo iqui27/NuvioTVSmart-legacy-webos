@@ -34,7 +34,8 @@ import { TmdbSettingsStore } from "../../../data/local/tmdbSettingsStore.js";
 import { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
 import {
   MoreLikeThisSourcePreference,
-  TraktSettingsStore
+  TraktSettingsStore,
+  WatchProgressSource
 } from "../../../data/local/traktSettingsStore.js";
 import {
   requestJson as traktRequestJson,
@@ -63,9 +64,10 @@ import {
 import { StreamPreferencesStore } from "../../../data/local/streamPreferencesStore.js";
 import { buildWatchedTitleIdSet, isTitleItemWatched } from "../../components/watchedTitleBadge.js";
 import {
-  WATCH_PROGRESS_COMPLETED_THRESHOLD,
   getWatchProgressFraction,
+  isWatchProgressCompleted,
   isWatchProgressInProgress,
+  watchProgressCompletedThreshold,
   resolveWatchProgressResumePositionMs
 } from "../../../domain/model/watchProgress.js";
 import { focusWithoutScroll, scrollIntoNearestView } from "../../../platform/legacyDom.js";
@@ -74,7 +76,6 @@ const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const EPISODE_HOLD_DELAY_MS = 650;
 const POSTER_HOLD_DELAY_MS = 650;
 const HERO_HOLD_DELAY_MS = 650;
-const DETAIL_PROGRESS_END_THRESHOLD = WATCH_PROGRESS_COMPLETED_THRESHOLD;
 const TRAKT_COMMENTS_LIMIT = 100;
 const DETAIL_SCROLL_STIFFNESS = 180;
 const DETAIL_SCROLL_DAMPING_RATIO = 0.95;
@@ -86,6 +87,7 @@ const EPISODE_VIRTUALIZATION_MIN_WINDOW = 20;
 const EPISODE_VIRTUALIZATION_OVERSCAN = 8;
 const EPISODE_VIRTUALIZATION_DEFAULT_CARD_WIDTH = 540;
 const EPISODE_VIRTUALIZATION_DEFAULT_GAP = 34;
+const EPISODE_TITLE_MARQUEE_VELOCITY_PX_PER_SECOND = 90;
 const RTL_DETAIL_LANGUAGES = new Set(["ar", "he"]);
 const SIMKL_DESTRUCTIVE_REMOVAL_MESSAGE =
   "Removing this status will also clear watched history or a rating on Simkl. Confirm only if that is intended.";
@@ -300,6 +302,59 @@ function normalizeEpisodes(videos = [], contentType = "") {
 
 function detailProgressFraction(progress = {}) {
   return getWatchProgressFraction(progress);
+}
+
+function isDetailProgressCompleted(progress = {}) {
+  return detailProgressFraction(progress) >= watchProgressCompletedThreshold(progress);
+}
+
+function isSimklProgressSourceSelected() {
+  return watchProgressRepository.getContinueWatchingSource() === WatchProgressSource.SIMKL;
+}
+
+function getDetailAllProgressPromise() {
+  const progressPromise = isSimklProgressSourceSelected()
+    ? watchProgressRepository.getAllForContinueWatching()
+    : watchProgressRepository.getAll();
+  return progressPromise.catch((error) => {
+    console.warn("Detail all-progress lookup failed", error);
+    return [];
+  });
+}
+
+function hasCompletedSimklMovieProgress(progressItems = [], contentReference = {}) {
+  return (Array.isArray(progressItems) ? progressItems : []).some((entry) => {
+    return (
+      String(entry?.source || "")
+        .trim()
+        .toLowerCase() === "simkl_playback" &&
+      String(entry?.contentType || "")
+        .trim()
+        .toLowerCase() === "movie" &&
+      entry?.season == null &&
+      entry?.episode == null &&
+      watchedItemsShareIdentity(entry, contentReference) &&
+      isWatchProgressCompleted(entry)
+    );
+  });
+}
+
+function hasInProgressSimklMovieProgress(progressItems = [], contentReference = {}) {
+  return (Array.isArray(progressItems) ? progressItems : []).some((entry) => {
+    return (
+      String(entry?.source || "")
+        .trim()
+        .toLowerCase() === "simkl_playback" &&
+      String(entry?.contentType || "")
+        .trim()
+        .toLowerCase() === "movie" &&
+      entry?.season == null &&
+      entry?.episode == null &&
+      watchedItemsShareIdentity(entry, contentReference) &&
+      detailProgressFraction(entry) > 0 &&
+      !isDetailProgressCompleted(entry)
+    );
+  });
 }
 
 function pushUniqueResumeId(ids, value) {
@@ -1805,6 +1860,7 @@ export const MetaDetailsScreen = {
     this.episodeTrackScrollNode = null;
     this.episodeVirtualSyncRaf = null;
     this.lastEpisodeHorizontalKeyRepeatAt = 0;
+    this.episodeMarqueeTitle = null;
     this.episodeThumbnailPrefetchCache = new Set();
     this.selectedSeasonEpisodeState = null;
     this.railFocusIndexByKey = {};
@@ -1968,7 +2024,7 @@ export const MetaDetailsScreen = {
     const isSavedPromise = savedLibraryRepository.isSaved(itemId);
     const progressPromise = watchProgressRepository.getResumeByContentId(itemId);
     const watchedItemPromise = watchedItemsRepository.isWatched(itemId);
-    const allProgressPromise = watchProgressRepository.getAll();
+    const allProgressPromise = getDetailAllProgressPromise();
     const allWatchedPromise = watchedItemsRepository.getAll();
 
     const [metaResult, isSaved, initialProgress, watchedItem, allProgressItems, allWatchedItems] =
@@ -2030,9 +2086,11 @@ export const MetaDetailsScreen = {
     }
     this.resumeProgress = progress && isWatchProgressInProgress(progress) ? progress : null;
     this.isSavedInLibrary = isSaved;
+    const detailContentReference = buildDetailContentReference(itemId, meta, this.params);
     this.isMarkedWatched = Boolean(
       projectedTitleWatched ||
-      watchedItem ||
+      (watchedItem && !hasInProgressSimklMovieProgress(allProgressItems, detailContentReference)) ||
+      hasCompletedSimklMovieProgress(allProgressItems, detailContentReference) ||
       (progress &&
         Number(progress.durationMs || 0) > 0 &&
         Number(progress.positionMs || 0) >= Number(progress.durationMs || 0))
@@ -2119,10 +2177,11 @@ export const MetaDetailsScreen = {
       void this.loadTraktComments({ force: true });
 
       const tasks = [];
+      const simklProgressSourceSelected = isSimklProgressSourceSelected();
       if (isSeriesDetailMeta(this.meta, this.episodes)) {
         tasks.push(withTimeout(this.fetchSeriesRatingsBySeason(this.meta), 5000, {}));
         const traktId = this.meta?.ids?.trakt;
-        if (traktId) {
+        if (traktId && !simklProgressSourceSelected) {
           tasks.push(
             withTimeout(
               detailWatchedEnrichmentService.enrichSeriesWatchedState(
@@ -2140,7 +2199,7 @@ export const MetaDetailsScreen = {
           withTimeout(this.fetchMovieCollection(this.meta), 5000, { items: [], name: "" })
         );
         const movieTraktId = this.meta?.ids?.trakt;
-        if (movieTraktId) {
+        if (movieTraktId && !simklProgressSourceSelected) {
           tasks.push(
             withTimeout(
               detailWatchedEnrichmentService.enrichMovieWatchedState(
@@ -2539,7 +2598,7 @@ export const MetaDetailsScreen = {
     const latestProgress = this.getLatestSeriesProgress(progress, progressItems);
     const progressEpisode = this.findEpisodeFromProgress(latestProgress);
     if (progressEpisode) {
-      if (detailProgressFraction(latestProgress) >= DETAIL_PROGRESS_END_THRESHOLD) {
+      if (isDetailProgressCompleted(latestProgress)) {
         return Number(
           this.getNextEpisodeAfter(progressEpisode)?.season || progressEpisode.season || 0
         );
@@ -2580,12 +2639,12 @@ export const MetaDetailsScreen = {
     if (!episodes.length) {
       return null;
     }
-    if (currentEpisode && detailProgressFraction(progress) < DETAIL_PROGRESS_END_THRESHOLD) {
+    if (currentEpisode && !isDetailProgressCompleted(progress)) {
       return currentEpisode;
     }
     const completedKeys =
       this.watchedEpisodeKeys instanceof Set ? new Set(this.watchedEpisodeKeys) : new Set();
-    if (currentEpisode && detailProgressFraction(progress) >= DETAIL_PROGRESS_END_THRESHOLD) {
+    if (currentEpisode && isDetailProgressCompleted(progress)) {
       completedKeys.add(
         `${Number(currentEpisode.season || 0)}:${Number(currentEpisode.episode || 0)}`
       );
@@ -2597,7 +2656,7 @@ export const MetaDetailsScreen = {
       }
       if (
         currentEpisode &&
-        detailProgressFraction(progress) >= DETAIL_PROGRESS_END_THRESHOLD &&
+        isDetailProgressCompleted(progress) &&
         Number(episode?.season || 0) === Number(currentEpisode.season || 0) &&
         Number(episode?.episode || 0) === Number(currentEpisode.episode || 0)
       ) {
@@ -2653,7 +2712,7 @@ export const MetaDetailsScreen = {
       }
       const key = `${season}:${episode}`;
       progressMap.set(key, entry);
-      if (detailProgressFraction(entry) >= DETAIL_PROGRESS_END_THRESHOLD) {
+      if (isDetailProgressCompleted(entry)) {
         watchedKeys.add(key);
       }
     });
@@ -2669,6 +2728,20 @@ export const MetaDetailsScreen = {
         episode > 0
       ) {
         watchedKeys.add(`${season}:${episode}`);
+      }
+    });
+
+    // A current Simkl playback session overrides an older watched marker until
+    // it reaches the same 80% completion threshold as Android TV.
+    progressMap.forEach((entry, key) => {
+      if (
+        String(entry?.source || "")
+          .trim()
+          .toLowerCase() === "simkl_playback" &&
+        detailProgressFraction(entry) > 0 &&
+        !isDetailProgressCompleted(entry)
+      ) {
+        watchedKeys.delete(key);
       }
     });
 
@@ -3755,12 +3828,12 @@ export const MetaDetailsScreen = {
     }
 
     const seasonMount = this.container.querySelector("#detailSeasonRowMount");
-    if (isSeries && seasonMount) {
+    if (isSeries && seasonMount && !this.syncRenderedSeasonButtons()) {
       seasonMount.innerHTML = `<div class="series-season-row" data-scroll-key="season-tabs">${this.renderSeasonButtons()}</div>`;
     }
 
     const episodeMount = this.container.querySelector("#detailEpisodeTrackMount");
-    if (isSeries && episodeMount) {
+    if (isSeries && episodeMount && !this.syncRenderedEpisodeTrack()) {
       episodeMount.innerHTML = `<div class="series-episode-track${this.getSelectedSeasonEpisodes().length > EPISODE_VIRTUALIZATION_THRESHOLD ? " is-virtualized" : ""}" data-scroll-key="episodes:${this.selectedSeason ?? 1}">${this.renderEpisodeCards()}</div>`;
     }
 
@@ -4007,6 +4080,32 @@ export const MetaDetailsScreen = {
       .join("");
   },
 
+  selectSeason(season) {
+    const nextSeason = Number(season);
+    if (!Number.isFinite(nextSeason) || nextSeason < 0) {
+      return false;
+    }
+    if (nextSeason === Number(this.selectedSeason || 0)) {
+      return true;
+    }
+    this.hasManualSeasonSelection = true;
+    this.selectedSeason = nextSeason;
+    const focusRestore = { selector: `.series-season-btn[data-season="${nextSeason}"]` };
+    if (!this.container?.querySelector(".series-detail-shell")) {
+      this.render(this.meta, focusRestore);
+      return true;
+    }
+
+    const seasonMount = this.container.querySelector("#detailSeasonRowMount");
+    if (seasonMount && !this.syncRenderedSeasonButtons()) {
+      seasonMount.innerHTML = `<div class="series-season-row" data-scroll-key="season-tabs">${this.renderSeasonButtons()}</div>`;
+    }
+    if (!this.refreshEpisodeTrack(focusRestore, this.getRememberedEpisodeIndex())) {
+      this.render(this.meta, focusRestore);
+    }
+    return true;
+  },
+
   getSelectedSeasonEpisodes() {
     return this.getSelectedSeasonEpisodeState().episodes;
   },
@@ -4020,16 +4119,19 @@ export const MetaDetailsScreen = {
     }
     const seasonEpisodes = [];
     const indexByVideoId = new Map();
+    const seenVideoIds = new Set();
     for (const episode of allEpisodes) {
       if (Number(episode?.season || 0) !== season) {
         continue;
       }
+      const videoId = String(episode?.id || "").trim();
+      if (!videoId || seenVideoIds.has(videoId)) {
+        continue;
+      }
+      seenVideoIds.add(videoId);
       const absoluteIndex = seasonEpisodes.length;
       seasonEpisodes.push(episode);
-      const videoId = String(episode?.id || "").trim();
-      if (videoId && !indexByVideoId.has(videoId)) {
-        indexByVideoId.set(videoId, absoluteIndex);
-      }
+      indexByVideoId.set(videoId, absoluteIndex);
     }
     this.selectedSeasonEpisodeState = {
       source: allEpisodes,
@@ -4166,15 +4268,12 @@ export const MetaDetailsScreen = {
     };
   },
 
-  renderEpisodeCard(episode, absoluteIndex) {
+  getEpisodeCardPresentation(episode) {
     const progress = this.episodeProgressMap.get(`${episode.season}:${episode.episode}`) || null;
     const position = Number(progress?.positionMs || 0);
     const duration = Number(progress?.durationMs || 0);
     const progressRatio = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
-    const episodeKey = `${episode.season}:${episode.episode}`;
-    const isWatched = this.enrichedWatchedState?.has(episodeKey)
-      ? Boolean(this.enrichedWatchedState.get(episodeKey)?.isWatched)
-      : this.watchedEpisodeKeys.has(episodeKey);
+    const isWatched = this.isEpisodeMarkedWatched(episode);
     const shouldBlur = Boolean(LayoutPreferences.get().blurUnwatchedEpisodes) && !isWatched;
     const rating = resolveEpisodeImdbRating(episode, this.seriesRatingsBySeason);
     const dateLabel = formatEpisodeCardDate(episode.released || "");
@@ -4188,23 +4287,38 @@ export const MetaDetailsScreen = {
     ]
       .filter(Boolean)
       .join("");
+    return {
+      isUnavailable,
+      isWatched,
+      metaParts,
+      overview: String(episode.overview || t("episodes_episode", {}, "Episode")),
+      progressRatio,
+      shouldBlur,
+      thumbnail: String(episode.thumbnail || "").trim(),
+      title: normalizeEpisodeTitle(episode.title, episode.episode)
+    };
+  },
+
+  renderEpisodeCard(episode, absoluteIndex) {
+    const presentation = this.getEpisodeCardPresentation(episode);
     return `
-      <article class="series-episode-card focusable${isWatched ? " watched" : ""}"
+      <article class="series-episode-card focusable${presentation.isWatched ? " watched" : ""}"
             data-action="openEpisodeStreams"
             data-video-id="${escapeHtml(episode.id)}"
             data-episode-index="${absoluteIndex}">
         <div class="series-episode-thumb">
-          <div class="series-episode-image${shouldBlur ? " is-blurred" : ""}"${episode.thumbnail ? ` data-thumb="${escapeHtml(episode.thumbnail)}"` : ""}></div>
+          <div class="series-episode-image${presentation.shouldBlur ? " is-blurred" : ""}"
+               data-episode-thumb="${escapeAttribute(presentation.thumbnail)}"${presentation.thumbnail ? ` data-thumb="${escapeAttribute(presentation.thumbnail)}"` : ""}></div>
           <div class="series-episode-overlay"></div>
-          ${isWatched ? `<div class="series-episode-status complete"><span class="series-episode-watched-mark">${renderWatchedBadgeGlyph()}</span><span class="series-episode-watched-label">${escapeHtml(t("episodes_cd_watched", {}, "Watched").toUpperCase())}</span></div>` : progressRatio < 0.02 ? `<div class="series-episode-status idle"></div>` : ""}
-          ${isUnavailable ? `<div class="series-episode-unavailable">${escapeHtml(t("episodes_unavailable", {}, "Unavailable").toUpperCase())}</div>` : ""}
+          ${presentation.isWatched ? `<div class="series-episode-status complete"><span class="series-episode-watched-mark">${renderWatchedBadgeGlyph()}</span><span class="series-episode-watched-label">${escapeHtml(t("episodes_cd_watched", {}, "Watched").toUpperCase())}</span></div>` : presentation.progressRatio < 0.02 ? `<div class="series-episode-status idle"></div>` : ""}
+          ${presentation.isUnavailable ? `<div class="series-episode-unavailable">${escapeHtml(t("episodes_unavailable", {}, "Unavailable").toUpperCase())}</div>` : ""}
           <div class="series-episode-copy">
             <div class="series-episode-badge">${escapeHtml(t("episodes_episode", {}, "Episode").toUpperCase())} ${Number(episode.episode || 0)}</div>
-            <div class="series-episode-title" dir="auto">${escapeHtml(normalizeEpisodeTitle(episode.title, episode.episode))}</div>
-            <div class="series-episode-overview">${escapeHtml(episode.overview || t("episodes_episode", {}, "Episode"))}</div>
-            ${metaParts ? `<div class="series-episode-meta">${metaParts}</div>` : ""}
+            <div class="series-episode-title" dir="auto"><span class="series-episode-title-text">${escapeHtml(presentation.title)}</span></div>
+            <div class="series-episode-overview">${escapeHtml(presentation.overview)}</div>
+            ${presentation.metaParts ? `<div class="series-episode-meta">${presentation.metaParts}</div>` : ""}
           </div>
-          ${progressRatio > 0.02 && progressRatio < 0.98 ? `<div class="series-episode-progress"><span style="width:${Math.round(progressRatio * 100)}%"></span></div>` : ""}
+          ${presentation.progressRatio > 0.02 && presentation.progressRatio < 0.98 ? `<div class="series-episode-progress"><span style="width:${Math.round(presentation.progressRatio * 100)}%"></span></div>` : ""}
         </div>
       </article>
     `;
@@ -4288,6 +4402,226 @@ export const MetaDetailsScreen = {
       </div>
       <div class="series-episode-track-spacer" aria-hidden="true" style="flex-basis:${Math.max(0, windowState.rightSpacer)}px"></div>
     `;
+  },
+
+  syncRenderedSeasonButtons() {
+    const row = this.container?.querySelector("#detailSeasonRowMount .series-season-row");
+    if (!(row instanceof HTMLElement)) {
+      return false;
+    }
+    const seasons = this.getAvailableSeasons();
+    const buttons = Array.from(row.querySelectorAll(".series-season-btn.focusable"));
+    if (buttons.length !== seasons.length) {
+      return false;
+    }
+    const seasonLabel = (season) =>
+      season === 0
+        ? t("episodes_specials", {}, "Specials")
+        : t("detail.seasonLabel", { season }, "Season {{season}}");
+    for (const [index, season] of seasons.entries()) {
+      const button = buttons[index];
+      if (Number(button?.dataset?.season || 0) !== Number(season)) {
+        return false;
+      }
+      const label = seasonLabel(season);
+      if (button.textContent.trim() !== label) {
+        button.textContent = label;
+      }
+      button.classList.toggle("selected", season === this.selectedSeason);
+    }
+    return true;
+  },
+
+  clearEpisodeTitleMarquee(title) {
+    if (!(title instanceof HTMLElement)) {
+      return;
+    }
+    title.classList.remove("is-marquee-active");
+    title.style.removeProperty("--episode-marquee-distance");
+    title.style.removeProperty("--episode-marquee-duration");
+    const text = title.querySelector(".series-episode-title-text");
+    if (text instanceof HTMLElement) {
+      text.style.removeProperty("width");
+    }
+    if (this.episodeMarqueeTitle === title) {
+      this.episodeMarqueeTitle = null;
+    }
+  },
+
+  syncEpisodeTitleMarquee() {
+    const focusedTitle =
+      this.container?.querySelector(".series-episode-card.focused .series-episode-title") || null;
+    if (this.episodeMarqueeTitle && this.episodeMarqueeTitle !== focusedTitle) {
+      this.clearEpisodeTitleMarquee(this.episodeMarqueeTitle);
+    }
+    if (!(focusedTitle instanceof HTMLElement)) {
+      return;
+    }
+    const text = focusedTitle.querySelector(".series-episode-title-text");
+    if (!(text instanceof HTMLElement)) {
+      return;
+    }
+    if (focusedTitle.classList.contains("is-marquee-active")) {
+      return;
+    }
+    const availableWidth = Number(focusedTitle.clientWidth || 0);
+    const textWidth = Number(text.scrollWidth || 0);
+    if (availableWidth <= 0 || textWidth <= availableWidth + 1) {
+      return;
+    }
+    const spacing = Math.max(32, Math.round(availableWidth / 3));
+    const distance = textWidth + spacing;
+    const isRtl =
+      typeof getComputedStyle === "function" && getComputedStyle(focusedTitle).direction === "rtl";
+    const travel = isRtl ? distance : -distance;
+    const duration = Math.max(
+      1000,
+      Math.round((distance / EPISODE_TITLE_MARQUEE_VELOCITY_PX_PER_SECOND) * 1000)
+    );
+    text.style.width = `${textWidth}px`;
+    focusedTitle.style.setProperty("--episode-marquee-distance", `${travel}px`);
+    focusedTitle.style.setProperty("--episode-marquee-duration", `${duration}ms`);
+    focusedTitle.classList.add("is-marquee-active");
+    this.episodeMarqueeTitle = focusedTitle;
+  },
+
+  syncEpisodeCardDom(card, episode, absoluteIndex) {
+    if (!(card instanceof HTMLElement) || !episode) {
+      return false;
+    }
+    const thumb = card.querySelector(".series-episode-thumb");
+    const image = card.querySelector(".series-episode-image");
+    const copy = card.querySelector(".series-episode-copy");
+    const title = card.querySelector(".series-episode-title");
+    const overview = card.querySelector(".series-episode-overview");
+    const badge = card.querySelector(".series-episode-badge");
+    if (
+      !(thumb instanceof HTMLElement) ||
+      !(image instanceof HTMLElement) ||
+      !(copy instanceof HTMLElement) ||
+      !(title instanceof HTMLElement) ||
+      !(overview instanceof HTMLElement) ||
+      !(badge instanceof HTMLElement)
+    ) {
+      return false;
+    }
+
+    const presentation = this.getEpisodeCardPresentation(episode);
+    const videoId = String(episode.id || "");
+    card.dataset.videoId = videoId;
+    card.dataset.episodeIndex = String(absoluteIndex);
+    card.classList.toggle("watched", presentation.isWatched);
+
+    let titleText = title.querySelector(".series-episode-title-text");
+    if (!(titleText instanceof HTMLElement)) {
+      const currentTitle = String(title.textContent || "").trim();
+      title.textContent = "";
+      titleText = document.createElement("span");
+      titleText.className = "series-episode-title-text";
+      title.appendChild(titleText);
+      titleText.textContent = currentTitle;
+    }
+    if (titleText.textContent !== presentation.title) {
+      this.clearEpisodeTitleMarquee(title);
+      titleText.textContent = presentation.title;
+    }
+    if (
+      badge.textContent.trim() !==
+      `${t("episodes_episode", {}, "Episode").toUpperCase()} ${Number(episode.episode || 0)}`
+    ) {
+      badge.textContent = `${t("episodes_episode", {}, "Episode").toUpperCase()} ${Number(episode.episode || 0)}`;
+    }
+    if (overview.textContent !== presentation.overview) {
+      overview.textContent = presentation.overview;
+    }
+
+    const thumbnail = presentation.thumbnail;
+    if (String(image.dataset.episodeThumb || "") !== thumbnail) {
+      image.dataset.episodeThumb = thumbnail;
+      image.removeAttribute("data-thumb");
+      image.style.removeProperty("background-image");
+      if (thumbnail) {
+        image.setAttribute("data-thumb", thumbnail);
+      }
+    }
+
+    let unavailable = thumb.querySelector(".series-episode-unavailable");
+    if (presentation.isUnavailable) {
+      if (!(unavailable instanceof HTMLElement)) {
+        unavailable = document.createElement("div");
+        thumb.appendChild(unavailable);
+      }
+      unavailable.className = "series-episode-unavailable";
+      unavailable.textContent = t("episodes_unavailable", {}, "Unavailable").toUpperCase();
+    } else if (unavailable instanceof HTMLElement) {
+      unavailable.remove();
+    }
+
+    let meta = copy.querySelector(".series-episode-meta");
+    if (presentation.metaParts) {
+      if (!(meta instanceof HTMLElement)) {
+        meta = document.createElement("div");
+        meta.className = "series-episode-meta";
+        copy.appendChild(meta);
+      }
+      if (meta.innerHTML !== presentation.metaParts) {
+        meta.innerHTML = presentation.metaParts;
+      }
+    } else if (meta instanceof HTMLElement) {
+      meta.remove();
+    }
+
+    this.syncEpisodeCardWatchedDom(episode);
+    return true;
+  },
+
+  syncRenderedEpisodeTrack() {
+    const track = this.getEpisodeTrackElement();
+    if (!(track instanceof HTMLElement)) {
+      return false;
+    }
+    const episodes = this.getSelectedSeasonEpisodes();
+    const season = Number(this.selectedSeason || 0);
+    if (track.dataset.scrollKey !== `episodes:${this.selectedSeason ?? 1}` || !episodes.length) {
+      return false;
+    }
+    const currentWindow =
+      this.episodeVirtualWindow?.season === season
+        ? this.episodeVirtualWindow
+        : this.getEpisodeVirtualWindowState(episodes, this.getRememberedEpisodeIndex(episodes));
+    if (!currentWindow) {
+      return false;
+    }
+    const visibleEpisodes = currentWindow.virtualized
+      ? episodes.slice(currentWindow.start, currentWindow.end + 1)
+      : episodes;
+    const cards = Array.from(track.querySelectorAll(".series-episode-card.focusable"));
+    if (cards.length !== visibleEpisodes.length) {
+      return false;
+    }
+    for (const [offset, episode] of visibleEpisodes.entries()) {
+      const card = cards[offset];
+      const absoluteIndex = currentWindow.virtualized ? currentWindow.start + offset : offset;
+      if (
+        String(card?.dataset?.videoId || "") !== String(episode?.id || "") ||
+        Number(card?.dataset?.episodeIndex || -1) !== absoluteIndex ||
+        !this.syncEpisodeCardDom(card, episode, absoluteIndex)
+      ) {
+        return false;
+      }
+    }
+    const spacers = Array.from(track.querySelectorAll(".series-episode-track-spacer"));
+    if (currentWindow.virtualized && spacers.length === 2) {
+      spacers[0].style.flexBasis = `${Math.max(0, currentWindow.leftSpacer)}px`;
+      spacers[1].style.flexBasis = `${Math.max(0, currentWindow.rightSpacer)}px`;
+      const windowNode = track.querySelector(".series-episode-track-window");
+      if (windowNode instanceof HTMLElement) {
+        windowNode.style.setProperty("--episode-track-gap", `${currentWindow.gap}px`);
+      }
+    }
+    track.classList.toggle("is-virtualized", currentWindow.virtualized);
+    this.episodeVirtualWindow = currentWindow;
+    return true;
   },
 
   refreshEpisodeTrack(focusRestoreOverride = null, preferredIndex = null) {
@@ -5601,7 +5935,7 @@ export const MetaDetailsScreen = {
       watchProgressRepository.getResumeByContentIds(
         this.resumeContentIds?.length ? this.resumeContentIds : [this.params?.itemId]
       ),
-      watchProgressRepository.getAll(),
+      getDetailAllProgressPromise(),
       watchedItemsRepository.getAll(),
       watchedItemsRepository.isWatched(this.params?.itemId)
     ]);
@@ -5612,9 +5946,15 @@ export const MetaDetailsScreen = {
       allWatchedItems
     );
     this.resumeProgress = progress && isWatchProgressInProgress(progress) ? progress : null;
+    const detailContentReference = buildDetailContentReference(
+      this.params?.itemId,
+      this.meta,
+      this.params
+    );
     this.isMarkedWatched = Boolean(
       projectedTitleWatched ||
-      watchedItem ||
+      (watchedItem && !hasInProgressSimklMovieProgress(allProgressItems, detailContentReference)) ||
+      hasCompletedSimklMovieProgress(allProgressItems, detailContentReference) ||
       (progress &&
         Number(progress.durationMs || 0) > 0 &&
         Number(progress.positionMs || 0) >= Number(progress.durationMs || 0))
@@ -6099,9 +6439,7 @@ export const MetaDetailsScreen = {
       if (target.matches(".series-season-btn.focusable")) {
         const season = Number(target.dataset.season || 0);
         if (season >= 0 && season !== this.selectedSeason) {
-          this.hasManualSeasonSelection = true;
-          this.selectedSeason = season;
-          this.render(this.meta, { selector: `.series-season-btn[data-season="${season}"]` });
+          this.selectSeason(season);
         }
         return;
       }
@@ -6153,6 +6491,7 @@ export const MetaDetailsScreen = {
     this.syncTrailerDom();
     this.restartTrailerAutoplayTimer();
     this.restorePendingFocus();
+    this.syncEpisodeTitleMarquee();
   },
 
   restoreChromeState() {
@@ -8114,6 +8453,7 @@ export const MetaDetailsScreen = {
     if (!preserveVerticalScroll) {
       this.syncDetailScrollBounds(target);
     }
+    this.syncEpisodeTitleMarquee();
     return true;
   },
 
@@ -9266,9 +9606,7 @@ export const MetaDetailsScreen = {
     if (action === "selectSeason") {
       const season = Number(current.dataset.season || 1);
       if (season !== this.selectedSeason) {
-        this.hasManualSeasonSelection = true;
-        this.selectedSeason = season;
-        this.render(this.meta);
+        this.selectSeason(season);
       }
       return;
     }
@@ -9627,6 +9965,7 @@ export const MetaDetailsScreen = {
       } catch (_) {}
       this.episodeThumbObserver = null;
     }
+    this.clearEpisodeTitleMarquee(this.episodeMarqueeTitle);
     this.selectedSeasonEpisodeState = null;
     if (this.episodeTrackScrollNode && this.episodeTrackScrollHandler) {
       this.episodeTrackScrollNode.removeEventListener("scroll", this.episodeTrackScrollHandler);
