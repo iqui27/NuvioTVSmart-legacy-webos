@@ -10,6 +10,16 @@ function normalizeDisplayText(value) {
     .replace(/\\"/g, '"');
 }
 
+function firstNonBlank(...values) {
+  for (const value of values) {
+    const normalized = String(value ?? "").trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
 class MetaRepository {
   constructor() {
     this.metaCache = new Map();
@@ -258,6 +268,13 @@ class MetaRepository {
       return null;
     }
 
+    const appExtras =
+      meta.app_extras && typeof meta.app_extras === "object" && !Array.isArray(meta.app_extras)
+        ? meta.app_extras
+        : meta.appExtras && typeof meta.appExtras === "object" && !Array.isArray(meta.appExtras)
+          ? meta.appExtras
+          : {};
+
     return {
       ...meta,
       id: meta.id || "",
@@ -271,7 +288,14 @@ class MetaRepository {
         ? meta.genres.map((genre) => normalizeDisplayText(genre))
         : [],
       videos: Array.isArray(meta.videos) ? meta.videos : [],
-      releaseInfo: normalizeDisplayText(meta.releaseInfo || "")
+      releaseInfo: normalizeDisplayText(meta.releaseInfo || ""),
+      ageRating: firstNonBlank(
+        appExtras.certificationLocal,
+        appExtras.certification_local,
+        appExtras.certification,
+        meta.ageRating,
+        meta.age_rating
+      )
     };
   }
 

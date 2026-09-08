@@ -73,6 +73,7 @@ export function deriveThemeColors(colors = {}) {
     "--secondary-color-rgb": toRgbChannels(colors["--secondary-color"], "245 245 245"),
     "--focus-color-rgb": toRgbChannels(colors["--focus-color"], "255 255 255"),
     "--player-secondary": colors["--secondary-color"],
+    "--player-accent-gradient": colors["--accent-gradient"] || colors["--secondary-color"],
     "--player-on-secondary": colors["--on-secondary"],
     "--player-focus-ring": colors["--focus-color"],
     "--player-focus-background": colors["--focus-bg"],

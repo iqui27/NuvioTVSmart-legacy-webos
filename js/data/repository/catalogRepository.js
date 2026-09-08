@@ -16,16 +16,20 @@ class CatalogRepository {
     catalogName,
     type,
     skip = 0,
+    skipStep = 100,
     extraArgs = {},
-    supportsSkip = true,
+    supportsSkip = false,
     signal = null
   }) {
+    const normalizedSkipStep = this.normalizeSkipStep(skipStep);
     const cacheKey = this.buildCacheKey({
       addonId,
       type,
       catalogId,
       skip,
-      extraArgs
+      skipStep: normalizedSkipStep,
+      extraArgs,
+      supportsSkip
     });
 
     const cached = this.catalogCache.get(cacheKey);
@@ -66,8 +70,9 @@ class CatalogRepository {
           items,
           isLoading: false,
           hasMore,
-          currentPage: Math.floor(skip / 100),
+          currentPage: Math.floor(skip / normalizedSkipStep),
           supportsSkip,
+          skipStep: normalizedSkipStep,
           nextSkip: hasMore ? skip + rawItemCount : skip
         };
 
@@ -102,13 +107,26 @@ class CatalogRepository {
     return `${basePath}/catalog/${type}/${catalogId}/${query}.json${baseQuery}`;
   }
 
-  buildCacheKey({ addonId, type, catalogId, skip = 0, extraArgs = {} }) {
+  buildCacheKey({
+    addonId,
+    type,
+    catalogId,
+    skip = 0,
+    skipStep = 100,
+    extraArgs = {},
+    supportsSkip = false
+  }) {
     const normalizedArgs = Object.entries(extraArgs)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => `${key}=${value}`)
       .join("&");
 
-    return `${addonId}_${type}_${catalogId}_${skip}_${normalizedArgs}`;
+    return `${addonId}_${type}_${catalogId}_${skip}_${skipStep}_${supportsSkip ? "skip" : "no-skip"}_${normalizedArgs}`;
+  }
+
+  normalizeSkipStep(value = 100) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : 100;
   }
 
   encodeArg(value) {
@@ -125,6 +143,7 @@ class CatalogRepository {
       logo: meta.logo || null,
       description: meta.description || "",
       releaseInfo: meta.releaseInfo || "",
+      runtime: meta.runtime ?? null,
       genres: Array.isArray(meta.genres) ? meta.genres : []
     };
   }

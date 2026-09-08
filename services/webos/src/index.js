@@ -9,6 +9,7 @@ var requestLocalHttp = serverHost.requestLocalHttp;
 var requestActiveServerHttp = serverHost.requestActiveServerHttp;
 var requestActiveServerPath = serverHost.requestActiveServerPath;
 var SUPABASE_PROXY_PATH = require("./supabaseProxy").SUPABASE_PROXY_PATH;
+var getDeviceMemoryProfile = require("./deviceMemory").getDeviceMemoryProfile;
 var bitmapSubtitles = require("./bitmapSubtitles");
 var getBitmapSubtitleWindow = bitmapSubtitles.getBitmapSubtitleWindow;
 var getEmbeddedTextSubtitleWindow = bitmapSubtitles.getEmbeddedTextSubtitleWindow;
@@ -20,6 +21,30 @@ var RUNTIME_PATH = path.resolve(__dirname, "..", "runtime", "media-http.cjs");
 // probe reads from the front of the container, which on a cold torrent may not
 // have arrived yet, so it needs more room than a plain local request.
 var TRACKS_REQUEST_TIMEOUT_MS = 12000;
+
+// Peer budget. Every peer in the swarm costs a socket plus its receive buffer,
+// and on a 624 MB set that memory is taken from the same pool the video decoder
+// needs — which is why playback there stutters for the first minutes and can
+// drop video while audio keeps going. Ask for a swarm the small sets can hold.
+var PEER_SEARCH_MIN = 40;
+var PEER_SEARCH_MAX = 200;
+var LOW_MEMORY_PEER_SEARCH_MIN = 10;
+var LOW_MEMORY_PEER_SEARCH_MAX = 40;
+
+function getPeerSearchBudget(payload) {
+  var lowMemory = getDeviceMemoryProfile().lowMemory;
+  var defaultMin = lowMemory ? LOW_MEMORY_PEER_SEARCH_MIN : PEER_SEARCH_MIN;
+  var defaultMax = lowMemory ? LOW_MEMORY_PEER_SEARCH_MAX : PEER_SEARCH_MAX;
+  var min = Math.max(1, Math.min(1000, Math.trunc(Number(payload.peerSearchMin || defaultMin))));
+  var max = Math.max(1, Math.min(2000, Math.trunc(Number(payload.peerSearchMax || defaultMax))));
+  if (lowMemory) {
+    // A caller asking for the big-set budget on a small set is asking for the
+    // stutter, so the cap wins over the request.
+    min = Math.min(min, LOW_MEMORY_PEER_SEARCH_MIN);
+    max = Math.min(max, LOW_MEMORY_PEER_SEARCH_MAX);
+  }
+  return { min: min, max: Math.max(min, max) };
+}
 
 function createService() {
   try {
@@ -111,6 +136,10 @@ function respond(message, payload) {
 
 function buildBasePayload() {
   return {
+    // The memory class travels on every ping. The direct EngineFS create path
+    // does not come through this service, so the app has to apply the same peer
+    // budget itself, and it cannot read /proc from the page.
+    deviceMemory: getDeviceMemoryProfile(),
     returnValue: !runtimeState.error,
     serviceId: SERVICE_ID,
     booted: runtimeState.booted,
@@ -1112,10 +1141,11 @@ function buildCreateRequest(payload, infoHash) {
     body.stream = magnet;
   }
   if (peerSearchSources.length > 0) {
+    var peerBudget = getPeerSearchBudget(payload);
     body.peerSearch = {
       sources: peerSearchSources,
-      min: Math.max(1, Math.min(1000, Math.trunc(Number(payload.peerSearchMin || 40)))),
-      max: Math.max(1, Math.min(2000, Math.trunc(Number(payload.peerSearchMax || 200))))
+      min: peerBudget.min,
+      max: peerBudget.max
     };
   }
   if (fileMustInclude.length) {

@@ -9,10 +9,27 @@ const tmdbToImdbInFlight = new Map();
 
 function getContentType(type) {
   const normalized = String(type || "").toLowerCase();
-  if (normalized === "series" || normalized === "tv" || normalized === "show") {
-    return "tv";
-  }
-  return "movie";
+  if (["series", "tv", "show", "tvshow"].includes(normalized)) return "tv";
+  if (["movie", "film"].includes(normalized)) return "movie";
+  return normalized;
+}
+
+export function parseTmdbIdInput(value) {
+  const rawId = String(value || "").trim();
+  if (!rawId) return { idPart: "", kind: "unknown" };
+  // Keep the same case-sensitive prefix handling as Android's
+  // removePrefix("tmdb:").removePrefix("movie:").removePrefix("series:").
+  const idPart = rawId
+    .replace(/^tmdb:/, "")
+    .replace(/^movie:/, "")
+    .replace(/^series:/, "")
+    .trim()
+    .split(":")[0]
+    .split("/")[0]
+    .trim();
+  if (/^\d+$/.test(idPart)) return { idPart, kind: "numeric" };
+  if (idPart.startsWith("tt")) return { idPart, kind: "imdb" };
+  return { idPart, kind: "unknown" };
 }
 
 function lookupKey(id, type) {
@@ -23,35 +40,15 @@ function lookupKey(id, type) {
 
 export const TmdbService = {
   async ensureTmdbId(id, type = "movie", options = {}) {
-    const settings = TmdbSettingsStore.get();
-    const requireEnabled = options?.requireEnabled !== false;
-    const apiKey = String(TMDB_API_KEY || "").trim();
-    if ((requireEnabled && !settings.enabled) || !apiKey) {
-      return null;
-    }
-
-    const rawId = String(id || "").trim();
-    if (!rawId) {
-      return null;
-    }
-
-    const idPart = rawId
-      .replace(/^tmdb:/i, "")
-      .replace(/^movie:/i, "")
-      .replace(/^series:/i, "")
-      .trim();
-    const normalizedIdPart = idPart.split(":")[0]?.split("/")[0]?.trim() || "";
-
-    if (/^\d+$/.test(normalizedIdPart)) {
-      return normalizedIdPart;
-    }
-
-    if (!normalizedIdPart.startsWith("tt")) {
-      return null;
-    }
+    const parsed = parseTmdbIdInput(id);
+    // Android accepts an already numeric TMDB id without consulting settings,
+    // API keys, or the network. This branch must stay before all Web-only
+    // configuration gates.
+    if (parsed.kind === "numeric") return parsed.idPart;
+    if (parsed.kind !== "imdb") return null;
 
     const contentType = getContentType(type);
-    const key = lookupKey(normalizedIdPart, contentType);
+    const key = lookupKey(parsed.idPart, contentType);
     if (imdbToTmdbCache.has(key)) {
       return imdbToTmdbCache.get(key);
     }
@@ -59,7 +56,16 @@ export const TmdbService = {
       return imdbToTmdbInFlight.get(key);
     }
 
-    const url = `${TMDB_BASE_URL}/find/${encodeURIComponent(normalizedIdPart)}?external_source=imdb_id&api_key=${encodeURIComponent(apiKey)}`;
+    // Android checks its cache before any external lookup gate. Preserve a
+    // cached conversion even when the optional Web TMDB feature is disabled;
+    // only an uncached network lookup is subject to the Web configuration and
+    // API-key requirements.
+    const settings = TmdbSettingsStore.get();
+    const requireEnabled = options?.requireEnabled !== false;
+    const apiKey = String(TMDB_API_KEY || "").trim();
+    if ((requireEnabled && !settings.enabled) || !apiKey) return null;
+
+    const url = `${TMDB_BASE_URL}/find/${encodeURIComponent(parsed.idPart)}?external_source=imdb_id&api_key=${encodeURIComponent(apiKey)}`;
     const request = (async () => {
       const response = await fetch(url);
       if (!response.ok) {
@@ -75,7 +81,7 @@ export const TmdbService = {
 
       const resolvedId = String(first.id);
       imdbToTmdbCache.set(key, resolvedId);
-      tmdbToImdbCache.set(lookupKey(resolvedId, contentType), normalizedIdPart);
+      tmdbToImdbCache.set(lookupKey(resolvedId, contentType), parsed.idPart);
       return resolvedId;
     })();
     imdbToTmdbInFlight.set(key, request);

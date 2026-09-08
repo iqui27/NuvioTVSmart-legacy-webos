@@ -8,6 +8,12 @@ import { isWatchProgressInProgress } from "../../../domain/model/watchProgress.j
 import { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
 import { StreamPreferencesStore } from "../../../data/local/streamPreferencesStore.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
+import { StreamDiagnostics } from "../../../core/diagnostics/streamDiagnostics.js";
+import {
+  PLUGIN_REPOSITORY_TYPES,
+  isExecutableScraper,
+  pluginSupportsType
+} from "../../../core/player/pluginModels.js";
 import {
   selectAutoPlayStream,
   isAutoPlayEffectivelyEnabled
@@ -327,6 +333,10 @@ function flattenStreams(streamResult) {
       const streamOrigin = {
         ...(group.streamOrigin || {}),
         ...(stream.streamOrigin || {}),
+        kind:
+          group.streamOrigin?.kind ||
+          stream.streamOrigin?.kind ||
+          (group.sourceProviderId || stream.sourceProviderId ? "plugin" : "addon"),
         addonId:
           stream.addonId ||
           group.addonId ||
@@ -1566,11 +1576,29 @@ export const StreamScreen = {
     };
 
     if (PluginManager.pluginsEnabled) {
-      PluginManager.listPluginSources()
-        .filter((source) => source?.enabled !== false)
-        .forEach((source) => {
-          upsertSourceChip({ name: source.name, orderIndex: Number.MAX_SAFE_INTEGER }, "loading");
-        });
+      const repositoriesById = new Map(
+        PluginManager.listRepositories().map((repository) => [repository.id, repository])
+      );
+      const pluginNames = PluginManager.listScrapers()
+        .filter((scraper) => {
+          const repository = repositoriesById.get(scraper?.repositoryId);
+          return (
+            scraper?.type === PLUGIN_REPOSITORY_TYPES.NUVIO_JS &&
+            isExecutableScraper(scraper, repository) &&
+            pluginSupportsType(scraper.supportedTypes, itemType)
+          );
+        })
+        .map((scraper) => {
+          const repository = repositoriesById.get(scraper.repositoryId);
+          return PluginManager.groupStreamsByRepository
+            ? String(repository?.name || scraper.name || "").trim()
+            : String(scraper.name || "").trim();
+        })
+        .filter(Boolean)
+        .filter((name, index, names) => names.indexOf(name) === index);
+      pluginNames.forEach((name) => {
+        upsertSourceChip({ name, orderIndex: Number.MAX_SAFE_INTEGER }, "loading");
+      });
     }
 
     const markSuccessfulSources = (names = []) => {
@@ -2170,6 +2198,10 @@ export const StreamScreen = {
       });
       emptyState.hidden = !visible;
       emptyState.style.display = visible ? "" : "none";
+      const diagnosticsSlot = emptyState.querySelector("[data-stream-empty-diagnostics]");
+      if (diagnosticsSlot) {
+        diagnosticsSlot.innerHTML = visible ? this.renderStreamDiagnosticsHtml() : "";
+      }
     }
     if (loadingRow) {
       list.appendChild(loadingRow);
@@ -3052,8 +3084,18 @@ export const StreamScreen = {
     `;
   },
 
+  renderStreamDiagnosticsHtml() {
+    const lines = StreamDiagnostics.summaryLines();
+    if (!lines.length) {
+      return "";
+    }
+    return `<div class="stream-route-empty-diagnostics">${lines
+      .map((line) => `<div>${escapeHtml(line)}</div>`)
+      .join("")}</div>`;
+  },
+
   renderStableStreamEmptyState() {
-    return `<div class="stream-route-empty" data-stream-empty hidden style="display:none">${escapeHtml(t("sources_no_streams", {}, "No streams found"))}</div>`;
+    return `<div class="stream-route-empty" data-stream-empty hidden style="display:none">${escapeHtml(t("sources_no_streams", {}, "No streams found"))}<span data-stream-empty-diagnostics></span></div>`;
   },
 
   render() {
@@ -3167,7 +3209,7 @@ export const StreamScreen = {
     } else if (this.error) {
       body = `<div class="stream-route-empty">${escapeHtml(this.error)}</div>`;
     } else if (!filtered.length) {
-      body = `<div class="stream-route-empty">${escapeHtml(t("sources_no_streams", {}, "No streams found"))}</div>`;
+      body = `<div class="stream-route-empty">${escapeHtml(t("sources_no_streams", {}, "No streams found"))}${this.renderStreamDiagnosticsHtml()}</div>`;
     }
 
     const routeContent = this.autoResumeUiActive

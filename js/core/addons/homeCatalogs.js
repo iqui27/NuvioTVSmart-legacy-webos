@@ -4,6 +4,99 @@ export function catalogRequiresExtras(catalog) {
   return Array.isArray(catalog?.extra) && catalog.extra.some((entry) => Boolean(entry?.isRequired));
 }
 
+export function catalogShouldShowOnHome(catalog = {}) {
+  const isSearchOnly =
+    Array.isArray(catalog?.extra) &&
+    catalog.extra.some(
+      (entry) =>
+        String(entry?.name || entry || "")
+          .trim()
+          .toLowerCase() === "search" && Boolean(entry?.isRequired)
+    );
+  if (isSearchOnly) {
+    return false;
+  }
+  return catalog?.hasExplicitShowInHome !== true || catalog?.showInHome === true;
+}
+
+export function catalogSupportsExtra(catalog = {}, name = "") {
+  const target = String(name || "")
+    .trim()
+    .toLowerCase();
+  if (!target) {
+    return false;
+  }
+  return (
+    (Array.isArray(catalog?.extra) &&
+      catalog.extra.some(
+        (entry) =>
+          String(entry?.name || entry || "")
+            .trim()
+            .toLowerCase() === target
+      )) ||
+    (Array.isArray(catalog?.extraSupported) &&
+      catalog.extraSupported.some(
+        (entry) =>
+          String(entry || "")
+            .trim()
+            .toLowerCase() === target
+      )) ||
+    (Array.isArray(catalog?.extraRequired) &&
+      catalog.extraRequired.some(
+        (entry) =>
+          String(entry || "")
+            .trim()
+            .toLowerCase() === target
+      ))
+  );
+}
+
+function parseAndroidInt(value) {
+  if (typeof value === "number") {
+    if (!Number.isInteger(value)) {
+      return null;
+    }
+  } else if (!/^[+-]?\d+$/.test(String(value ?? "").trim())) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= -2147483648 && parsed <= 2147483647
+    ? parsed
+    : null;
+}
+
+export function catalogSkipStep(catalog = {}, defaultStep = 100) {
+  const fallback = parseAndroidInt(defaultStep);
+  const safeFallback = fallback && fallback > 0 ? fallback : 100;
+  const pageSize = parseAndroidInt(catalog?.pageSize);
+  if (pageSize && pageSize > 0) {
+    return pageSize;
+  }
+
+  const skipExtra = Array.isArray(catalog?.extra)
+    ? catalog.extra.find(
+        (entry) =>
+          String(entry?.name || entry || "")
+            .trim()
+            .toLowerCase() === "skip"
+      )
+    : null;
+  const numericOptions = (Array.isArray(skipExtra?.options) ? skipExtra.options : [])
+    .map((option) => parseAndroidInt(option))
+    .filter((option) => option !== null && option >= 0)
+    .filter((option, index, values) => values.indexOf(option) === index)
+    .sort((left, right) => left - right);
+  let minimumPositiveDifference = null;
+  for (let index = 1; index < numericOptions.length; index += 1) {
+    const step = numericOptions[index] - numericOptions[index - 1];
+    if (step > 0) {
+      minimumPositiveDifference =
+        minimumPositiveDifference === null ? step : Math.min(minimumPositiveDifference, step);
+    }
+  }
+  return minimumPositiveDifference || safeFallback;
+}
+
 export function buildCatalogOrderKey(addonId, type, catalogId) {
   return `${addonId}_${type}_${catalogId}`;
 }
@@ -51,7 +144,7 @@ export function buildOrderedHomeCatalogItems(
 
   (addons || []).forEach((addon) => {
     (addon.catalogs || [])
-      .filter((catalog) => !catalogRequiresExtras(catalog))
+      .filter((catalog) => catalogShouldShowOnHome(catalog))
       .forEach((catalog) => {
         const key = buildCatalogOrderKey(addon.id, catalog.apiType, catalog.id);
         if (seenKeys.has(key)) {

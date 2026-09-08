@@ -33,6 +33,7 @@ import {
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { scrollIntoNearestView } from "../../../platform/legacyDom.js";
 import { atualizarImagensDeGrade } from "../../../core/util/gradeLazyImages.js";
+import { catalogSkipStep, catalogSupportsExtra } from "../../../core/addons/homeCatalogs.js";
 
 const POSTER_HOLD_DELAY_MS = 650;
 const PICKER_MENU_EXIT_MS = 160;
@@ -392,7 +393,10 @@ export const DiscoverScreen = {
         // Catalogs that merely support optional search are still browsable and
         // belong in Discover (e.g. some addons declare an optional search extra).
         const isSearchOnly = (catalog.extra || []).some(
-          (extra) => extra?.name === "search" && Boolean(extra?.isRequired)
+          (extra) =>
+            String(extra?.name || "")
+              .trim()
+              .toLowerCase() === "search" && Boolean(extra?.isRequired)
         );
         if (isSearchOnly) return;
         const type = String(catalog.apiType || "").trim();
@@ -405,7 +409,9 @@ export const DiscoverScreen = {
           catalogId: catalog.id,
           catalogName: catalog.name || catalog.id,
           type,
-          extra: Array.isArray(catalog.extra) ? catalog.extra : []
+          extra: Array.isArray(catalog.extra) ? catalog.extra : [],
+          supportsSkip: catalogSupportsExtra(catalog, "skip"),
+          skipStep: catalogSkipStep(catalog)
         });
       });
     });
@@ -433,7 +439,12 @@ export const DiscoverScreen = {
   updateGenreOptions() {
     const selectedCatalog =
       this.catalogOptions.find((entry) => entry.key === this.selectedCatalogKey) || null;
-    const genreExtra = (selectedCatalog?.extra || []).find((extra) => extra?.name === "genre");
+    const genreExtra = (selectedCatalog?.extra || []).find(
+      (extra) =>
+        String(extra?.name || "")
+          .trim()
+          .toLowerCase() === "genre"
+    );
     const genres = Array.isArray(genreExtra?.options) ? genreExtra.options.filter(Boolean) : [];
     this.genreOptions = ["Default", ...genres];
     if (!this.genreOptions.includes(this.selectedGenre)) {
@@ -589,8 +600,9 @@ export const DiscoverScreen = {
       catalogName: selectedCatalog.catalogName,
       type: selectedCatalog.type,
       skip,
+      skipStep: selectedCatalog.skipStep,
       extraArgs,
-      supportsSkip: true
+      supportsSkip: selectedCatalog.supportsSkip !== false
     });
 
     if (token !== this.loadToken) return;
@@ -614,7 +626,8 @@ export const DiscoverScreen = {
     } else if (!this.items.length) {
       this.items = [];
     }
-    if (incoming.length) {
+    const reportedNextSkip = Number(result?.data?.nextSkip);
+    if (incoming.length || (selectedCatalog.supportsSkip !== false && result?.data?.hasMore)) {
       const seen = new Set(this.items.map((item) => item.id));
       incoming.forEach((item) => {
         if (!item?.id || seen.has(item.id)) {
@@ -624,13 +637,12 @@ export const DiscoverScreen = {
         this.items.push(item);
         addedCount += 1;
       });
-      const reportedNextSkip = Number(result?.data?.nextSkip);
       this.nextSkip =
         Number.isFinite(reportedNextSkip) && reportedNextSkip > skip
           ? Math.trunc(reportedNextSkip)
-          : skip + incoming.length;
+          : skip + (incoming.length || selectedCatalog.skipStep || 100);
     }
-    this.hasMore = incoming.length > 0;
+    this.hasMore = selectedCatalog.supportsSkip !== false && Boolean(result?.data?.hasMore);
     this.loading = false;
     if (!this.lastFocusedKey && this.items[0]?.id) {
       this.lastFocusedKey = `item:${this.items[0].id}`;

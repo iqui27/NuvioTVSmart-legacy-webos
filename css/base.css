@@ -32,6 +32,11 @@
   --tv-safe-gutter: clamp(28px, 3vw, 56px);
   --tv-safe-gutter-wide: 40px;
   --tv-safe-gutter-wide: clamp(32px, 3.6vw, 72px);
+  /* Upstream usa este token no hero de entidade da Tizen sem nunca defini-lo,
+     e uma custom property sem valor invalida a declaracao inteira. O valor
+     pretendido e a mesma calha larga do hero. */
+  --tmdb-entity-safe-x: 48px;
+  --tmdb-entity-safe-x: clamp(32px, 3.6vw, 72px);
   --tv-card-radius: 16px;
   --tv-card-radius: clamp(14px, 1.1vw, 22px);
   --tv-card-gap: 14px;

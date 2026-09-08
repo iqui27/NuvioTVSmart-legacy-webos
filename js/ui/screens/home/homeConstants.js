@@ -35,6 +35,14 @@ export const HOME_INITIAL_CATALOG_LOAD = 10;
 export const HOME_MAX_ITEMS_PER_ROW_DEFAULT = 15;
 export const HOME_MAX_ITEMS_PER_ROW_CONSTRAINED = 10;
 export const HOME_MAX_ITEMS_PER_ROW_LEGACY_TV = 8;
+// Android keeps up to 24 items in non-Modern catalog rows before reserving
+// the See All slot. Runtime-specific lower limits remain intentional below.
+export const HOME_MAX_ITEMS_PER_ROW_CLASSIC = 24;
+// Android GridHomeContent receives a safe upper bound from the pipeline and
+// trims it again using the actual number of adaptive columns.
+export const HOME_GRID_SAFE_MAX_COLUMNS = 8;
+export const HOME_GRID_DEFAULT_ROW_COUNT = 3;
+export const HOME_GRID_COMPACT_ROW_COUNT = 2;
 export const HOME_LOADING_ROW_ITEMS_DEFAULT = 10;
 export const HOME_LOADING_ROW_ITEMS_CONSTRAINED = 8;
 export const HOME_LOADING_ROW_ITEMS_LEGACY_TV = 6;
@@ -66,3 +74,25 @@ export function isHomePerfDebugEnabled() {
 export const HOME_MAX_ROWS_DEFAULT = 40;
 export const HOME_MAX_ROWS_CONSTRAINED = 24;
 export const HOME_MAX_ROWS_LEGACY_TV = 16;
+
+// Hidratacao de imagem na TV legada (ver scheduleHomeLazyImageHydration e
+// hydrateHomeLazyImages em homeScreen.js).
+//
+// Cada tecla agendava um rAF de hidratacao, entao uma descida de 12 toques
+// disparava 12 rajadas de decode DURANTE a navegacao. O fast-scroll ja suprimia
+// isso, mas so existe com a tecla mantida pressionada - toques discretos
+// passavam por fora. Estas constantes fecham esse furo.
+//
+// 180ms e o intervalo entre teclas de quem esta navegando de verdade; abaixo
+// disso o debounce nao junta nada, acima o poster demora a aparecer depois que
+// o dedo para. A fileira FOCADA nunca entra no debounce: ela hidrata no rAF
+// como antes, senao o cartao sob o foco fica cinza numa descida rapida, que e
+// regressao visivel e nao otimizacao.
+export const HOME_LAZY_HYDRATION_DEBOUNCE_MS = 180;
+
+// Teto de `src` atribuidos por quadro. Um lote de assentamento pode ter 8-11
+// imagens e cada decode custa ~41ms neste SoC: 8 x 41 = 328ms num unico quadro,
+// que e o pior quadro medido. Com 2 por quadro sao ~82ms, ainda acima de 16ms
+// (decodificar 375k pixels em 16ms nao existe neste hardware) mas fora da faixa
+// que o usuario le como travada; a fila esvazia em ~5 quadros.
+export const HOME_LAZY_HYDRATION_MAX_PER_FRAME = 2;

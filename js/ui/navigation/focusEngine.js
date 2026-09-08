@@ -122,6 +122,11 @@ export const FocusEngine = {
       return;
     }
 
+    if (hasActiveModal()) {
+      Router.suppressNextPopstate?.();
+      return;
+    }
+
     Router.back();
   },
 

@@ -10,7 +10,7 @@ import { ProfileManager } from "./profileManager.js";
 import {
   buildCatalogDisableKey,
   buildCatalogOrderKey,
-  catalogRequiresExtras
+  catalogShouldShowOnHome
 } from "../addons/homeCatalogs.js";
 import { isHomePerfDebugEnabled } from "../../ui/screens/home/homeConstants.js";
 import { getSyncBackoffRemainingMs, isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
@@ -238,7 +238,7 @@ function buildCatalogEntries(addons = []) {
   const seenKeys = new Set();
   (addons || []).forEach((addon) => {
     (addon.catalogs || [])
-      .filter((catalog) => !catalogRequiresExtras(catalog))
+      .filter((catalog) => catalogShouldShowOnHome(catalog))
       .forEach((catalog) => {
         const key = buildCatalogOrderKey(addon.id, catalog.apiType, catalog.id);
         if (seenKeys.has(key)) {

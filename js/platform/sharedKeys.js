@@ -20,7 +20,9 @@ function getKeyCodeFromName(keyName) {
     dpad_center: 13,
     center: 13,
     back: 10009,
-    return: 10009,
+    // Samsung TV reports the remote Enter/OK key as keyName "Return".
+    // The actual Back key is exposed as Back/XF86Back (keyCode 10009).
+    return: 13,
     mediaplaypause: 10252,
     mediaplay: 415,
     mediapause: 19,
@@ -141,7 +143,7 @@ export function isBackEvent(event, backCodes = [], normalizedCode = null) {
     return false;
   }
 
-  if (keyNameLower === "back" || keyNameLower === "return") {
+  if (keyNameLower === "back") {
     return true;
   }
 

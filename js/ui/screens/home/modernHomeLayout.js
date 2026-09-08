@@ -332,6 +332,7 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
 
   const rowKey = getHomeRowKey(rowData);
   const seeAllId = `${rowData.addonId || "addon"}_${rowData.catalogId || "catalog"}_${rowData.type || "movie"}`;
+  const catalogResultData = rowData?.result?.data || {};
   const seeAllEntry =
     !isLoading && !isCollectionRow
       ? {
@@ -345,7 +346,13 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
           // Sem isto o "ver todos" recomecava a paginacao do zero e repetia a
           // primeira pagina. Veio do upstream (d51f350) e faltava no nosso
           // seeAllEntry, que extraiu este objeto para ca.
-          initialNextSkip: Number(rowData?.result?.data?.nextSkip || 0)
+          initialNextSkip: Number(catalogResultData.nextSkip || 0),
+          // Contrato de paginacao por skip, novo no 1.0.2. catalogSeeAllScreen
+          // le os tres para decidir se pede mais paginas e de quanto em quanto;
+          // sem eles a tela "ver todos" para na primeira pagina.
+          initialHasMore: Boolean(catalogResultData.hasMore),
+          supportsSkip: rowData.supportsSkip !== false && catalogResultData.supportsSkip !== false,
+          skipStep: Number(rowData.skipStep || catalogResultData.skipStep || 100)
         }
       : null;
 
@@ -364,23 +371,22 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
     typeof shouldDeferRowImages === "function"
       ? shouldDeferRowImages(rowIndex, rowKey, focusedRowKey)
       : false;
-  const cardsMarkup = visibleItems
-    .map((item, itemIndex) =>
-      createPosterCardMarkup(
-        item,
-        rowIndex,
-        itemIndex,
-        rowData.type,
-        rowData,
-        showPosterLabels,
-        "modern",
-        expandFocusedPoster && focusedRowKey === rowKey && focusedItemIndex === itemIndex,
-        preferLandscapePosters,
-        deferRowImages,
-        watchedTitleIds
-      )
+  const cardMarkups = visibleItems.map((item, itemIndex) =>
+    createPosterCardMarkup(
+      item,
+      rowIndex,
+      itemIndex,
+      rowData.type,
+      rowData,
+      showPosterLabels,
+      "modern",
+      expandFocusedPoster && focusedRowKey === rowKey && focusedItemIndex === itemIndex,
+      preferLandscapePosters,
+      deferRowImages,
+      watchedTitleIds
     )
-    .join("");
+  );
+  const cardsMarkup = cardMarkups.join("");
 
   // Presentational row identity: kind accents + chart numbering. Derived from
   // rowData only, so the full render and the keyed reconciler produce the same
@@ -398,22 +404,60 @@ export function renderModernRowSection(rowData, rowIndex, options = {}) {
       ? createSeeAllCardMarkup(seeAllId, rowData, visibleItems.length, rowIndex)
       : "";
 
-  return {
-    rowKey,
-    seeAllId,
-    seeAllEntry,
-    markup: `
+  // Split into shell + cards so the reconciler can tell "this row's chrome is
+  // identical, only its cards moved" from "this is a different row". `markup` is
+  // still the exact concatenation the full render used to emit as one template
+  // literal - the byte-identical contract above depends on it staying so.
+  const shellPrefix = `
       <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}"${rowKind ? ` data-row-kind="${escapeHtml(rowKind)}"` : ""}${rowRanked ? ` data-row-ranked="true"` : ""}>
         <div class="home-row-head">
           <h2 class="home-row-title">${escapeHtml(rowTitle)}</h2>
           ${eyebrowLabel ? `<div class="home-row-eyebrow" aria-hidden="true">${escapeHtml(eyebrowLabel)}</div>` : ""}
         </div>
         <div class="home-track" data-track-row-key="${escapeHtml(rowKey)}">
-          ${cardsMarkup}${seeAllMarkup}
+          `;
+  const shellSuffix = `
         </div>
       </section>
-    `
+    `;
+
+  return {
+    rowKey,
+    seeAllId,
+    seeAllEntry,
+    shell: `${shellPrefix}\u0000${shellSuffix}`,
+    cards: buildKeyedCards(cardMarkups, seeAllMarkup),
+    markup: `${shellPrefix}${cardsMarkup}${seeAllMarkup}${shellSuffix}`
   };
+}
+
+const CARD_ITEM_ID_PATTERN = /\sdata-item-id="([^"]*)"/;
+
+/**
+ * One entry per card in track order, each with a key stable across renders.
+ *
+ * The key is read back out of the generated markup rather than derived from the
+ * item: the card's identity as the DOM knows it IS `data-item-id`, and
+ * recomputing it here would mean duplicating normalizeCatalogItem's fallbacks
+ * and drifting from them later. Items with no id, and repeats of an id already
+ * used in this row, fall back to their position - two cards sharing one key
+ * would make the diff match the wrong node and swap two posters.
+ */
+function buildKeyedCards(cardMarkups = [], seeAllMarkup = "") {
+  const seen = new Set();
+  const cards = cardMarkups.map((markup, index) => {
+    const matched = CARD_ITEM_ID_PATTERN.exec(markup);
+    const itemId = matched ? String(matched[1] || "").trim() : "";
+    const key = itemId && !seen.has(itemId) ? itemId : `@${index}`;
+    seen.add(key);
+    return { key, markup };
+  });
+  if (seeAllMarkup) {
+    // The door is not an item and has no id, but it is always last, so a fixed
+    // key keeps it out of the item keyspace and lets it be reused in place.
+    cards.push({ key: "@seeAll", markup: seeAllMarkup });
+  }
+  return cards;
 }
 
 /**
