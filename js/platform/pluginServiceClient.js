@@ -185,8 +185,7 @@ async function runLifecycleCheck(generation) {
 
     try {
       // Only the confirmed consecutive-failure path is allowed to ask Tizen
-      // to launch the service. The initial bootstrap remains strict and uses
-      // ensureReady() directly.
+      // to launch the service after the initial optional probe has failed.
       const health = await PluginServiceClient.ensureReady({ force: true });
       if (generation !== lifecycleMonitorGeneration) {
         return { status: "stopped", health };
@@ -344,11 +343,12 @@ export const PluginServiceClient = {
       };
       // Start supervising before the first health check. If a cold TV boot
       // misses the initial startup window, later ticks must still retry while
-      // the UI remains blocked on the initial promise.
+      // the UI continues booting independently.
       lifecycleMonitorTimer = setInterval(runWatchdog, SERVICE_WATCHDOG_INTERVAL_MS);
       lifecycleMonitorStartPromise = (async () => {
         // The platform start call is only an acknowledgement. The initial
-        // health check is the hard startup barrier for the whole TV app.
+        // health check is intentionally asynchronous for the optional service;
+        // callers may await this promise when they explicitly need readiness.
         const health = await this.ensureReady({ force: true });
         if (generation !== lifecycleMonitorGeneration) {
           return { status: "stopped", health };

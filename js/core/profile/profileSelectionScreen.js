@@ -2508,20 +2508,6 @@ export const ProfileSelectionScreen = {
       marcar("MemberAccessRepository.getAccess");
       ThemeManager.apply({ enforceAccess: true, access: memberAccess });
       I18n.apply();
-      marcar("ThemeManager.apply+I18n.apply");
-      // Upstream awaits this here, as the last gate before entering the
-      // experience. LOCAL DIVERGENCE: started, not awaited.
-      //
-      // The coordinator returns { status: "skipped" } for browsers and for
-      // Tizen sets without plugin support, but webOS is NOT skipped -- it runs
-      // a real HTTP health check against the packaged service, whose request
-      // timeout is 30 s. Awaiting it puts that worst case directly in front of
-      // the first painted screen after "Who's watching?", which is the exact
-      // shape of the 7.1 s startup pull already removed from this path. The
-      // readiness barrier that actually protects plugin data is the awaited
-      // PluginSyncService.pull at the head of the sync cycle, and that one is
-      // off the paint path.
-      void StartupSyncService.ensurePluginServiceReady().catch(() => {});
       const experienceRoute = await resolveExperienceRoute(profileId);
       marcar("resolveExperienceRoute");
       await Router.navigate(

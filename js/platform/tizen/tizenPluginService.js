@@ -5,10 +5,18 @@ const LOCAL_BASE_URLS = ["http://127.0.0.1:2711", "http://localhost:2711"];
 const START_TIMEOUT_MS = 12000;
 const PROBE_TIMEOUT_MS = 2500;
 const SERVICE_START_CALL_TIMEOUT_MS = 4000;
+const TIZEN_DEFAULT_OPERATION = "http://tizen.org/appcontrol/operation/default";
 const PLUGIN_SERVICE_NAME = "nuvio-plugin-network";
 const PLUGIN_PROTOCOL_VERSION = 1;
 const STARTUP_DIAGNOSTIC_EVENTS = new Set([
   "ensure begin",
+  "launcher attempts selected",
+  "launcher attempt begin",
+  "launcher acknowledged",
+  "launcher attempt failed",
+  "startup sequence failed",
+  "application-control start call",
+  "application launch call",
   "wrt startService call",
   "startService acknowledged",
   "startService failed",
@@ -124,6 +132,64 @@ function getServiceId() {
   }
 }
 
+function callbackCall(fn, args = []) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const success = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const failure = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    try {
+      const result = fn(...args, success, failure);
+      if (!settled && result !== undefined) success(result);
+    } catch (error) {
+      failure(error);
+    }
+  });
+}
+
+async function startWithApplicationControl(serviceId) {
+  const application = globalThis.tizen?.application;
+  const ApplicationControl = globalThis.tizen?.ApplicationControl;
+  if (typeof application?.launchAppControl !== "function") {
+    diagnostic("application-control API unavailable", {
+      serviceId,
+      launchAppControl: typeof application?.launchAppControl,
+      applicationControl: typeof ApplicationControl
+    });
+    throw new Error("Tizen application control API unavailable");
+  }
+  if (typeof ApplicationControl !== "function") {
+    diagnostic("application-control constructor unavailable", { serviceId });
+    throw new Error("Tizen ApplicationControl API unavailable");
+  }
+  diagnostic("application-control start call", {
+    serviceId,
+    operation: TIZEN_DEFAULT_OPERATION
+  });
+  const control = new ApplicationControl(TIZEN_DEFAULT_OPERATION);
+  return callbackCall(application.launchAppControl.bind(application), [control, serviceId]);
+}
+
+async function startWithApplication(serviceId) {
+  const application = globalThis.tizen?.application;
+  if (typeof application?.launch !== "function") {
+    diagnostic("application launch API unavailable", {
+      serviceId,
+      launch: typeof application?.launch
+    });
+    throw new Error("Tizen application launch API unavailable");
+  }
+  diagnostic("application launch call", { serviceId });
+  return callbackCall(application.launch.bind(application), [serviceId]);
+}
+
 async function startWithWrtService(serviceId) {
   const service = globalThis.__NUVIO_TIZEN_WRT_SERVICE__;
   if (!service || typeof service.startService !== "function") {
@@ -134,31 +200,76 @@ async function startWithWrtService(serviceId) {
   return service.startService.call(service, serviceId);
 }
 
-async function requestServiceStart(serviceId) {
-  const method = "wrt-service";
-  diagnostic("startup sequence begin", { serviceId, method });
-  try {
-    const startResult = await withTimeout(
-      startWithWrtService(serviceId),
-      SERVICE_START_CALL_TIMEOUT_MS,
-      `${method} service start call timed out`
-    );
-    diagnostic("startService acknowledged", {
-      serviceId,
-      method,
-      ...resultSummary(startResult)
-    });
-    const reachable = await waitForBaseUrl(START_TIMEOUT_MS);
-    return { method, reachable };
-  } catch (error) {
-    diagnostic("startService failed", {
-      serviceId,
-      method,
-      error: diagnosticError(error)
-    });
-    diagnostic("startup sequence failed", { serviceId, method });
-    throw error;
+function getStartAttempts(serviceId, webServiceSupported) {
+  const wrtAttempt = {
+    method: "wrt-service",
+    start: () => startWithWrtService(serviceId)
+  };
+  const applicationLaunchAttempt = {
+    method: "tizen-application-launch",
+    start: () => startWithApplication(serviceId)
+  };
+  const applicationControlAttempt = {
+    method: "tizen-application-control-default",
+    start: () => startWithApplicationControl(serviceId)
+  };
+
+  // A false web.service capability is seen on TVs where the WRT bridge is
+  // unavailable and application.launch is the compatible path. Keep that
+  // fallback first and avoid launchAppControl, which can disturb the
+  // foreground app on those firmwares. If WRT is available despite the
+  // capability value, it remains the preferred path.
+  const attempts =
+    webServiceSupported === false
+      ? [wrtAttempt, applicationLaunchAttempt]
+      : [wrtAttempt, applicationControlAttempt, applicationLaunchAttempt];
+  diagnostic("launcher attempts selected", {
+    serviceId,
+    webServiceSupported,
+    methods: attempts.map((attempt) => attempt.method)
+  });
+  return attempts;
+}
+
+async function requestServiceStart(serviceId, webServiceSupported = null) {
+  const errors = [];
+  const attempts = getStartAttempts(serviceId, webServiceSupported);
+  diagnostic("startup sequence begin", {
+    serviceId,
+    webServiceSupported,
+    methods: attempts.map((attempt) => attempt.method)
+  });
+
+  for (const attempt of attempts) {
+    diagnostic("launcher attempt begin", { serviceId, method: attempt.method });
+    try {
+      const startResult = await withTimeout(
+        attempt.start(),
+        SERVICE_START_CALL_TIMEOUT_MS,
+        `${attempt.method} service start call timed out`
+      );
+      diagnostic("launcher acknowledged", {
+        serviceId,
+        method: attempt.method,
+        ...resultSummary(startResult)
+      });
+      const reachable = await waitForBaseUrl(START_TIMEOUT_MS);
+      return { method: attempt.method, reachable };
+    } catch (error) {
+      const message = `${serviceId} ${attempt.method} start failed: ${String(
+        error?.message || error
+      )}`;
+      errors.push(message);
+      diagnostic("launcher attempt failed", {
+        serviceId,
+        method: attempt.method,
+        error: diagnosticError(error)
+      });
+    }
   }
+
+  diagnostic("startup sequence failed", { serviceId, errors });
+  throw new Error(errors.join("; ") || `${serviceId} service start failed`);
 }
 
 async function requestJson(url, options = {}, timeoutMs = PROBE_TIMEOUT_MS) {
@@ -326,7 +437,10 @@ export const TizenPluginService = {
           if (!serviceId) {
             throw new Error("Tizen plugin service id is unavailable");
           }
-          const startResult = await requestServiceStart(serviceId);
+          const startResult = await requestServiceStart(
+            serviceId,
+            capabilities.webServiceSupported
+          );
           const reachable = startResult.reachable;
           diagnostic("explicit startup success", {
             serviceId,
