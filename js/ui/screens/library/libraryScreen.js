@@ -241,12 +241,21 @@ export const LibraryScreen = {
   async mount() {
     this.container = document.getElementById("library");
     ScreenUtils.show(this.container);
+    const sidebarProfilePromise = getSidebarProfileState().catch((error) => {
+      console.warn("Library sidebar profile failed to load", error);
+      return null;
+    });
     const controller = new LibraryController((state, change) =>
       this.handleControllerChange(state, change)
     );
     this.controller = controller;
     this.libraryRouteEnterPending = true;
-    this.sidebarProfile = await getSidebarProfileState();
+    try {
+      this.sidebarProfile = await getSidebarProfileState({ cacheOnly: true });
+    } catch (error) {
+      console.warn("Library cached sidebar profile failed to load", error);
+      this.sidebarProfile = null;
+    }
     this.layoutPrefs = LayoutPreferences.get();
     this.sidebarExpanded = false;
     this.pillIconOnly = false;
@@ -271,11 +280,29 @@ export const LibraryScreen = {
 
     this.render();
     this.bindEvents();
-    await controller.init();
-    if (this.controller !== controller || Router.getCurrent() !== "library") {
-      return;
-    }
-    controller.closePicker();
+
+    // Android composes the Library surface before repository and watched-state
+    // IO completes. The controller keeps its generation guards, so it can
+    // hydrate and repaint without holding route completion or D-pad input.
+    void controller
+      .init()
+      .then(() => {
+        if (this.controller === controller && Router.getCurrent() === "library") {
+          controller.closePicker();
+        }
+      })
+      .catch((error) => {
+        if (this.controller === controller && Router.getCurrent() === "library") {
+          console.warn("Library initial load failed", error);
+        }
+      });
+    void sidebarProfilePromise.then((profile) => {
+      if (profile && this.controller === controller && Router.getCurrent() === "library") {
+        // Profile/avatar data is cosmetic. Keep the current library DOM and
+        // focused item stable; a later render will consume the refreshed value.
+        this.sidebarProfile = profile;
+      }
+    });
   },
 
   bindEvents() {
@@ -364,6 +391,11 @@ export const LibraryScreen = {
       </div>
     `;
     this.libraryRouteEnterPending = false;
+    bindRootSidebarEvents(this.container, {
+      currentRoute: "library",
+      onSelectedAction: () => this.focusMainNode(),
+      onExpandSidebar: () => this.focusSidebarNode()
+    });
   },
 
   renderSidebar() {

@@ -35,8 +35,6 @@ import { metaRepository } from "../../../data/repository/metaRepository.js";
 import { mdbListRepository } from "../../../data/repository/mdbListRepository.js";
 import { ProfileManager } from "../../../core/profile/profileManager.js";
 import { StartupSyncService } from "../../../core/profile/startupSyncService.js";
-import { AvatarRepository } from "../../../data/remote/supabase/avatarRepository.js";
-import { MemberAccessRepository } from "../../../data/remote/supabase/memberAccessRepository.js";
 import { Platform } from "../../../platform/index.js";
 import { WatchProgressSource } from "../../../data/local/traktSettingsStore.js";
 import {
@@ -480,41 +478,6 @@ function getDirectionFromKeyCode(keyCode) {
     default:
       return null;
   }
-}
-
-async function getLocalSidebarProfileState({ cacheOnly = false } = {}) {
-  const activeProfileId = String(ProfileManager.getActiveProfileId() || "");
-  const profiles = await ProfileManager.getProfiles();
-  const memberAccess = cacheOnly
-    ? MemberAccessRepository.getCachedAccess()
-    : await MemberAccessRepository.getAccess().catch(() => null);
-  const hasMemberAvatarAccess = MemberAccessRepository.hasEntitlement(
-    memberAccess,
-    "PROFILE_AVATARS"
-  );
-  const avatarCatalog = cacheOnly
-    ? AvatarRepository.getCachedAvatarCatalog(hasMemberAvatarAccess)
-    : await AvatarRepository.getAvatarCatalog(hasMemberAvatarAccess).catch(() => []);
-  const activeProfile =
-    profiles.find(
-      (profile) => String(profile.id || profile.profileIndex || "1") === activeProfileId
-    ) ||
-    profiles[0] ||
-    null;
-  const name =
-    String(activeProfile?.name || t("sidebar.profileFallback")).trim() ||
-    t("sidebar.profileFallback");
-  const avatarUrl =
-    activeProfile?.avatarUrl ||
-    AvatarRepository.getAvatarImageUrl(activeProfile?.avatarId, avatarCatalog);
-
-  return {
-    activeProfileName: name,
-    activeProfileInitial: name ? name.charAt(0).toUpperCase() : "P",
-    activeProfileColorHex: String(activeProfile?.avatarColorHex || "#1E88E5"),
-    activeProfileAvatarUrl: String(avatarUrl || ""),
-    showProfileSelector: Boolean(activeProfile)
-  };
 }
 
 function renderHeroBackdropImage(display) {
@@ -4416,6 +4379,12 @@ export const HomeScreen = {
     if (Platform.isWebOS() && this.hasCollectionHomeRows()) {
       return 4;
     }
+    // Modern TV generations still need a bounded first batch. A large
+    // account can expose many catalog rows; resolving all descriptors
+    // together creates one large burst of Home DOM work.
+    if (Platform.isWebOS() || Platform.isTizen()) {
+      return Math.min(HOME_INITIAL_CATALOG_LOAD, 6);
+    }
     return HOME_INITIAL_CATALOG_LOAD;
   },
 
@@ -4425,6 +4394,9 @@ export const HomeScreen = {
     }
     if (Platform.isWebOS() && this.hasCollectionHomeRows()) {
       return 4;
+    }
+    if (Platform.isWebOS() || Platform.isTizen()) {
+      return 8;
     }
     return 0;
   },
@@ -7510,9 +7482,12 @@ export const HomeScreen = {
     const root = this.homeTruncationScope || this.container;
     this.homeTruncationScope = null;
     this.applyModernHeroDescriptionBounds(root);
-    const truncationSelector = this.isPerformanceConstrained()
-      ? ".home-hero-description"
-      : ".home-hero-description, .home-poster-title, .home-poster-subtitle";
+    // Modern Home hides .home-poster-copy; classic/grid still render those
+    // labels and therefore keep the measured truncation path.
+    const truncationSelector =
+      this.layoutMode === "modern"
+        ? ".home-hero-description"
+        : ".home-hero-description, .home-poster-title, .home-poster-subtitle";
     const nodes = root.querySelectorAll(truncationSelector);
     nodes.forEach((node) => {
       if (!(node instanceof HTMLElement)) {
@@ -9376,23 +9351,41 @@ export const HomeScreen = {
     this.heroItem = null;
     // Paint from local profile/member/avatar state first. Remote membership and
     // avatar refresh is already started by loadData after this first render.
-    this.sidebarProfile = await getLocalSidebarProfileState({ cacheOnly: true }).catch(() => null);
+    this.sidebarProfile = await getSidebarProfileState({ cacheOnly: true }).catch(() => null);
     this.render();
-    await this.loadData({ background: false });
-    if (this.homeBackgroundRefreshPending) {
-      void this.requestHomeBackgroundRefresh({
-        preserveReturnState: true,
-        reason: this.homeBackgroundRefreshReason || "post-initial-load"
-      }).catch((error) => {
-        console.warn("Home deferred background refresh failed", error);
+
+    // Android composes Home before catalog/progress IO completes. The local
+    // snapshot above is the first paint; keep the route and remote navigation
+    // responsive while the existing progressive loader fills the rows.
+    const loadToken = this.homeLoadToken;
+    void this.loadData({ background: false })
+      .then(() => {
+        if (loadToken !== this.homeLoadToken || Router.getCurrent() !== "home") {
+          return;
+        }
+        if (this.homeBackgroundRefreshPending) {
+          void this.requestHomeBackgroundRefresh({
+            preserveReturnState: true,
+            reason: this.homeBackgroundRefreshReason || "post-initial-load"
+          }).catch((error) => {
+            console.warn("Home deferred background refresh failed", error);
+          });
+        }
+        logHomePerf("mount", {
+          ms: Number((homePerfNow() - mountStart).toFixed(2)),
+          route: "home",
+          background: false,
+          layoutMode: String(this.layoutMode || "")
+        });
+      })
+      .catch((error) => {
+        if (loadToken !== this.homeLoadToken || Router.getCurrent() !== "home") {
+          return;
+        }
+        this.isInitialHomeLoading = false;
+        console.error("Home background load failed", error);
+        this.requestBackgroundRender();
       });
-    }
-    logHomePerf("mount", {
-      ms: Number((homePerfNow() - mountStart).toFixed(2)),
-      route: "home",
-      background: false,
-      layoutMode: String(this.layoutMode || "")
-    });
   },
 
   async loadData({

@@ -2700,4 +2700,6 @@
     <string name="plugin_security_note">O código do plugin é executado em um Worker limitado. O acesso à rede é mediado pelo serviço de TV incluído no pacote, com destinos HTTP(S) públicos, limites de tamanho, tempos limite e cancelamento, sem acesso ao armazenamento da TV ou às APIs nativas.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Gerenciar fornecedores Nuvio JS executáveis e metadados externos preservados</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}}% visto</string>
+    <string name="player_post_play_play_manually">Reproduzir manualmente</string>
 </resources>

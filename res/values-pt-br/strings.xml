@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">Marcar como não assistido</string>
     <string name="hero_play_trailer">Assistir Trailer</string>
     <string name="hero_press_back_trailer">Pressione voltar para sair do trailer</string>
+    <string name="hero_synopsis_read_more">Ler mais</string>
+    <string name="hero_synopsis_dismiss_hint">Aperte voltar para fechar</string>
     <string name="cd_rating">Classificação</string>
     <string name="episodes_season">Temporada %1$d</string>
     <string name="episodes_specials">Especiais</string>
@@ -2787,4 +2789,16 @@
     <string name="plugin_security_note">O código do plugin é executado em um Worker limitado. O acesso à rede é mediado pelo serviço de TV incluído no pacote, com destinos HTTP(S) públicos, limites de tamanho, tempos limite e cancelamento, sem acesso ao armazenamento da TV ou às APIs nativas.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Gerenciar provedores Nuvio JS executáveis e metadados externos preservados</string>
+    <string name="autoplay_post_play_recommendations">Recomendações após a assistir</string>
+    <string name="autoplay_post_play_recommendations_sub">Recomendar filmes e séries depois que assistir.</string>
+    <string name="player_post_play_because">Porque você assistiu a %1$s</string>
+    <string name="player_post_play_recommended">Recomendado para você</string>
+    <string name="player_post_play_play">Assistir</string>
+    <string name="player_post_play_previous_recommendation">Recomendação anterior</string>
+    <string name="player_post_play_next_recommendation">Próxima recomendação</string>
+    <string name="player_post_play_return_to_player">Voltar para o player</string>
+    <string name="player_post_play_trailer_countdown">Trailer em %1$d</string>
+    <string name="player_post_play_trailer_playing">Reproduzindo trailer</string>
+    <string name="player_post_play_trailer">Trailer</string>
+    <string name="player_post_play_play_manually">Assistir manualmente</string>
 </resources>

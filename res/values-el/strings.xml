@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">Επισήμανση ως μη προβληθέν</string>
     <string name="hero_play_trailer">Αναπαραγωγή τρέιλερ</string>
     <string name="hero_press_back_trailer">Πατήστε πίσω για έξοδο από το τρέιλερ</string>
+    <string name="hero_synopsis_read_more">Περισσότερα</string>
+    <string name="hero_synopsis_dismiss_hint">Πατήστε πίσω για κλείσιμο</string>
     <string name="cd_rating">Βαθμολογία</string>
     <string name="episodes_season">Σεζόν %1$d</string>
     <string name="episodes_specials">Ειδικά</string>
@@ -2613,4 +2615,19 @@
     <string name="settings.plugins.openSubtitle">Διαχείριση εκτελέσιμων παρόχων Nuvio JS και διατηρημένων εξωτερικών μεταδεδομένων</string>
     <string name="settings.plugins.refreshRepository">Ανανέωση αποθετηρίου</string>
     <string name="settings.plugins.removeRepository">Αφαίρεση αποθετηρίου</string>
+    <string name="home.continueStatusWatchedPercent">Παρακολουθήθηκε {{percent}}%</string>
+    <string name="autoplay_post_play_recommendations">Προτάσεις μετά την αναπαραγωγή</string>
+    <string name="autoplay_post_play_recommendations_sub">Εμφάνιση προτάσεων κοντά στο τέλος ταινιών και σειρών.</string>
+    <string name="autoplay_post_play_movie_threshold">Χρονισμός προτάσεων ταινιών</string>
+    <string name="autoplay_post_play_movie_threshold_sub">Επιλέξτε πότε εμφανίζονται οι προτάσεις ταινιών. Τα επεισόδια ακολουθούν τη ρύθμιση κατωφλίου επόμενου επεισοδίου.</string>
+    <string name="player_post_play_because">Επειδή παρακολουθήσατε %1$s</string>
+    <string name="player_post_play_recommended">Προτάσεις για εσάς</string>
+    <string name="player_post_play_play">Αναπαραγωγή</string>
+    <string name="player_post_play_previous_recommendation">Προηγούμενη πρόταση</string>
+    <string name="player_post_play_next_recommendation">Επόμενη πρόταση</string>
+    <string name="player_post_play_return_to_player">Επιστροφή στην αναπαραγωγή</string>
+    <string name="player_post_play_trailer_countdown">Τρέιλερ σε %1$d δευτ.</string>
+    <string name="player_post_play_trailer_playing">Αναπαραγωγή τρέιλερ</string>
+    <string name="player_post_play_trailer">Τρέιλερ</string>
+    <string name="player_post_play_play_manually">Αναπαραγωγή χειροκίνητα</string>
 </resources>

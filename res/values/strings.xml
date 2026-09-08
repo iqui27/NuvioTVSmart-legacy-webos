@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">Mark as unwatched</string>
     <string name="hero_play_trailer">Play trailer</string>
     <string name="hero_press_back_trailer">Press back to exit trailer</string>
+    <string name="hero_synopsis_read_more">Read more</string>
+    <string name="hero_synopsis_dismiss_hint">Press back to close</string>
     <string name="cd_rating">Rating</string>
     <string name="episodes_season">Season %1$d</string>
     <string name="episodes_specials">Specials</string>
@@ -2900,4 +2902,19 @@
     <string name="player_error_tizen_p2p_unsupported">Torrent/P2P streaming is not supported on this TV.</string>
     <string name="player_tizen_mkv_subtitles_unavailable">Embedded MKV subtitles are not exposed by this TV's web player.</string>
     <string name="player_tizen_mkv_audio_unavailable">Embedded MKV audio tracks are not exposed by this TV's web player.</string>
+    <string name="autoplay_post_play_recommendations">Post-play Recommendations</string>
+    <string name="autoplay_post_play_recommendations_sub">Show recommendations near the end of movies and series.</string>
+    <string name="autoplay_post_play_movie_threshold">Movie Recommendation Timing</string>
+    <string name="autoplay_post_play_movie_threshold_sub">Choose when movie recommendations appear. Episodes follow the Next Episode Threshold setting.</string>
+    <string name="player_post_play_because">Because you watched %1$s</string>
+    <string name="player_post_play_recommended">Recommended for you</string>
+    <string name="player_post_play_play">Play</string>
+    <string name="player_post_play_manual_subtitle">Play</string>
+    <string name="player_post_play_previous_recommendation">Previous recommendation</string>
+    <string name="player_post_play_next_recommendation">Next recommendation</string>
+    <string name="player_post_play_return_to_player">Return to player</string>
+    <string name="player_post_play_trailer_countdown">Trailer in %1$d</string>
+    <string name="player_post_play_trailer_playing">Trailer playing</string>
+    <string name="player_post_play_trailer">Trailer</string>
+    <string name="player_post_play_play_manually">Play manually</string>
 </resources>

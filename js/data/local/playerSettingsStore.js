@@ -11,8 +11,14 @@ import {
 
 const KEY = "playerSettings";
 
+export const MIN_POST_PLAY_MOVIE_THRESHOLD_PERCENT = 80;
+export const MAX_POST_PLAY_MOVIE_THRESHOLD_PERCENT = 100;
+export const DEFAULT_POST_PLAY_MOVIE_THRESHOLD_PERCENT = 90;
+
 const DEFAULTS = {
   autoplayNextEpisode: false,
+  postPlayRecommendationsEnabled: true,
+  postPlayMovieThresholdPercent: DEFAULT_POST_PLAY_MOVIE_THRESHOLD_PERCENT,
   // Legacy Web-only switch. Subtitle startup is controlled by the preferred
   // language ("off" = Android "None") plus useForcedSubtitles.
   subtitlesEnabled: true,
@@ -94,6 +100,17 @@ const STREAM_AUTO_PLAY_TIMEOUT_VALUES = [
   STREAM_AUTO_PLAY_TIMEOUT_UNLIMITED
 ];
 const NEXT_EPISODE_THRESHOLD_MODES = ["PERCENTAGE", "MINUTES_BEFORE_END"];
+
+export function normalizePostPlayMovieThreshold(value) {
+  const threshold = Math.trunc(Number(value));
+  if (!Number.isFinite(threshold)) {
+    return DEFAULT_POST_PLAY_MOVIE_THRESHOLD_PERCENT;
+  }
+  return Math.min(
+    MAX_POST_PLAY_MOVIE_THRESHOLD_PERCENT,
+    Math.max(MIN_POST_PLAY_MOVIE_THRESHOLD_PERCENT, threshold)
+  );
+}
 
 function normalizeStreamAutoPlayMode(value) {
   const normalized = String(value || "")
@@ -262,6 +279,12 @@ export function normalizePlayerSettings(settings = {}) {
   return {
     ...DEFAULTS,
     ...persistentSettings,
+    postPlayRecommendationsEnabled: Boolean(
+      persistentSettings.postPlayRecommendationsEnabled ?? DEFAULTS.postPlayRecommendationsEnabled
+    ),
+    postPlayMovieThresholdPercent: normalizePostPlayMovieThreshold(
+      persistentSettings.postPlayMovieThresholdPercent
+    ),
     trailerAutoplay: persistentSettings.trailerAutoplay ?? DEFAULTS.trailerAutoplay,
     trailerDelaySeconds: Math.min(
       15,

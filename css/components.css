@@ -12700,7 +12700,8 @@ html.legacy-webos .debug-console-log-frame {
 }
 
 .player-html-subtitle-positioned {
-  transform: translateY(-50%) translateY(var(--player-subtitle-offset));
+  /* Author-positioned cues must keep their own vertical coordinate. */
+  transform: translateY(-50%);
 }
 
 .player-html-subtitle-positioned.player-html-subtitle-align-start {
@@ -15195,6 +15196,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   scroll-padding-bottom: 10px;
 }
 
+/* Android LazyColumn items keep their measured height. Do the same here so
+   legacy flex layouts expose real overflow instead of compressing cards until
+   the focus can move beyond the visible rail without scrolling. */
+.player-subtitle-rail > * {
+  flex: 0 0 auto;
+}
+
 .player-subtitle-rail::-webkit-scrollbar,
 .player-audio-track-list::-webkit-scrollbar {
   display: none;
@@ -15584,6 +15592,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   background: transparent;
   border-color: var(--player-focus-ring);
   color: var(--player-atv-text-primary);
+}
+
+.player-subtitle-modal .player-dialog-item.selected.focused {
+  border-color: var(--player-focus-ring);
 }
 
 .player-dialog-item.selected .player-dialog-item-main,
@@ -24812,4 +24824,906 @@ html.no-css-grid.no-flex-gap .player-audio-overlay-grid > * + * {
 
 html.no-css-grid.legacy-tizen .player-subtitle-overlay-grid {
   height: auto;
+}
+
+/* Android TV post-play recommendation overlay. The timings mirror the
+   Compose contract: 360/220ms visibility fades, 350ms backdrop changes,
+   600ms trailer layout changes, and a 420ms player-window transition. */
+.player-post-play-recommendation {
+  position: absolute;
+  inset: 0;
+  z-index: 34;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  background: #000;
+  transition: opacity 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#playerUiRoot.post-play-visible .player-post-play-recommendation {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#playerUiRoot.post-play-returning .player-post-play-recommendation,
+.player-post-play-recommendation.is-exiting {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 220ms;
+}
+
+.player-post-play-backdrop,
+.player-post-play-scrim,
+.player-post-play-trailer-media {
+  position: absolute;
+  inset: 0;
+}
+
+.player-post-play-backdrop {
+  z-index: 0;
+  background: #000;
+}
+
+.player-post-play-backdrop-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-backdrop-image.is-current {
+  opacity: 1;
+}
+
+.player-post-play-backdrop-image.is-entering {
+  opacity: 0;
+}
+
+.player-post-play-backdrop-image.is-entering.is-loaded {
+  opacity: 1;
+}
+
+.player-post-play-backdrop-image.is-previous {
+  z-index: 1;
+  opacity: 1;
+}
+
+.player-post-play-scrim {
+  z-index: 1;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.88) 0%,
+      rgba(0, 0, 0, 0.16) 54%,
+      rgba(0, 0, 0, 0.22) 100%
+    ),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.08) 0%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.82) 100%);
+  pointer-events: none;
+}
+
+html[dir="rtl"] .player-post-play-scrim {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.22) 0%,
+      rgba(0, 0, 0, 0.16) 46%,
+      rgba(0, 0, 0, 0.88) 100%
+    ),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.08) 0%, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.82) 100%);
+}
+
+.player-post-play-content {
+  position: absolute;
+  left: 56px;
+  bottom: 36px;
+  z-index: 2;
+  width: 52%;
+  overflow: visible;
+  color: #fff;
+  direction: ltr;
+}
+
+html[dir="rtl"] .player-post-play-content {
+  left: auto;
+  right: 56px;
+  direction: rtl;
+  text-align: right;
+}
+
+.player-post-play-summary {
+  opacity: 0;
+  transform: translateY(18px);
+  max-height: 0;
+  overflow: hidden;
+  transition:
+    opacity 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    max-height 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* AnimatedContent(contentKey = recommendation.id) in Android fades the
+   outgoing and incoming summary together with the 350ms motion token. The
+   old summary is kept as a non-interactive layer for that same cross-fade. */
+.player-post-play-summary-previous {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  bottom: auto;
+  z-index: 0;
+  max-height: 720px !important;
+  overflow: visible !important;
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  pointer-events: none;
+  transition: opacity 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-summary-previous.is-recommendation-exiting {
+  opacity: 0 !important;
+}
+
+.player-post-play-summary.is-recommendation-changing {
+  position: relative;
+  z-index: 1;
+  opacity: 0 !important;
+  transform: translateY(0) !important;
+  transition:
+    opacity 350ms cubic-bezier(0.4, 0, 0.2, 1),
+    max-height 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-summary.is-recommendation-changing.is-recommendation-visible {
+  opacity: 1 !important;
+}
+
+#playerUiRoot.post-play-visible .player-post-play-summary {
+  opacity: 1;
+  transform: translateY(0);
+  max-height: 720px;
+}
+
+#playerUiRoot.post-play-returning .player-post-play-summary {
+  opacity: 0;
+  transform: translateY(8px);
+  max-height: 720px;
+  transition-duration: 240ms;
+}
+
+.player-post-play-header {
+  margin-bottom: 16px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: clamp(22px, 1.46vw, 28px);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.player-post-play-header-block,
+.player-post-play-details-block {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    max-height 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#playerUiRoot.post-play-visible .player-post-play-header-block,
+#playerUiRoot.post-play-visible .player-post-play-details-block {
+  max-height: 520px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-header-block,
+#playerUiRoot.post-play-trailer .player-post-play-details-block {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(8px);
+  transition-duration: 240ms;
+}
+
+.player-post-play-identity {
+  min-height: 60px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+html[dir="rtl"] .player-post-play-identity {
+  justify-content: flex-end;
+}
+
+.player-post-play-identity-content {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  min-height: 60px;
+}
+
+.player-post-play-logo {
+  display: block;
+  width: auto;
+  height: 92px;
+  max-width: 76%;
+  object-fit: contain;
+  object-position: left bottom;
+  transition:
+    height 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    max-width 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-logo.is-loading {
+  opacity: 0;
+}
+
+.player-post-play-logo.is-loaded {
+  opacity: 1;
+}
+
+html[dir="rtl"] .player-post-play-logo {
+  object-position: right bottom;
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-logo {
+  height: 60px;
+  max-width: 48%;
+}
+
+.player-post-play-title-states {
+  position: relative;
+  width: 100%;
+  min-height: 60px;
+}
+
+.player-post-play-title-states[hidden],
+.player-post-play-logo[hidden] {
+  display: none !important;
+}
+
+.player-post-play-title-state {
+  position: relative;
+  transition: opacity 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-title-state--trailer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 240ms;
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-title-state--normal {
+  opacity: 0;
+  transition-duration: 240ms;
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-title-state--trailer {
+  opacity: 1;
+  transition-duration: 600ms;
+}
+
+.player-post-play-title {
+  margin: 0;
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: #fff;
+  font-size: clamp(42px, 3.2vw, 68px);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-title {
+  font-size: clamp(34px, 2.25vw, 48px);
+}
+
+.player-post-play-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: clamp(20px, 1.25vw, 24px);
+  line-height: 1.3;
+}
+
+.player-post-play-details,
+.player-post-play-standard-ratings {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.player-post-play-detail-separator {
+  color: rgba(255, 255, 255, 0.52);
+  white-space: pre;
+}
+
+.player-post-play-meta-separator,
+.player-post-play-rating-separator {
+  margin: 0 8px;
+  color: rgba(255, 255, 255, 0.52);
+  white-space: pre;
+}
+
+.player-post-play-mdblist-ratings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 14px;
+  font-size: clamp(18px, 1.1vw, 22px);
+}
+
+.player-post-play-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
+}
+
+.player-post-play-rating img {
+  display: block;
+  width: auto;
+  max-width: 52px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.player-post-play-standard-rating img[src*="imdb_logo_2016"] {
+  height: 30px;
+}
+
+.player-post-play-synopsis {
+  display: block;
+  width: 92%;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+  color: rgba(255, 255, 255, 0.82);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: clamp(20px, 1.35vw, 26px);
+  line-height: 1.42;
+  cursor: pointer;
+}
+
+.player-post-play-synopsis-text {
+  display: -webkit-box;
+  width: 100%;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.player-post-play-synopsis-read-more {
+  display: none;
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: clamp(18px, 1.1vw, 22px);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.player-post-play-synopsis.is-truncated .player-post-play-synopsis-read-more {
+  display: block;
+}
+
+html[dir="rtl"] .player-post-play-synopsis {
+  text-align: right;
+}
+
+.player-post-play-synopsis.focused,
+.player-post-play-synopsis:focus,
+.player-post-play-synopsis:focus-visible {
+  outline: 4px solid var(--player-focus-ring);
+  outline-offset: 6px;
+  border-radius: 4px;
+}
+
+.player-post-play-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px;
+  margin-top: 32px;
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    margin-top 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#playerUiRoot.post-play-visible .player-post-play-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-actions {
+  margin-top: 12px;
+}
+
+#playerUiRoot.post-play-returning .player-post-play-actions {
+  opacity: 0;
+  transform: translateY(8px);
+  transition-duration: 240ms;
+}
+
+.player-post-play-action {
+  min-width: 0;
+  min-height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 2px solid transparent;
+  border-radius: 32px;
+  color: #fff;
+  background: var(--player-background-card);
+  font: inherit;
+  font-size: clamp(20px, 1.25vw, 25px);
+  font-weight: 650;
+  line-height: 1.1;
+  cursor: pointer;
+  transition:
+    background-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-action-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.player-post-play-primary {
+  width: calc((100% - 12px) / 2);
+  flex: 0 1 auto;
+  /* Android TV's primary post-play action is the Material3 white/black
+     action, independent of the selected accent theme. */
+  color: #000;
+  border-color: #fff;
+  background: #fff;
+}
+
+.player-post-play-action.focused,
+.player-post-play-action:focus,
+.player-post-play-action:focus-visible {
+  outline: none;
+  color: var(--player-on-secondary);
+  border-color: var(--player-focus-ring);
+  background: var(--player-secondary);
+  box-shadow: 0 0 0 4px var(--player-focus-ring);
+}
+
+.player-post-play-primary.focused,
+.player-post-play-primary:focus,
+.player-post-play-primary:focus-visible {
+  color: #000;
+  border-color: #fff;
+  background: #fff;
+}
+
+.player-post-play-action:disabled {
+  opacity: 0.42;
+  cursor: default;
+  box-shadow: none;
+}
+
+.player-post-play-nav {
+  width: 48px;
+  flex: 0 0 48px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+  line-height: 0;
+}
+
+.player-post-play-nav-icon {
+  display: block;
+  width: 16px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.player-post-play-nav-icon-next {
+  transform: rotate(180deg);
+}
+
+html[dir="rtl"] .player-post-play-nav-icon-previous {
+  transform: rotate(180deg);
+}
+
+html[dir="rtl"] .player-post-play-nav-icon-next {
+  transform: none;
+}
+
+.player-post-play-actions.has-trailer .player-post-play-primary,
+.player-post-play-actions.has-trailer .player-post-play-trailer-button {
+  width: calc((100% - 12px) / 2);
+}
+
+.player-post-play-actions.has-navigation.has-trailer .player-post-play-primary,
+.player-post-play-actions.has-navigation.has-trailer .player-post-play-trailer-button {
+  /* 3 gaps + two 48px navigation circles. Keep the arithmetic expanded for
+     older Tizen CSS parsers that do not evaluate multiplication in calc(). */
+  width: calc((100% - 132px) / 2);
+}
+
+.player-post-play-actions.has-navigation:not(.has-trailer) .player-post-play-primary {
+  /* 2 gaps + two 48px navigation circles. */
+  width: min(calc((100% - 12px) / 2), calc(100% - 120px));
+}
+
+.player-post-play-trailer-slot {
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  margin-left: -12px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    flex-basis 350ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 350ms cubic-bezier(0.4, 0, 0.2, 1),
+    margin-left 350ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[dir="rtl"] .player-post-play-trailer-slot {
+  margin-right: -12px;
+  margin-left: 0;
+  transition-property: flex-basis, width, margin-right, opacity;
+}
+
+.player-post-play-trailer-slot.is-visible {
+  flex-basis: calc((100% - 12px) / 2);
+  width: calc((100% - 12px) / 2);
+  margin-left: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html[dir="rtl"] .player-post-play-trailer-slot.is-visible {
+  margin-right: 0;
+}
+
+.player-post-play-actions.has-navigation .player-post-play-trailer-slot.is-visible {
+  flex-basis: calc((100% - 132px) / 2);
+  width: calc((100% - 132px) / 2);
+}
+
+.player-post-play-trailer-slot .player-post-play-trailer-button {
+  width: 100%;
+  flex: 0 0 100%;
+}
+
+.player-post-play-trailer-label {
+  opacity: 1;
+  transition: opacity 140ms linear;
+}
+
+.player-post-play-trailer-label.is-changing {
+  opacity: 0;
+  transition-duration: 100ms;
+}
+
+.player-post-play-trailer-media {
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-player-window {
+  position: absolute;
+  top: 32px;
+  right: 32px;
+  z-index: 4;
+  width: 32%;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+  transition:
+    top 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    right 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    height 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-player-window.focused,
+.player-post-play-player-window:focus,
+.player-post-play-player-window:focus-visible {
+  outline: none;
+  border-color: var(--player-focus-ring);
+  box-shadow: 0 0 0 4px var(--player-focus-ring);
+}
+
+html[dir="rtl"] .player-post-play-player-window {
+  right: auto;
+  left: 32px;
+}
+
+#playerUiRoot.post-play-trailer .player-post-play-trailer-media {
+  opacity: 1;
+  transition-duration: 800ms;
+}
+
+.player-post-play-trailer-frame,
+.player-post-play-trailer-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  object-fit: cover;
+  background: #000;
+  opacity: 0;
+  transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-post-play-trailer-frame.is-ready,
+.player-post-play-trailer-video.is-ready {
+  opacity: 1;
+}
+
+.player-post-play-loading-content {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-post-play-loading-spinner {
+  width: 72px;
+  height: 72px;
+}
+
+.player-post-play-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.player-post-play-dialog {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 11;
+  width: min(680px, calc(100% - 2 * var(--tv-safe-gutter-wide)));
+  max-height: calc(100% - 2 * var(--tv-safe-gutter-wide));
+  overflow: auto;
+  padding: 40px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 22px;
+  color: #fff;
+  background: var(--player-background-elevated);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.52);
+  transform: translate(-50%, -50%);
+}
+
+.player-post-play-dialog h2 {
+  margin: 0;
+  font-size: clamp(30px, 2.1vw, 42px);
+  line-height: 1.14;
+}
+
+.player-post-play-dialog p {
+  margin: 18px 0 0;
+  color: var(--player-text-secondary);
+  font-size: clamp(20px, 1.25vw, 25px);
+  line-height: 1.4;
+}
+
+.player-post-play-dialog-actions {
+  display: flex;
+  gap: 16px;
+  margin-top: 32px;
+}
+
+/* Android SynopsisOverlay is a full-screen Dialog, not a centered card. Keep
+   its geometry and the TV D-pad scroll surface independent from the regular
+   NuvioDialog component used by the manual-play override. */
+.player-post-play-synopsis-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  box-sizing: border-box;
+  padding: 48px 96px;
+  color: #fff;
+  background: linear-gradient(135deg, #070707 0%, #101010 50%, #151515 100%);
+  pointer-events: auto;
+}
+
+.player-post-play-synopsis-title {
+  flex: 0 0 auto;
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: #fff;
+  font-size: clamp(38px, 2.5vw, 48px);
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-post-play-synopsis-scroll {
+  width: 78%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  outline: none;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.player-post-play-synopsis-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.player-post-play-synopsis-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+}
+
+.player-post-play-synopsis-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+}
+
+.player-post-play-synopsis-full-text {
+  width: 100%;
+  margin: 0;
+  padding-right: 32px;
+  box-sizing: border-box;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: clamp(28px, 1.7vw, 32px);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.player-post-play-synopsis-hint {
+  flex: 0 0 auto;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: clamp(22px, 1.25vw, 24px);
+  line-height: 1.4;
+}
+
+html[dir="rtl"] .player-post-play-synopsis-full-text {
+  padding-right: 0;
+  padding-left: 32px;
+}
+
+.player-post-play-manual-dialog .nuvio-dialog-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html:not(.tizen-tv)
+  #player.post-play-visible:not(.post-play-trailer):not(.post-play-trailer-consumed)
+  #videoPlayer {
+  top: 32px !important;
+  right: 32px !important;
+  bottom: auto !important;
+  left: auto !important;
+  width: 32% !important;
+  height: auto !important;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px !important;
+  object-fit: cover !important;
+  transition:
+    top 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    right 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    height 420ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-radius 420ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Once Android has consumed a trailer, the main playback surface stays
+   released/hidden until the post-play flow navigates away. */
+html:not(.tizen-tv) #player.post-play-trailer-consumed #videoPlayer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#player.post-play-trailer #videoPlayer {
+  opacity: 0;
+  transition: opacity 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html.tizen-tv #player.post-play-visible #videoPlayer,
+html.tizen-tv #player.post-play-visible .tizen-avplay-object {
+  top: 0;
+  right: auto;
+  bottom: auto;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  object-fit: fill;
+}
+
+#playerUiRoot.post-play-visible .player-controls-overlay,
+#playerUiRoot.post-play-visible .player-next-episode-card,
+#playerUiRoot.post-play-visible .player-loading-overlay,
+#playerUiRoot.post-play-visible .player-loading-spinner,
+#playerUiRoot.post-play-visible .player-skip-intro,
+#playerUiRoot.post-play-visible .player-pause-overlay {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 1100px) {
+  html:not(.tizen-tv)
+    #player.post-play-visible:not(.post-play-trailer):not(.post-play-trailer-consumed)
+    #videoPlayer {
+    width: 32% !important;
+    height: auto !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-post-play-recommendation,
+  .player-post-play-backdrop-image,
+  .player-post-play-summary,
+  .player-post-play-logo,
+  .player-post-play-title-state,
+  .player-post-play-actions,
+  .player-post-play-action,
+  .player-post-play-trailer-slot,
+  .player-post-play-trailer-label,
+  .player-post-play-trailer-media,
+  .player-post-play-player-window,
+  .player-post-play-synopsis-overlay,
+  .player-post-play-synopsis-scroll,
+  .nuvio-dialog-backdrop,
+  .nuvio-dialog-panel,
+  html:not(.tizen-tv) #player.post-play-visible:not(.post-play-trailer) #videoPlayer {
+    transition-duration: 1ms !important;
+  }
 }

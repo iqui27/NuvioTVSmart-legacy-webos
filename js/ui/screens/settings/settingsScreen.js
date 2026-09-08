@@ -211,8 +211,10 @@ const FONT_OPTIONS = [
 
 const APP_LANGUAGE_NATIVE_LABELS = {
   ar: "Arabic",
+  bg: "Bulgarian",
   bs: "Bosnian",
   cs: "Cestina",
+  da: "Dansk",
   de: "Deutsch",
   en: "English",
   el: "Greek",
@@ -235,11 +237,14 @@ const APP_LANGUAGE_NATIVE_LABELS = {
   ru: "Russian",
   sk: "Slovencina",
   sl: "Slovenscina",
+  "sr-latn": "Srpski (latinica)",
   sv: "Svenska",
   ta: "Tamil",
   tr: "Turkce",
+  uk: "Ukrainian",
   vi: "Tieng Viet",
-  "zh-cn": "Chinese (Simplified)"
+  "zh-cn": "Chinese (Simplified)",
+  "zh-tw": "Chinese (Traditional)"
 };
 
 function appLanguageOptionLabel(localeId) {
@@ -2176,6 +2181,8 @@ export const SettingsScreen = {
   async mount(_params = {}, navigationContext = {}) {
     this.container = document.getElementById("settings");
     ScreenUtils.show(this.container);
+    this.settingsMountToken = (this.settingsMountToken || 0) + 1;
+    const mountToken = this.settingsMountToken;
     if (!this.handleWheelBound) {
       this.handleWheelBound = this.handleWheelEvent.bind(this);
       this.container.addEventListener("wheel", this.handleWheelBound, { passive: false });
@@ -2214,12 +2221,18 @@ export const SettingsScreen = {
     this.dialogFocusIndex = Number.isFinite(this.dialogFocusIndex) ? this.dialogFocusIndex : 0;
     this.sidebarExpanded = false;
     this.pillIconOnly = false;
-    const [sidebarProfile, initialModel] = await Promise.all([
-      getSidebarProfileState(),
-      this.collectModel()
-    ]);
-    this.sidebarProfile = sidebarProfile;
-    this.model = initialModel;
+    const sidebarProfilePromise = getSidebarProfileState().catch((error) => {
+      console.warn("Settings sidebar profile failed to load", error);
+      return null;
+    });
+    try {
+      this.sidebarProfile = await getSidebarProfileState({ cacheOnly: true });
+      this.model = await this.collectModel({ cacheOnly: true });
+    } catch (error) {
+      console.warn("Settings cached model failed to load", error);
+      this.sidebarProfile = this.sidebarProfile || null;
+      this.model = this.model || (await this.collectModel({ cacheOnly: true }));
+    }
     await this.render({ refreshModel: false });
     this.isMounted = true;
     this.memberAccessUnsubscribe = MemberAccessRepository.subscribe((access) => {
@@ -2232,6 +2245,37 @@ export const SettingsScreen = {
         return;
       }
       void this.render({ refreshModel: true });
+    });
+
+    // Android renders the settings surface from local state immediately and
+    // refreshes remote membership/profile data independently. Keep the same
+    // ordering on Smart TV so a slow Supabase/avatar request cannot hold the
+    // Settings route or its focus rail.
+    void (async () => {
+      const [sidebarProfile, model] = await Promise.all([
+        sidebarProfilePromise,
+        this.collectModel()
+      ]);
+      if (
+        !this.isMounted ||
+        mountToken !== this.settingsMountToken ||
+        Router.getCurrent() !== "settings"
+      ) {
+        return;
+      }
+      if (sidebarProfile) {
+        this.sidebarProfile = sidebarProfile;
+      }
+      this.model = model;
+      await this.render({ refreshModel: false });
+    })().catch((error) => {
+      if (
+        this.isMounted &&
+        mountToken === this.settingsMountToken &&
+        Router.getCurrent() === "settings"
+      ) {
+        console.warn("Settings background model refresh failed", error);
+      }
     });
   },
 
@@ -2299,13 +2343,15 @@ export const SettingsScreen = {
     return `data-focus-key="${escapeHtml(focusKey)}"`;
   },
 
-  async collectModel() {
+  async collectModel({ cacheOnly = false } = {}) {
     const authState = AuthManager.getAuthState();
     this.ensureAccountSyncOverview(authState);
     const [addons, profiles, memberAccess] = await Promise.all([
-      addonRepository.getInstalledAddons(),
+      addonRepository.getInstalledAddons(cacheOnly ? { cacheOnly: true } : {}),
       ProfileManager.getProfiles(),
-      MemberAccessRepository.getAccess().catch(() => MemberAccessRepository.getCurrentAccess())
+      cacheOnly
+        ? Promise.resolve(MemberAccessRepository.getCachedAccess())
+        : MemberAccessRepository.getAccess().catch(() => MemberAccessRepository.getCurrentAccess())
     ]);
     const activeProfileId = ProfileManager.getActiveProfileId();
     const pluginSources = PluginManager.listPluginSources();
@@ -5711,6 +5757,26 @@ export const SettingsScreen = {
         autoplayNextEpisode: !PlayerSettingsStore.get().autoplayNextEpisode
       });
     });
+    this.actionMap.set("playback:postPlayRecommendations", () => {
+      PlayerSettingsStore.set({
+        postPlayRecommendationsEnabled: !PlayerSettingsStore.get().postPlayRecommendationsEnabled
+      });
+    });
+    this.actionMap.set("playback:postPlayMovieThreshold", () => {
+      const current = PlayerSettingsStore.get().postPlayMovieThresholdPercent ?? 90;
+      this.openOptionDialog({
+        title: t("autoplay_post_play_movie_threshold", {}, "Movie Recommendation Timing"),
+        options: Array.from({ length: 21 }, (_, index) => {
+          const value = 80 + index;
+          return { id: value, label: `${value}%` };
+        }),
+        selectedId: current,
+        returnFocusKey: "playback:postPlayMovieThreshold",
+        onSelect: (option) => {
+          PlayerSettingsStore.set({ postPlayMovieThresholdPercent: Number(option.id) });
+        }
+      });
+    });
     this.actionMap.set("playback:preferBingeGroup", () => {
       PlayerSettingsStore.set({
         streamAutoPlayPreferBingeGroupForNextEpisode:
@@ -6228,6 +6294,16 @@ export const SettingsScreen = {
             checked: Boolean(model.player.autoplayNextEpisode)
           })}
           ${this.renderToggleRow({
+            focusKey: "playback:postPlayRecommendations",
+            title: t("autoplay_post_play_recommendations", {}, "Post-play Recommendations"),
+            subtitle: t(
+              "autoplay_post_play_recommendations_sub",
+              {},
+              "Show recommendations near the end of movies and series."
+            ),
+            checked: model.player.postPlayRecommendationsEnabled !== false
+          })}
+          ${this.renderToggleRow({
             focusKey: "playback:p2pEnabled",
             title: t("essential_p2p_streams", {}, "P2P streams"),
             subtitle: tizenP2pUnsupported
@@ -6280,6 +6356,30 @@ export const SettingsScreen = {
           subtitle: t("settings.playback.autoplayNextEpisode.subtitle"),
           checked: Boolean(model.player.autoplayNextEpisode)
         })}
+        ${this.renderToggleRow({
+          focusKey: "playback:postPlayRecommendations",
+          title: t("autoplay_post_play_recommendations", {}, "Post-play Recommendations"),
+          subtitle: t(
+            "autoplay_post_play_recommendations_sub",
+            {},
+            "Show recommendations near the end of movies and series."
+          ),
+          checked: model.player.postPlayRecommendationsEnabled !== false
+        })}
+        ${
+          model.player.postPlayRecommendationsEnabled !== false
+            ? this.renderActionRow({
+                focusKey: "playback:postPlayMovieThreshold",
+                title: t("autoplay_post_play_movie_threshold", {}, "Movie Recommendation Timing"),
+                subtitle: t(
+                  "autoplay_post_play_movie_threshold_sub",
+                  {},
+                  "Choose when movie recommendations appear. Episodes follow the Next Episode Threshold setting."
+                ),
+                value: `${model.player.postPlayMovieThresholdPercent ?? 90}%`
+              })
+            : ""
+        }
         ${this.renderToggleRow({
           focusKey: "playback:preferBingeGroup",
           title: t("autoplay_prefer_binge_group", {}, "Prefer Binge Group (Next Episode)"),
@@ -8117,6 +8217,7 @@ export const SettingsScreen = {
 
   cleanup() {
     this.isMounted = false;
+    this.settingsMountToken = (this.settingsMountToken || 0) + 1;
     this.memberAccessUnsubscribe?.();
     this.memberAccessUnsubscribe = null;
     this.persistUiState();

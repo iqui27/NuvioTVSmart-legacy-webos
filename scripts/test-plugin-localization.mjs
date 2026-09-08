@@ -111,6 +111,12 @@ async function main() {
     .filter((entry) => entry.isDirectory() && /^values(?:-.+)?$/.test(entry.name))
     .map((entry) => entry.name)
     .sort();
+  // 31, not the 36 res/values directories upstream now carries. 1.0.6 brought
+  // in bg, da, sr-latn, uk and zh-tw as Android stubs holding 4 to 19 of the
+  // 2918 keys, so every screen in them renders in English anyway -- and the
+  // build precompiles one bundle per directory into the package. Shipping them
+  // would cost five bundles to change nothing a user sees. They are dropped in
+  // this fork until they are actually translated.
   assert.equal(localeDirs.length, 31, "Expected the 31 Web TV locales");
 
   const parsed = new Map();

@@ -90,59 +90,8 @@ function extractAddonEntries(rows = []) {
     .filter((entry) => entry.url);
 }
 
-/**
- * Applies a cloud addon list locally, or declines to.
- *
- * Returns null when the pull came back empty while addons exist locally. A read
- * that returns no rows is indistinguishable from "the table is briefly
- * unavailable", and the old behaviour was to treat it as "the user deleted
- * everything": setAddonOrder([]) plus two replace:true writes wiped
- * installedAddonUrls, installedAddonDisplayNames and installedAddonEnabledStates
- * for the profile, with no error and no confirmation. Observed on a real device
- * while the backend was under load — the addon list vanished and the app fell
- * back to the onboarding screen.
- *
- * A sync read that returns nothing must never be able to destroy local state.
- * The local list is left alone and the next successful pull (or an explicit
- * removal, which goes through removeAddon) reconciles it.
- */
-function applyPulledAddons(rows = []) {
-  const entries = extractAddonEntries(rows);
-  if (!entries.length) {
-    const localUrls = addonRepository.getInstalledAddonUrls();
-    if (localUrls.length) {
-      console.warn(
-        "Addon sync pull returned no rows while addons exist locally; keeping the local list",
-        { localCount: localUrls.length }
-      );
-      return null;
-    }
-  }
-  const cloudUrls = entries.map((entry) => entry.url).filter(Boolean);
-
-  // Union rather than replace, cloud order first.
-  //
-  // The startup cycle pulls before it pushes (startupSyncService.requestSyncNow
-  // with pushAfterPull), so a replace here deletes any addon that exists only on
-  // this device and the following push then propagates the deletion. An addon
-  // installed while the backend was unreachable — which is exactly when the push
-  // that would have uploaded it failed — could never survive the next boot.
-  //
-  // The tradeoff is deliberate and worth stating: a removal performed on another
-  // device no longer wins against this device's local copy, so it can reappear
-  // here until removed locally too. Losing an addon the user installed is the
-  // worse failure, and local removal still works and still pushes.
-  const cloudSet = new Set(cloudUrls.map((url) => addonRepository.canonicalizeUrl(url)));
-  const localOnlyUrls = addonRepository
-    .getInstalledAddonUrls()
-    .filter((url) => !cloudSet.has(addonRepository.canonicalizeUrl(url)));
-  if (localOnlyUrls.length) {
-    console.info("Addon sync keeping addons present only on this device", {
-      count: localOnlyUrls.length
-    });
-  }
-  const urls = [...cloudUrls, ...localOnlyUrls];
-
+function applyPulledAddons(entries = [], localOnlyUrls = []) {
+  const urls = entries.map((entry) => entry.url).filter(Boolean);
   const currentNames = addonRepository.getAddonDisplayNameOverrides();
   const currentEnabled = addonRepository.getAddonEnabledStates();
   // The name and enabled writes below are replace:true, so the local-only
@@ -173,6 +122,60 @@ function applyPulledAddons(rows = []) {
   return urls;
 }
 
+function prepareRemoteAddonSnapshot(rows) {
+  const entries = extractAddonEntries(rows);
+  const urls = entries.map((entry) => entry.url).filter(Boolean);
+  const localUrls = addonRepository.getInstalledAddonUrls();
+
+  // Android TV does not treat an empty remote snapshot as authoritative when
+  // local addons already exist. An empty response must not erase the addon list
+  // (or its names/enabled states) used by catalog, stream, and subtitle repositories.
+  if (urls.length === 0) {
+    if (localUrls.length > 0) {
+      console.warn(
+        `Addon sync pull returned an empty remote list while local has ${localUrls.length} entries; preserving local addons`
+      );
+    }
+    return { urls: [...localUrls], shouldApply: false };
+  }
+
+  // Union rather than replace, cloud order first. LOCAL DIVERGENCE, kept
+  // against upstream on purpose.
+  //
+  // The startup cycle pulls before it pushes (startupSyncService.requestSyncNow
+  // with pushAfterPull), so a replace here deletes any addon that exists only on
+  // this device and the following push then propagates the deletion. An addon
+  // installed while the backend was unreachable -- which is exactly when the push
+  // that would have uploaded it failed -- could never survive the next boot.
+  // Upstream's empty-snapshot guard above does not cover this: it only fires when
+  // the remote list is empty, not when it is merely missing this device's addons.
+  //
+  // The tradeoff is deliberate and worth stating: a removal performed on another
+  // device no longer wins against this device's local copy, so it can reappear
+  // here until removed locally too. Losing an addon the user installed is the
+  // worse failure, and local removal still works and still pushes.
+  const cloudSet = new Set(urls.map((url) => addonRepository.canonicalizeUrl(url)));
+  const localOnlyUrls = localUrls.filter(
+    (url) => !cloudSet.has(addonRepository.canonicalizeUrl(url))
+  );
+  if (localOnlyUrls.length) {
+    console.info("Addon sync keeping addons present only on this device", {
+      count: localOnlyUrls.length
+    });
+  }
+
+  applyPulledAddons(entries, localOnlyUrls);
+  return { urls: [...urls, ...localOnlyUrls], shouldApply: true };
+}
+
+async function reconcileRemoteAddonSnapshot(rows) {
+  const { urls, shouldApply } = prepareRemoteAddonSnapshot(rows);
+  if (shouldApply) {
+    await addonRepository.setAddonOrder(urls, { silent: true });
+  }
+  return urls;
+}
+
 export const LibrarySyncService = {
   getLastPullStatus() {
     return lastPullStatus;
@@ -200,12 +203,7 @@ export const LibrarySyncService = {
           `user_id=eq.${encodeURIComponent(ownerId)}&profile_id=eq.${profileId}&select=*&order=sort_order.asc`,
           true
         );
-        const addonUrls = applyPulledAddons(addonRows);
-        if (addonUrls === null) {
-          recordPullStatus("ok", { count: localUrls.length, keptLocal: true });
-          return localUrls;
-        }
-        await addonRepository.setAddonOrder(addonUrls, { silent: true });
+        const addonUrls = await reconcileRemoteAddonSnapshot(addonRows);
         recordPullStatus("ok", { count: addonUrls.length });
         return addonUrls;
       } catch (addonsTableError) {
@@ -226,12 +224,7 @@ export const LibrarySyncService = {
           `owner_id=eq.${encodeURIComponent(ownerId)}&select=*&order=position.asc`,
           true
         );
-        const urls = applyPulledAddons(rows);
-        if (urls === null) {
-          recordPullStatus("ok", { count: localUrls.length, keptLocal: true });
-          return localUrls;
-        }
-        await addonRepository.setAddonOrder(urls, { silent: true });
+        const urls = await reconcileRemoteAddonSnapshot(rows);
         recordPullStatus("ok", { count: urls.length });
         return urls;
       } catch (tvTableError) {
@@ -252,12 +245,7 @@ export const LibrarySyncService = {
             { p_profile_id: profileId },
             true
           );
-          const urls = applyPulledAddons(rpcRows);
-          if (urls === null) {
-            recordPullStatus("ok", { count: localUrls.length, keptLocal: true });
-            return localUrls;
-          }
-          await addonRepository.setAddonOrder(urls, { silent: true });
+          const urls = await reconcileRemoteAddonSnapshot(rpcRows);
           recordPullStatus("ok", { count: urls.length });
           return urls;
         } catch (rpcError) {

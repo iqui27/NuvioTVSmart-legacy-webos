@@ -1736,4 +1736,6 @@
     <string name="settings.plugins.openSubtitle">Hantera körbara Nuvio JS-leverantörer och bevarade externa metadata</string>
     <string name="settings.plugins.refreshRepository">Uppdatera förråd</string>
     <string name="settings.plugins.removeRepository">Ta bort förråd</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}} % visat</string>
+    <string name="player_post_play_play_manually">Spela manuellt</string>
 </resources>

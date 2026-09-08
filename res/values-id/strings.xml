@@ -2399,4 +2399,6 @@
     <string name="settings.plugins.openSubtitle">Kelola penyedia Nuvio JS yang dapat dieksekusi dan metadata eksternal yang dipertahankan</string>
     <string name="settings.plugins.refreshRepository">Segarkan repositori</string>
     <string name="settings.plugins.removeRepository">Hapus repositori</string>
+    <string name="home.continueStatusWatchedPercent">Ditonton {{percent}}%</string>
+    <string name="player_post_play_play_manually">Putar secara manual</string>
 </resources>

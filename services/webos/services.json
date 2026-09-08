@@ -72,6 +72,16 @@
           "public": true
         },
         {
+          "name": "mediaPlaybackKeepAlive",
+          "description": "Keep the local media runtime active while webOS proxy playback is using it",
+          "public": true
+        },
+        {
+          "name": "mediaPlaybackKeepAliveStop",
+          "description": "Stop an active webOS proxy playback keep-alive subscription",
+          "public": true
+        },
+        {
           "name": "safeHttpProxy",
           "description": "Proxy allowlisted account and cloud-library requests for legacy webOS",
           "public": true

@@ -2500,4 +2500,6 @@
     <string name="plugin_security_note">Koda vtičnika se izvaja v omejenem Workerju. Omrežje posreduje storitev TV v paketu z javnimi cilji HTTP(S), omejitvami velikosti, časovnimi omejitvami in preklicem, brez dostopa do pomnilnika TV ali izvornih API-jev.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Upravljaj izvedljive ponudnike Nuvio JS in ohranjene zunanje metapodatke</string>
+    <string name="home.continueStatusWatchedPercent">Ogledano {{percent}} %</string>
+    <string name="player_post_play_play_manually">Ročna izbira vira</string>
 </resources>

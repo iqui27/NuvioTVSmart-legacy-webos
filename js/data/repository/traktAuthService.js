@@ -558,18 +558,29 @@ function normalizeWatchedMovieItem(entry) {
 
   const tmdbId = movie.ids?.tmdb;
   const traktId = movie.ids?.trakt;
-  const contentId = tmdbId ? `tmdb:${tmdbId}` : traktId ? `trakt:${traktId}` : null;
+  const imdbId = movie.ids?.imdb;
+  const slug = movie.ids?.slug;
+  const contentId = tmdbId
+    ? `tmdb:${tmdbId}`
+    : traktId
+      ? `trakt:${traktId}`
+      : imdbId || slug || null;
   if (!contentId) return null;
+  const lastWatchedAt = entry.last_watched_at || null;
+  const watchedAt = lastWatchedAt ? new Date(lastWatchedAt).getTime() : 0;
 
   return {
     type: "movie",
+    contentType: "movie",
     contentId,
     title: movie.title,
     year: movie.year,
-    imdbId: movie.ids?.imdb,
+    imdbId,
     tmdbId,
     traktId,
+    slug: slug || null,
     plays: Number(entry.plays || 0),
-    lastWatchedAt: entry.last_watched_at
+    watchedAt: Number.isFinite(watchedAt) ? watchedAt : 0,
+    lastWatchedAt
   };
 }

@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">Marcar como no visto</string>
     <string name="hero_play_trailer">Reproducir tráiler</string>
     <string name="hero_press_back_trailer">Presiona atrás para salir del tráiler</string>
+    <string name="hero_synopsis_read_more">Leer más</string>
+    <string name="hero_synopsis_dismiss_hint">Presiona atrás para cerrar</string>
     <string name="cd_rating">Calificación</string>
     <string name="episodes_season">Temporada %1$d</string>
     <string name="episodes_specials">Especiales</string>
@@ -2511,4 +2513,6 @@
     <string name="settings.plugins.openSubtitle">Administrar proveedores Nuvio JS ejecutables y metadatos externos conservados</string>
     <string name="settings.plugins.refreshRepository">Actualizar repositorio</string>
     <string name="settings.plugins.removeRepository">Eliminar repositorio</string>
+    <string name="home.continueStatusWatchedPercent">Visto {{percent}}%</string>
+    <string name="player_post_play_play_manually">Reproducir manualmente</string>
 </resources>

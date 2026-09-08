@@ -23,7 +23,7 @@ import { Platform } from "./platform/index.js";
 import { getTvRuntimePerformanceProfile } from "./platform/tvRuntimePerformance.js";
 import { LocalStore } from "./core/storage/localStore.js";
 import { I18n } from "./i18n/index.js";
-import { getLatestAppUpdate } from "./core/update/appUpdateService.js";
+import { getLatestAppUpdateWithRetry } from "./core/update/appUpdateService.js";
 import { shouldShowUpdate } from "./core/update/updateBannerPolicy.js";
 import { showAppUpdatePrompt } from "./ui/components/appUpdatePrompt.js";
 import { resolveExperienceRoute } from "./core/profile/experienceModeRouting.js";
@@ -54,6 +54,7 @@ let updateCheckStarted = false;
 
 const APP_VERSION = typeof __NUVIO_APP_VERSION__ !== "undefined" ? __NUVIO_APP_VERSION__ : "0.0.0";
 const UPDATE_DISMISSED_TAG_KEY = "app_update_dismissed_tag";
+const UPDATE_ROUTE_WAIT_TIMEOUT_MS = 60_000;
 
 function markBootStage(stage) {
   const guard = globalThis.NuvioBootGuard;
@@ -62,7 +63,7 @@ function markBootStage(stage) {
   }
 }
 
-async function waitForInitialRoute(timeoutMs = 15000) {
+async function waitForInitialRoute(timeoutMs = UPDATE_ROUTE_WAIT_TIMEOUT_MS) {
   const startedAt = Date.now();
   while (!Router.getCurrent() && Date.now() - startedAt < timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -77,15 +78,19 @@ async function checkForAppUpdateOnStartup() {
   updateCheckStarted = true;
 
   try {
-    const update = await getLatestAppUpdate({ currentVersion: APP_VERSION });
+    // Tizen can spend longer restoring the authenticated route because the
+    // WebView and profile-sync requests start cold. Do not let a fast GitHub
+    // response get discarded while Router is still waiting for that route.
+    if (!(await waitForInitialRoute())) {
+      return;
+    }
+
+    const update = await getLatestAppUpdateWithRetry({ currentVersion: APP_VERSION });
     if (!update) {
       return;
     }
     const dismissedTag = LocalStore.get(UPDATE_DISMISSED_TAG_KEY, null);
     if (!shouldShowUpdate({ isRemoteNewer: true, dismissedTag, updateTag: update.tag })) {
-      return;
-    }
-    if (!(await waitForInitialRoute())) {
       return;
     }
     showAppUpdatePrompt(update, {

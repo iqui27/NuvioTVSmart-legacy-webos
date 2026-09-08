@@ -67,6 +67,8 @@
     <string name="hero_director">Rendező: %1$s</string>
     <string name="hero_writer">Író: %1$s</string>
     <string name="hero_play">Lejátszás</string>
+    <string name="hero_synopsis_read_more">Bővebben</string>
+    <string name="hero_synopsis_dismiss_hint">A bezáráshoz nyomd meg a vissza gombot</string>
     <string name="hero_play_episode">Lejátszás S%1$d, E%2$d</string>
     <string name="hero_add_to_library">Hozzáadás a könyvtárhoz</string>
     <string name="hero_remove_from_library">Eltávolítás a könyvtárból</string>
@@ -1331,4 +1333,7 @@
     <string name="settings.plugins.openSubtitle">Futtatható Nuvio JS-szolgáltatók és megőrzött külső metaadatok kezelése</string>
     <string name="settings.plugins.refreshRepository">Tároló frissítése</string>
     <string name="settings.plugins.removeRepository">Tároló eltávolítása</string>
+    <string name="home.continueStatusWatchedPercent">Megnézve: {{percent}}%</string>
+    <string name="player_post_play_manual_subtitle">Play</string>
+    <string name="player_post_play_play_manually">Lejátszás forrásválasztással</string>
 </resources>

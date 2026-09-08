@@ -623,7 +623,38 @@ async function execute(message) {
     if (execution.cleaned) return;
     execution.cleaned = true;
     execution.rejectPending?.(new Error("Plugin execution ended"));
+    // Rejecting a QuickJS promise queues guest reactions. Drain those jobs
+    // while the context is still alive so their handles are released before
+    // the runtime is disposed. A broken provider must not be able to enqueue
+    // new bridge work while this bounded cleanup drain is running.
+    for (let attempts = 0; attempts < 64; attempts += 1) {
+      let jobs;
+      try {
+        jobs = runtime.executePendingJobs();
+      } catch (_) {
+        break;
+      }
+      if (jobs?.error) {
+        try {
+          context.unwrapResult(jobs).dispose();
+        } catch (_) {}
+        break;
+      }
+      if (!Number(jobs?.value || 0)) {
+        break;
+      }
+    }
     execution.pending.clear();
+    // executePendingJobs() can materialize a wrapper for a QuickJS context
+    // whose pointer is not present in the original context map. Dispose such
+    // auxiliary contexts before the primary context, which owns the runtime.
+    var contexts = Array.from(runtime.contextMap?.values?.() || []);
+    contexts.forEach((candidate) => {
+      if (!candidate || candidate === execution.context || !candidate.alive) return;
+      try {
+        candidate.dispose();
+      } catch (_) {}
+    });
     try {
       execution.context?.dispose?.();
     } catch (_) {}
@@ -635,6 +666,9 @@ async function execute(message) {
   };
 
   var nativeFetch = context.newFunction("__native_fetch", (...args) => {
+    if (execution.cleaned) {
+      throw new Error("Plugin execution ended");
+    }
     var payload = JSON.parse(asString(context, args[0]) || "{}");
     var requestId = String(request.executionId || "execution") + "-" + ++execution.requestCounter;
     var abortToken = asString(context, args[1]);
@@ -686,6 +720,13 @@ async function execute(message) {
   );
   context.unwrapResult(moduleResult).dispose();
   var callHandle;
+  function disposeCallHandle() {
+    if (!callHandle) return;
+    try {
+      callHandle.dispose();
+    } catch (_) {}
+    callHandle = null;
+  }
   try {
     var callResult = context.evalCode(
       "(async function(){ try { var exported = globalThis.__pluginModuleExports || {}; var fn = exported.getStreams || globalThis.getStreams; if (typeof fn !== 'function') return JSON.stringify([]); var args = " +
@@ -705,28 +746,28 @@ async function execute(message) {
     return;
   }
   var resolvedCallResult;
+  var providerCallError = null;
   try {
-    try {
-      resolvedCallResult = await resolveGuestPromise(
-        context,
-        runtime,
-        callHandle,
-        request.timeoutMs
-      );
-    } catch (_) {
-      // Android's PluginRuntime catches every exception raised by getStreams,
-      // including QuickJS pending-job failures such as a provider stack
-      // overflow, and reports an empty result to the manager. Keep bootstrap
-      // and module-evaluation failures above as real worker errors; this
-      // boundary covers only the provider call itself.
-      execution.cleanup();
-      activeExecution = null;
-      send({ type: "result", results: [] });
-      return;
-    }
-  } finally {
-    callHandle.dispose();
+    resolvedCallResult = await resolveGuestPromise(context, runtime, callHandle, request.timeoutMs);
+  } catch (error) {
+    providerCallError = error;
   }
+  if (providerCallError) {
+    // Dispose the promise returned by the provider before cleanup disposes the
+    // QuickJS context. The previous order left this live handle attached to a
+    // disposed runtime and reproduced JS_FreeRuntime's gc_obj_list assertion.
+    disposeCallHandle();
+    // Android's PluginRuntime catches every exception raised by getStreams,
+    // including QuickJS pending-job failures such as a provider stack
+    // overflow, and reports an empty result to the manager. Keep bootstrap and
+    // module-evaluation failures above as real worker errors; this boundary
+    // covers only the provider call itself.
+    execution.cleanup();
+    activeExecution = null;
+    send({ type: "result", results: [] });
+    return;
+  }
+  disposeCallHandle();
   var resolvedCallHandle = context.unwrapResult(resolvedCallResult);
   var resultJson = context.dump(resolvedCallHandle);
   resolvedCallHandle.dispose();

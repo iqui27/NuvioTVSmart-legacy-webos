@@ -45,6 +45,18 @@ export function isRegexSelectionConfigured(regexPattern) {
 // Whether auto-play is active for these settings. Default mode MANUAL is off, so
 // existing users see no change unless they opt in (or sync it from Android TV).
 export function isAutoPlayEffectivelyEnabled(settings = {}) {
+  // Match Android's StreamAutoPlayPolicy: either persisted stream reuse
+  // preference is itself an effective auto-play capability, even when the
+  // explicit mode remains MANUAL.
+  if (settings.streamReuseLastLinkEnabled) {
+    return true;
+  }
+  if (
+    settings.streamAutoPlayReuseBingeGroup &&
+    settings.streamAutoPlayPreferBingeGroupForNextEpisode
+  ) {
+    return true;
+  }
   const mode = normalizeMode(settings.streamAutoPlayMode);
   if (mode === STREAM_AUTO_PLAY_MODE.FIRST_STREAM) {
     return true;

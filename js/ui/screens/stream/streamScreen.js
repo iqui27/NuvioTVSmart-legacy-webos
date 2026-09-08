@@ -3431,6 +3431,12 @@ export const StreamScreen = {
     streamRepository.setLocalPluginSearchPaused(true);
     const playerStreamCandidates = this.getFilteredStreams();
     const itemType = normalizeType(this.params?.itemType);
+    const playerEpisodes =
+      itemType === "series" || itemType === "tv"
+        ? Array.isArray(this.params?.episodes)
+          ? this.params.episodes
+          : null
+        : [];
     const startFromBeginning = Boolean(this.params?.startFromBeginning);
     const routeResumeProgress = {
       positionMs: Number(this.params?.resumePositionMs || 0) || 0,
@@ -3492,7 +3498,7 @@ export const StreamScreen = {
       parentalGuide: this.params?.parentalGuide || null,
       season: this.params?.season == null ? null : Number(this.params.season),
       episode: this.params?.episode == null ? null : Number(this.params.episode),
-      episodes: Array.isArray(this.params?.episodes) ? this.params.episodes : [],
+      episodes: playerEpisodes,
       streamCandidates: playerStreamCandidates,
       preferredStreamId: selected.id,
       playbackSourceContext: selected.streamOrigin || {
@@ -3514,7 +3520,8 @@ export const StreamScreen = {
       nextEpisodeSeason: this.params?.nextEpisodeSeason ?? null,
       nextEpisodeEpisode: this.params?.nextEpisodeEpisode ?? null,
       nextEpisodeTitle: this.params?.nextEpisodeTitle || "",
-      nextEpisodeReleased: this.params?.nextEpisodeReleased || ""
+      nextEpisodeReleased: this.params?.nextEpisodeReleased || "",
+      nextEpisodeMetadataResolved: this.params?.nextEpisodeMetadataResolved ?? null
     });
   },
 

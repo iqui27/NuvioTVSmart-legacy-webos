@@ -2384,4 +2384,6 @@
     <string name="settings.plugins.openSubtitle">Ausführbare Nuvio-JS-Anbieter und aufbewahrte externe Metadaten verwalten</string>
     <string name="settings.plugins.refreshRepository">Repository aktualisieren</string>
     <string name="settings.plugins.removeRepository">Repository entfernen</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}} % angesehen</string>
+    <string name="player_post_play_play_manually">Manuell abspielen</string>
 </resources>

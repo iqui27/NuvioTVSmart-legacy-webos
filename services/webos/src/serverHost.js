@@ -9,8 +9,60 @@ var SERVICE_ID = "space.nuvio.webos.service";
 var PORT_CANDIDATES = require("./constants").PORT_CANDIDATES;
 var REQUEST_TIMEOUT_MS = 5000;
 
+function patchWebOsMediaRuntimeCode(code, filename) {
+  var source = String(code || "");
+  if (!/media-http\.cjs$/i.test(String(filename || ""))) {
+    return source;
+  }
+
+  // The vendored EngineFS runtime parses the proxy route options twice:
+  // Express decodes the `:opts` path parameter once, then querystring.parse
+  // decodes it again. Its HLS rewriter used querystring.stringify directly,
+  // which emitted only one encoding layer for propagated headers. A header
+  // value containing a nested `&` (StreamingCommunity Referer URLs do this)
+  // was therefore turned into a second proxy option on every child request.
+  // Keep this compatibility patch at the webOS bootstrap boundary because the
+  // runtime is a generated third-party bundle, not source maintained here.
+  if (source.indexOf("function encodeProxyHeaderString(") >= 0) {
+    return source;
+  }
+
+  var helperTarget =
+    'function parseHeaderString(headerString){var headerArray=headerString.split(":");return[headerArray.shift(),headerArray.join(":")]}function urlJoin(segments){';
+  var childTarget = '"/proxy/"+querystring.stringify(newOpts)+lineUrl.pathname+lineUrl.search';
+  var rootTarget =
+    '"/"+querystring.stringify(opts);result.body.pipe(getParserStream(virtualRoot,dest))';
+  var targetCount = [helperTarget, childTarget, rootTarget].filter(function (target) {
+    return source.indexOf(target) >= 0;
+  }).length;
+
+  // Allow a future vendored runtime that already contains an equivalent fix,
+  // but fail fast if only part of the known vulnerable shape changed.
+  if (targetCount === 0) {
+    return source;
+  }
+  if (targetCount !== 3) {
+    throw new Error("Unsupported webOS media runtime proxy layout: " + filename);
+  }
+
+  var helperReplacement =
+    'function parseHeaderString(headerString){var headerArray=headerString.split(":");return[headerArray.shift(),headerArray.join(":")]}function decodeProxyHeaderString(headerString){var parsed=parseHeaderString(headerString);try{parsed[1]=decodeURIComponent(parsed[1])}catch(_){ }return parsed[0]+":"+parsed[1]}function encodeProxyHeaderString(headerString){var parsed=parseHeaderString(headerString);return parsed[0]+":"+encodeURIComponent(parsed[1])}function stringifyProxyOptions(options,cfgOpts){var serialized=Object.assign({},options);serialized[cfgOpts.DestinationHeader]=ensureArray(serialized[cfgOpts.DestinationHeader]).map(encodeProxyHeaderString);return querystring.stringify(serialized)}function urlJoin(segments){';
+  source = source.replace(helperTarget, helperReplacement);
+  source = source.replace(
+    childTarget,
+    '"/proxy/"+stringifyProxyOptions(newOpts,cfgOpts)+lineUrl.pathname+lineUrl.search'
+  );
+  source = source.replace(
+    rootTarget,
+    '"/"+stringifyProxyOptions(opts,cfgOpts);result.body.pipe(getParserStream(virtualRoot,dest))'
+  );
+
+  return source;
+}
+
 function loadCommonJsScript(filename) {
   var code = fs.readFileSync(filename, "utf8");
+  code = patchWebOsMediaRuntimeCode(code, filename);
   var mod = new Module(filename, module);
   mod.filename = filename;
   mod.paths = Module._nodeModulePaths(path.dirname(filename));
@@ -303,5 +355,6 @@ module.exports = {
   probeLocalServer: probeLocalServer,
   requestLocalHttp: requestLocalHttp,
   requestActiveServerHttp: requestActiveServerHttp,
-  requestActiveServerPath: requestActiveServerPath
+  requestActiveServerPath: requestActiveServerPath,
+  patchWebOsMediaRuntimeCode: patchWebOsMediaRuntimeCode
 };

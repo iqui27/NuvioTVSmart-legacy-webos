@@ -80,6 +80,54 @@ function watchedKey(item = {}) {
   return `${String(item.contentId || "").toLowerCase()}:${item.season ?? ""}:${item.episode ?? ""}`;
 }
 
+const TRAKT_WATCHED_MOVIES_CACHE_TTL_MS = 30_000;
+let traktWatchedMoviesCache = null;
+let traktWatchedMoviesInFlight = null;
+
+function invalidateTraktWatchedMoviesCache() {
+  traktWatchedMoviesCache = null;
+}
+
+async function getTraktWatchedMovies() {
+  if (!shouldUseTrakt()) {
+    return [];
+  }
+
+  const profileId = activeProfileId();
+  const now = Date.now();
+  if (
+    traktWatchedMoviesCache?.profileId === profileId &&
+    now - Number(traktWatchedMoviesCache.fetchedAt || 0) < TRAKT_WATCHED_MOVIES_CACHE_TTL_MS
+  ) {
+    return traktWatchedMoviesCache.items;
+  }
+  if (traktWatchedMoviesInFlight?.profileId === profileId) {
+    return traktWatchedMoviesInFlight.promise;
+  }
+
+  const promise = TraktAuthService.fetchWatchedMovies()
+    .then((items) => {
+      const normalizedItems = Array.isArray(items) ? items : [];
+      traktWatchedMoviesCache = {
+        profileId,
+        fetchedAt: Date.now(),
+        items: normalizedItems
+      };
+      return normalizedItems;
+    })
+    .catch((error) => {
+      console.warn("Trakt watched movies lookup failed", error);
+      return [];
+    })
+    .finally(() => {
+      if (traktWatchedMoviesInFlight?.promise === promise) {
+        traktWatchedMoviesInFlight = null;
+      }
+    });
+  traktWatchedMoviesInFlight = { profileId, promise };
+  return promise;
+}
+
 function watchedEpisodeRank(item = {}) {
   return Number(item.season || 0) * 100000 + Number(item.episode || 0);
 }
@@ -212,6 +260,14 @@ async function deleteWatchedItemsFromCloud(items = [], profileId = activeProfile
 class WatchedItemsRepository {
   async getAll(limit = 2000, profileId = activeProfileId()) {
     const local = WatchedItemsStore.listForProfile(profileId);
+    if (shouldUseTrakt()) {
+      const remote = await getTraktWatchedMovies();
+      const remoteKeys = new Set(remote.map(watchedKey));
+      return limitWatchedItems(
+        [...remote, ...local.filter((item) => !remoteKeys.has(watchedKey(item)))],
+        limit
+      );
+    }
     if (!shouldUseSimkl()) return local.slice(0, limit);
     const remote = await SimklSyncService.getWatchedItems().catch(() => []);
     const remoteKeys = new Set(remote.map(watchedKey));
@@ -249,6 +305,7 @@ class WatchedItemsRepository {
       },
       activeProfileId()
     );
+    invalidateTraktWatchedMoviesCache();
     queueWatchedItemsCloudSync();
   }
 
@@ -302,6 +359,7 @@ class WatchedItemsRepository {
       }
     }
     WatchedItemsStore.remove(contentId, pid, options);
+    invalidateTraktWatchedMoviesCache();
     await deleteWatchedItemsFromCloud(removedItems, pid);
     queueWatchedItemsCloudSync();
   }

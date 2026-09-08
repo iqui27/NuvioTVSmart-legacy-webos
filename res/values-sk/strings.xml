@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">Označiť ako nevidené</string>
     <string name="hero_play_trailer">Prehrať trailer</string>
     <string name="hero_press_back_trailer">Stlačte späť pre ukončenie traileru</string>
+    <string name="hero_synopsis_read_more">Čítať viac</string>
+    <string name="hero_synopsis_dismiss_hint">Stlačiť Späť na zatvorenie</string>
     <string name="cd_rating">Hodnotenie</string>
     <string name="episodes_season">Séria %1$d</string>
     <string name="episodes_specials">Špeciály</string>
@@ -2732,4 +2734,19 @@
     <string name="plugin_security_note">Kód pluginu beží v obmedzenom Workeri. Sieť riadi služba TV priložená v balíku s verejnými cieľmi HTTP(S), limitmi veľkosti, časovými limitmi a zrušením; bez prístupu k úložisku TV alebo natívnym API.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Spravovať spustiteľných poskytovateľov Nuvio JS a zachované externé metadáta</string>
+    <string name="home.continueStatusWatchedPercent">Pozreté {{percent}} %</string>
+    <string name="autoplay_post_play_recommendations">Odporúčania po prehratí</string>
+    <string name="autoplay_post_play_recommendations_sub">Zobraziť odporúčania pred koncom filmov a seriálov</string>
+    <string name="autoplay_post_play_movie_threshold">Časovanie odporúčaní pre filmy</string>
+    <string name="autoplay_post_play_movie_threshold_sub">Vyberte, kedy sa zobrazia odporúčania pre filmy; epizódy sa riadia nastavením Prahovej hodnoty pre ďalšiu epizódu</string>
+    <string name="player_post_play_because">Keďže ste pozerali %1$s</string>
+    <string name="player_post_play_recommended">Odporúčané pre vás</string>
+    <string name="player_post_play_play">Prehrať</string>
+    <string name="player_post_play_previous_recommendation">Predchádzajúce odporúčanie</string>
+    <string name="player_post_play_next_recommendation">Nasledujúce odporúčanie</string>
+    <string name="player_post_play_return_to_player">Späť do prehrávača</string>
+    <string name="player_post_play_trailer_countdown">Upútavka o %1$d</string>
+    <string name="player_post_play_trailer_playing">Prehráva sa upútavka</string>
+    <string name="player_post_play_trailer">Upútavka</string>
+    <string name="player_post_play_play_manually">Prehrať manuálne</string>
 </resources>

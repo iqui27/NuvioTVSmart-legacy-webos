@@ -1521,7 +1521,7 @@ export const PluginManager = {
     // Android permits removing DEX repositories and pushes user-initiated
     // removals immediately so a subsequent pull cannot re-add them before the
     // debounced add/update sync runs.
-    PluginStore.flushCloudSync(targetProfileId);
+    await PluginStore.flushCloudSync(targetProfileId);
     return true;
   },
 

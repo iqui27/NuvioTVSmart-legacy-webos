@@ -985,6 +985,10 @@ export const FolderDetailScreen = {
     this.lastMainFocus = null;
     this.navModel = { rows: [] };
     this.tabs = [];
+    this.sourceTabs = [];
+    this._trackPaginationInFlight = new Set();
+    this.folderLoadToken = (this.folderLoadToken || 0) + 1;
+    const folderLoadToken = this.folderLoadToken;
     const preferredHomeLayout = String(this.layoutPrefs?.homeLayout || "classic").toLowerCase();
     this.viewMode = String(this.collection?.viewMode || "TABBED_GRID").toUpperCase();
     this.useHomeFollowLayout =
@@ -1021,73 +1025,114 @@ export const FolderDetailScreen = {
       HomeScreen.ensureDelegatedEventsBound.call(this);
     }
 
-    const [addons, watchedItems] = await Promise.all([
-      addonRepository.getInstalledAddons().catch(() => []),
-      watchedItemsRepository.getAll(5000).catch(() => [])
-    ]);
-    this.watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
-    const folderSources =
-      Array.isArray(this.folder.sources) && this.folder.sources.length
-        ? this.folder.sources
-        : buildFallbackStreamingSources(this.folder);
-    const sourceTabs = folderSources.map((source, index) => ({
-      key: buildFolderSourceKey(source, index),
-      label:
-        source.provider === "tmdb"
-          ? buildTmdbTabLabel(source)
-          : source.provider === "trakt"
-            ? buildTraktTabLabel(source)
-            : buildAddonTabLabel(source, addons),
-      source,
-      items: [],
-      hasMore: false,
-      page: 1,
-      nextSkip: 0,
-      skipStep: 100,
-      loading: false,
-      error: ""
-    }));
-    this.sourceTabs = sourceTabs;
-    this.tabs =
-      this.collection.showAllTab !== false && sourceTabs.length > 1
-        ? [
-            {
-              key: "all",
-              label: "All",
-              isAllTab: true,
-              items: [],
-              hasMore: false,
-              page: 1,
-              nextSkip: 0,
-              skipStep: 100,
-              loading: true,
-              error: ""
-            },
-            ...sourceTabs
-          ]
-        : sourceTabs;
+    this.renderLoading();
 
-    const restored = this.hydrateFromRouteState(navigationContext?.restoredState, this.params);
-    const sourceOffset = this.tabs[0]?.isAllTab ? 1 : 0;
-    const tabsToLoad = restored
-      ? this.tabs
-          .map((tab, index) => ({ tab, index }))
-          .filter(({ tab }) => !tab.isAllTab && tab.restoreNeedsReload)
-          .map(({ index }) => index)
-      : sourceTabs.map((_, index) => index + sourceOffset);
-    tabsToLoad.forEach((index) => {
-      const tab = this.tabs[index];
-      if (tab && !tab.isAllTab) {
-        this.tabs[index] = { ...tab, loading: true, error: "" };
+    // Android exposes the folder destination while its ViewModel resolves
+    // addon metadata, watched state, and source tabs in viewModelScope. Keep
+    // the same route-first ordering here; the existing tab loader remains the
+    // single source of truth for source results and pagination.
+    void (async () => {
+      const [addons, watchedItems] = await Promise.all([
+        addonRepository.getInstalledAddons().catch(() => []),
+        watchedItemsRepository.getAll(5000).catch(() => [])
+      ]);
+      if (folderLoadToken !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+        return;
+      }
+      this.watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
+      const folderSources =
+        Array.isArray(this.folder.sources) && this.folder.sources.length
+          ? this.folder.sources
+          : buildFallbackStreamingSources(this.folder);
+      const sourceTabs = folderSources.map((source, index) => ({
+        key: buildFolderSourceKey(source, index),
+        label:
+          source.provider === "tmdb"
+            ? buildTmdbTabLabel(source)
+            : source.provider === "trakt"
+              ? buildTraktTabLabel(source)
+              : buildAddonTabLabel(source, addons),
+        source,
+        items: [],
+        hasMore: false,
+        page: 1,
+        nextSkip: 0,
+        skipStep: 100,
+        loading: false,
+        error: ""
+      }));
+      this.sourceTabs = sourceTabs;
+      this.tabs =
+        this.collection.showAllTab !== false && sourceTabs.length > 1
+          ? [
+              {
+                key: "all",
+                label: "All",
+                isAllTab: true,
+                items: [],
+                hasMore: false,
+                page: 1,
+                nextSkip: 0,
+                skipStep: 100,
+                loading: true,
+                error: ""
+              },
+              ...sourceTabs
+            ]
+          : sourceTabs;
+
+      const restored = this.hydrateFromRouteState(navigationContext?.restoredState, this.params);
+      const sourceOffset = this.tabs[0]?.isAllTab ? 1 : 0;
+      const tabsToLoad = restored
+        ? this.tabs
+            .map((tab, index) => ({ tab, index }))
+            .filter(({ tab }) => !tab.isAllTab && tab.restoreNeedsReload)
+            .map(({ index }) => index)
+        : sourceTabs.map((_, index) => index + sourceOffset);
+      tabsToLoad.forEach((index) => {
+        const tab = this.tabs[index];
+        if (tab && !tab.isAllTab) {
+          this.tabs[index] = { ...tab, loading: true, error: "" };
+        }
+      });
+      this.sourceTabs = this.tabs.filter((tab) => !tab.isAllTab);
+      this.rebuildAllTab();
+      this.render();
+      await Promise.all(
+        tabsToLoad.map((index) =>
+          this.loadTab(index, { background: true, loadToken: folderLoadToken })
+        )
+      );
+      if (
+        tabsToLoad.length &&
+        folderLoadToken === this.folderLoadToken &&
+        Router.getCurrent() === "folderDetail"
+      ) {
+        this.render();
+      }
+    })().catch((error) => {
+      if (folderLoadToken === this.folderLoadToken && Router.getCurrent() === "folderDetail") {
+        console.warn("Folder detail background load failed", error);
+        this.tabs = [];
+        this.sourceTabs = [];
+        this.render();
       }
     });
-    this.sourceTabs = this.tabs.filter((tab) => !tab.isAllTab);
-    this.rebuildAllTab();
-    this.render();
-    await Promise.all(tabsToLoad.map((index) => this.loadTab(index, { background: true })));
-    if (tabsToLoad.length && Router.getCurrent() === "folderDetail") {
-      this.render();
-    }
+  },
+
+  renderLoading() {
+    this.container.innerHTML = `
+      <div class="seeall-shell folder-detail-shell">
+        <header class="seeall-header folder-detail-header">
+          <div class="folder-detail-eyebrow">${escapeHtml(this.collection?.title || "Collection")}</div>
+          <h2 class="seeall-title">${escapeHtml(this.folder?.title || "Folder")}</h2>
+        </header>
+        <div class="seeall-loading">
+          ${renderLoadingIndicator()}
+          <span>Loading...</span>
+        </div>
+      </div>
+    `;
   },
 
   rebuildAllTab() {
@@ -1104,7 +1149,11 @@ export const FolderDetailScreen = {
     };
   },
 
-  async loadTab(tabIndex, { append = false, background = false } = {}) {
+  async loadTab(tabIndex, { append = false, background = false, loadToken = null } = {}) {
+    const token = loadToken == null ? this.folderLoadToken : loadToken;
+    if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+      return;
+    }
     const tab = this.tabs[tabIndex];
     if (!tab || tab.isAllTab || (tab.loading && !background)) {
       return;
@@ -1118,6 +1167,9 @@ export const FolderDetailScreen = {
       const nextPage = append ? Math.max(1, Number(tab.page || 1) + 1) : 1;
       const requestSkip = append ? Number(tab.nextSkip || 0) : 0;
       const result = await fetchSourceItems(tab.source, nextPage, requestSkip);
+      if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+        return;
+      }
       const existing = append ? this.tabs[tabIndex].items || [] : [];
       const seen = new Set(existing.map((item) => `${item.type}:${item.id}`));
       const incoming = (result.items || []).filter((item) => {
@@ -1147,11 +1199,17 @@ export const FolderDetailScreen = {
         this.heroItem = this.tabs[tabIndex].items[0] || null;
       }
     } catch (error) {
+      if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+        return;
+      }
       this.tabs[tabIndex] = {
         ...this.tabs[tabIndex],
         loading: false,
         error: String(error?.message || "Could not load source")
       };
+    }
+    if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+      return;
     }
     this.rebuildAllTab();
     if (background) {
@@ -1709,10 +1767,14 @@ export const FolderDetailScreen = {
     }
     this._trackPaginationInFlight = this._trackPaginationInFlight || new Set();
     this._trackPaginationInFlight.add(rowKey);
+    const token = this.folderLoadToken;
     this.tabs[tabIndex] = { ...tab, loading: true, error: "" };
     try {
       const nextPage = Math.max(1, Number(tab.page || 1) + 1);
       const result = await fetchSourceItems(tab.source, nextPage, Number(tab.nextSkip || 0));
+      if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+        return;
+      }
       const existing = Array.isArray(tab.items) ? tab.items : [];
       const seen = new Set(existing.map((item) => `${item.type}:${item.id}`));
       const incoming = (result.items || []).filter((item) => {
@@ -1781,6 +1843,9 @@ export const FolderDetailScreen = {
         ].filter((item) => item?.id);
       }
     } catch (error) {
+      if (token !== this.folderLoadToken || Router.getCurrent() !== "folderDetail") {
+        return;
+      }
       this.tabs[tabIndex] = {
         ...this.tabs[tabIndex],
         loading: false,
@@ -2090,6 +2155,8 @@ export const FolderDetailScreen = {
   },
 
   cleanup() {
+    this.folderLoadToken = (this.folderLoadToken || 0) + 1;
+    this._trackPaginationInFlight?.clear?.();
     this.cancelScheduledRender();
     if (this.useHomeFollowLayout) {
       HomeScreen.cancelModernCameraFollow.call(this, { stopAnimations: true });

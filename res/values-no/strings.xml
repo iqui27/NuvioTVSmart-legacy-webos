@@ -1357,4 +1357,6 @@
     <string name="settings.plugins.openSubtitle">Administrer kjørbare Nuvio JS-leverandører og bevarte eksterne metadata</string>
     <string name="settings.plugins.refreshRepository">Oppdater repository</string>
     <string name="settings.plugins.removeRepository">Fjern repository</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}} % sett</string>
+    <string name="player_post_play_play_manually">Spill av manuelt</string>
 </resources>

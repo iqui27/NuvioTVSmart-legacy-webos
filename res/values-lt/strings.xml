@@ -1244,4 +1244,6 @@ Klaida: Bandomoji simuliuojama klaida — tai nėra tikras gedimas. Šaltinis gr
     <string name="settings.plugins.openSubtitle">Tvarkyti vykdomus Nuvio JS teikėjus ir išsaugotus išorinius metaduomenis</string>
     <string name="settings.plugins.refreshRepository">Atnaujinti saugyklą</string>
     <string name="settings.plugins.removeRepository">Pašalinti saugyklą</string>
+    <string name="home.continueStatusWatchedPercent">Peržiūrėta {{percent}}%</string>
+    <string name="player_post_play_play_manually">Leisti rankiniu būdu</string>
 </resources>

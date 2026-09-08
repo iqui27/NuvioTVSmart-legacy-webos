@@ -265,16 +265,20 @@ function getSidebarAvatarCatalog(hasMemberAccess = false) {
   return sidebarAvatarCatalogPromises.get(cacheKey);
 }
 
-export async function getSidebarProfileState() {
+export async function getSidebarProfileState({ cacheOnly = false } = {}) {
   const activeProfileId = String(ProfileManager.getActiveProfileId() || "");
-  const memberAccess = await MemberAccessRepository.getAccess().catch(() => null);
+  const memberAccess = cacheOnly
+    ? MemberAccessRepository.getCachedAccess()
+    : await MemberAccessRepository.getAccess().catch(() => null);
   const hasMemberAvatarAccess = MemberAccessRepository.hasEntitlement(
     memberAccess,
     "PROFILE_AVATARS"
   );
   const [profiles, avatarCatalog] = await Promise.all([
     ProfileManager.getProfiles(),
-    getSidebarAvatarCatalog(hasMemberAvatarAccess)
+    cacheOnly
+      ? AvatarRepository.getCachedAvatarCatalog(hasMemberAvatarAccess)
+      : getSidebarAvatarCatalog(hasMemberAvatarAccess)
   ]);
   const activeProfile =
     profiles.find(

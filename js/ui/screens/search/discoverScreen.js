@@ -316,10 +316,14 @@ export const DiscoverScreen = {
     this.container = document.getElementById("discover");
     ScreenUtils.show(this.container);
     this.layoutPrefs = LayoutPreferences.get();
-    try {
-      this.sidebarProfile = await getSidebarProfileState();
-    } catch (err) {
+    const sidebarProfilePromise = getSidebarProfileState().catch((err) => {
       console.warn("Discover sidebar profile failed to load", err);
+      return null;
+    });
+    try {
+      this.sidebarProfile = await getSidebarProfileState({ cacheOnly: true });
+    } catch (err) {
+      console.warn("Discover cached sidebar profile failed to load", err);
       this.sidebarProfile = null;
     }
     this.sidebarExpanded = false;
@@ -358,27 +362,51 @@ export const DiscoverScreen = {
     this.preserveViewportOnNextRender = false;
     this.nextSkip = 0;
     this.hasMore = true;
-    await this.refreshWatchedTitleIds();
-
-    if (
+    const routeLoadToken = this.loadToken;
+    const hasRestoredRouteState = Boolean(
       navigationContext?.isBackNavigation &&
       this.hydrateFromRouteState(navigationContext?.restoredState || null)
-    ) {
-      this.render();
-      return;
-    }
+    );
 
-    try {
-      await this.loadCatalogsAndContent();
-    } catch (err) {
-      console.error("discoverScreen: Failed to load content", err);
-      this.loading = false;
-      this.items = [];
-      this.suppressInitialLoadingRenders = false;
-      this.requestRender();
-    } finally {
-      this.suppressInitialLoadingRenders = false;
-    }
+    // Android composes the Discover surface before watched-state and catalog
+    // IO completes. Keep the Smart TV filters/focus surface responsive while
+    // the initial content request continues asynchronously.
+    this.render();
+
+    void sidebarProfilePromise.then((profile) => {
+      if (!profile || routeLoadToken !== this.loadToken || Router.getCurrent() !== "discover") {
+        return;
+      }
+      // This is cosmetic state; defer repainting so a late avatar response
+      // cannot replace the user's active picker or focused card.
+      this.sidebarProfile = profile;
+    });
+
+    void (async () => {
+      try {
+        await this.refreshWatchedTitleIds();
+        if (routeLoadToken !== this.loadToken || Router.getCurrent() !== "discover") {
+          return;
+        }
+        if (hasRestoredRouteState) {
+          this.suppressInitialLoadingRenders = false;
+          this.requestRender();
+          return;
+        }
+        await this.loadCatalogsAndContent();
+      } catch (err) {
+        if (routeLoadToken !== this.loadToken || Router.getCurrent() !== "discover") {
+          return;
+        }
+        console.error("discoverScreen: Failed to load content", err);
+        this.loading = false;
+        this.items = [];
+        this.suppressInitialLoadingRenders = false;
+        this.requestRender();
+      } finally {
+        this.suppressInitialLoadingRenders = false;
+      }
+    })();
   },
 
   async loadCatalogsAndContent() {

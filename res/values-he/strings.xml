@@ -67,6 +67,8 @@
     <string name="hero_mark_unwatched">סמן כלא נצפה</string>
     <string name="hero_play_trailer">הפעל טריילר</string>
     <string name="hero_press_back_trailer">לחץ חזרה ליציאה מהטריילר</string>
+    <string name="hero_synopsis_read_more">קרא עוד</string>
+    <string name="hero_synopsis_dismiss_hint">לחץ חזרה כדי לסגור</string>
     <string name="cd_rating">דירוג</string>
     <string name="episodes_season">עונה %1$d</string>
     <string name="episodes_specials">מיוחדים</string>
@@ -1631,4 +1633,19 @@
     <string name="settings.plugins.openSubtitle">ניהול ספקי Nuvio JS ניתנים להרצה ומטא-נתונים חיצוניים שנשמרו</string>
     <string name="settings.plugins.refreshRepository">רענן מאגר</string>
     <string name="settings.plugins.removeRepository">הסר מאגר</string>
+    <string name="home.continueStatusWatchedPercent">נצפו {{percent}}%</string>
+    <string name="autoplay_post_play_recommendations">המלצות אחרי צפייה</string>
+    <string name="autoplay_post_play_recommendations_sub">הצג המלצות לסרטים וסדרות לקראת הסוף.</string>
+    <string name="autoplay_post_play_movie_threshold">תזמון המלצות לסרטים</string>
+    <string name="autoplay_post_play_movie_threshold_sub">בחר מתי מופיעות המלצות לסרטים. פרקים פועלים לפי הגדרת סף הפרק הבא.</string>
+    <string name="player_post_play_because">מכיוון שצפית ב-%1$s</string>
+    <string name="player_post_play_recommended">מומלץ עבורך</string>
+    <string name="player_post_play_play">הפעל</string>
+    <string name="player_post_play_previous_recommendation">המלצה קודמת</string>
+    <string name="player_post_play_next_recommendation">המלצה הבאה</string>
+    <string name="player_post_play_return_to_player">חזור לנגן</string>
+    <string name="player_post_play_trailer_countdown">טריילר בעוד %1$d</string>
+    <string name="player_post_play_trailer_playing">הטריילר מתנגן</string>
+    <string name="player_post_play_trailer">טריילר</string>
+    <string name="player_post_play_play_manually">הפעל ידנית</string>
 </resources>

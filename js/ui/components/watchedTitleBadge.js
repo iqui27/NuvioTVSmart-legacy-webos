@@ -13,21 +13,55 @@ function watchedBadgeLabel() {
   return I18n.t("episodes_cd_watched", {}, { fallback: "Watched" });
 }
 
+function addIdentityValue(set, value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return;
+  }
+  set.add(normalized);
+  set.add(normalized.toLowerCase());
+}
+
+function addPrefixedIdentityValue(set, prefix, value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(new RegExp(`^${prefix}:`, "i"), "");
+  if (!normalized) {
+    return;
+  }
+  addIdentityValue(set, `${prefix}:${normalized}`);
+}
+
+function watchedItemIdentityValues(item = {}) {
+  const values = new Set();
+  addIdentityValue(values, item.contentId);
+  addIdentityValue(values, item.id);
+
+  const imdbId = String(item.imdbId ?? "")
+    .trim()
+    .replace(/^imdb:/i, "");
+  addIdentityValue(values, imdbId);
+  addPrefixedIdentityValue(values, "tmdb", item.tmdbId);
+  addPrefixedIdentityValue(values, "trakt", item.traktId);
+  addIdentityValue(values, item.slug);
+  return values;
+}
+
 export function buildWatchedTitleIdSet(watchedItems = []) {
-  return new Set(
-    (Array.isArray(watchedItems) ? watchedItems : [])
-      .filter((item) => item?.season == null && item?.episode == null)
-      .map((item) => String(item?.contentId || "").trim())
-      .filter(Boolean)
-  );
+  const titleIds = new Set();
+  (Array.isArray(watchedItems) ? watchedItems : [])
+    .filter((item) => item?.season == null && item?.episode == null)
+    .forEach((item) => {
+      watchedItemIdentityValues(item).forEach((value) => titleIds.add(value));
+    });
+  return titleIds;
 }
 
 export function isTitleItemWatched(item = {}, watchedTitleIds = null) {
-  const id = String(item?.id || item?.contentId || "").trim();
-  if (!id || !watchedTitleIds || typeof watchedTitleIds.has !== "function") {
+  if (!watchedTitleIds || typeof watchedTitleIds.has !== "function") {
     return false;
   }
-  return watchedTitleIds.has(id);
+  return Array.from(watchedItemIdentityValues(item)).some((id) => watchedTitleIds.has(id));
 }
 
 export function renderWatchedBadgeGlyph(className = "title-watched-badge-svg") {

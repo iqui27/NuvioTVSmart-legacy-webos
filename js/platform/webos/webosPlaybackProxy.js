@@ -70,7 +70,11 @@ export function buildWebOsPlaybackProxyUrl(baseUrl, sourceUrl, headers = {}) {
   const options = new URLSearchParams();
   options.set("d", `${source.protocol}//${source.host}`);
   entries.forEach(([key, value]) => {
-    options.append("h", `${key}:${value}`);
+    // The webOS media proxy decodes the route options once before parsing
+    // them as a query string. Encode the header value here as an additional
+    // layer so reserved characters from a legitimate header value (notably
+    // `&d=` inside an embed Referer) remain part of `h` after that parse.
+    options.append("h", `${key}:${encodeURIComponent(value)}`);
   });
 
   const root = `${base.protocol}//${base.host}`.replace(/\/+$/, "");

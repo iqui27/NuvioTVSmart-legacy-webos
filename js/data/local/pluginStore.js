@@ -113,6 +113,49 @@ function writeState(profileId, state) {
   return normalized;
 }
 
+async function runPluginCloudSync(profileId) {
+  const normalizedProfileId = normalizedPluginProfileId(profileId);
+  if (isRemoteSyncActive(normalizedProfileId)) {
+    queuePluginCloudSync(normalizedProfileId, PLUGIN_SYNC_DEBOUNCE_MS);
+    return false;
+  }
+
+  while (true) {
+    const activePush = pluginSyncInFlight.get(normalizedProfileId);
+    if (!activePush) break;
+    await activePush.catch(() => false);
+    if (isRemoteSyncActive(normalizedProfileId)) {
+      queuePluginCloudSync(normalizedProfileId, PLUGIN_SYNC_DEBOUNCE_MS);
+      return false;
+    }
+  }
+  if (!readState(normalizedProfileId).syncDirty) {
+    return false;
+  }
+
+  let pushPromise = null;
+  pushPromise = import("../../core/profile/pluginSyncService.js")
+    .then(({ PluginSyncService }) => PluginSyncService.push(normalizedProfileId))
+    .catch((error) => {
+      console.warn("Plugin cloud sync enqueue failed", error);
+      return false;
+    })
+    .finally(() => {
+      if (pluginSyncInFlight.get(normalizedProfileId) === pushPromise) {
+        pluginSyncInFlight.delete(normalizedProfileId);
+      }
+    });
+  pluginSyncInFlight.set(normalizedProfileId, pushPromise);
+  const didPush = await pushPromise;
+  if (!didPush) {
+    const retryDelayMs = getSyncBackoffRemainingMs();
+    if (retryDelayMs > 0) {
+      queuePluginCloudSync(normalizedProfileId, Math.max(5000, retryDelayMs));
+    }
+  }
+  return didPush;
+}
+
 function queuePluginCloudSync(profileId, delayMs = PLUGIN_SYNC_DEBOUNCE_MS) {
   const normalizedProfileId = normalizedPluginProfileId(profileId);
   const previousTimer = pluginSyncTimers.get(normalizedProfileId);
@@ -122,36 +165,7 @@ function queuePluginCloudSync(profileId, delayMs = PLUGIN_SYNC_DEBOUNCE_MS) {
   const timer = setTimeout(
     () => {
       pluginSyncTimers.delete(normalizedProfileId);
-      if (isRemoteSyncActive(normalizedProfileId)) {
-        queuePluginCloudSync(normalizedProfileId, PLUGIN_SYNC_DEBOUNCE_MS);
-        return;
-      }
-      const activePush = pluginSyncInFlight.get(normalizedProfileId);
-      const run = async () => {
-        if (activePush) {
-          await activePush.catch(() => false);
-        }
-        const pushPromise = import("../../core/profile/pluginSyncService.js")
-          .then(({ PluginSyncService }) => PluginSyncService.push(normalizedProfileId))
-          .catch((error) => {
-            console.warn("Plugin cloud sync enqueue failed", error);
-            return false;
-          })
-          .finally(() => {
-            if (pluginSyncInFlight.get(normalizedProfileId) === pushPromise) {
-              pluginSyncInFlight.delete(normalizedProfileId);
-            }
-          });
-        pluginSyncInFlight.set(normalizedProfileId, pushPromise);
-        const didPush = await pushPromise;
-        if (!didPush) {
-          const retryDelayMs = getSyncBackoffRemainingMs();
-          if (retryDelayMs > 0) {
-            queuePluginCloudSync(normalizedProfileId, Math.max(5000, retryDelayMs));
-          }
-        }
-      };
-      void run();
+      void runPluginCloudSync(normalizedProfileId);
     },
     Math.max(0, Number(delayMs) || 0)
   );
@@ -206,17 +220,17 @@ export const PluginStore = {
     }
     pluginRemoteSyncDepth.delete(normalizedProfileId);
     if (!readState(normalizedProfileId).syncDirty) return false;
-    queuePluginCloudSync(normalizedProfileId, 0);
+    queuePluginCloudSync(normalizedProfileId);
     return true;
   },
 
-  flushCloudSync(profileId = ProfileManager.getActiveProfileId()) {
+  async flushCloudSync(profileId = ProfileManager.getActiveProfileId()) {
     const normalizedProfileId = normalizedPluginProfileId(profileId);
     if (isRemoteSyncActive(normalizedProfileId) || !readState(normalizedProfileId).syncDirty) {
       return false;
     }
-    queuePluginCloudSync(normalizedProfileId, 0);
-    return true;
+    cancelPluginCloudSync(normalizedProfileId);
+    return runPluginCloudSync(normalizedProfileId);
   },
 
   clearDirty(profileId = ProfileManager.getActiveProfileId(), expectedRevision = null) {

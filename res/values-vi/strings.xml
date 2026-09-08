@@ -29,6 +29,7 @@
     <string name="hero_director">Đạo diễn: %1$s</string>
     <string name="hero_writer">Biên kịch: %1$s</string>
     <string name="hero_play">Xem</string>
+    <string name="play_manually">Chọn nguồn phát</string>
     <string name="hero_play_episode">Xem P%1$d, T%2$d</string>
     <string name="hero_add_to_library">Thêm vào thư viện</string>
     <string name="hero_remove_from_library">Xoá khỏi thư viện</string>
@@ -36,6 +37,8 @@
     <string name="hero_mark_unwatched">Đánh dấu chưa xem</string>
     <string name="hero_play_trailer">Xem trailer</string>
     <string name="hero_press_back_trailer">Nhấn quay lại để thoát trailer</string>
+    <string name="hero_synopsis_read_more">Đọc thêm</string>
+    <string name="hero_synopsis_dismiss_hint">Nhấn quay lại để đóng</string>
     <string name="cd_rating">Xếp hạng</string>
     <string name="episodes_season">Mùa %1$d</string>
     <string name="episodes_specials">Tập đặc biệt</string>
@@ -1278,4 +1281,19 @@
     <string name="plugin_test_found_streams">Đã tìm thấy %1$d luồng</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Quản lý nhà cung cấp Nuvio JS có thể thực thi và siêu dữ liệu bên ngoài được giữ lại</string>
+    <string name="home.continueStatusWatchedPercent">Đã xem {{percent}}%</string>
+    <string name="autoplay_post_play_recommendations">Đề xuất sau khi phát</string>
+    <string name="autoplay_post_play_recommendations_sub">Hiển thị đề xuất gần cuối phim và loạt phim</string>
+    <string name="autoplay_post_play_movie_threshold">Thời điểm đề xuất phim</string>
+    <string name="autoplay_post_play_movie_threshold_sub">Chọn thời điểm hiển thị đề xuất phim. Các tập phim tuân theo cài đặt Ngưỡng tập tiếp theo.</string>
+    <string name="player_post_play_because">Vì bạn đã xem %1$s</string>
+    <string name="player_post_play_recommended">Đề xuất cho bạn</string>
+    <string name="player_post_play_play">Phát</string>
+    <string name="player_post_play_previous_recommendation">Đề xuất trước đó</string>
+    <string name="player_post_play_next_recommendation">Đề xuất tiếp theo</string>
+    <string name="player_post_play_return_to_player">Quay lại trình phát</string>
+    <string name="player_post_play_trailer_countdown">Trailer sẽ phát sau %1$d</string>
+    <string name="player_post_play_trailer_playing">Đang phát trailer</string>
+    <string name="player_post_play_trailer">Trailer</string>
+    <string name="player_post_play_play_manually">Chọn nguồn phát</string>
 </resources>

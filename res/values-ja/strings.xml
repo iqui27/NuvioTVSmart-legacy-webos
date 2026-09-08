@@ -1835,4 +1835,6 @@
     <string name="plugin_test_found_streams">%1$d件のストリームが見つかりました</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">実行可能なNuvio JSプロバイダーと保持された外部メタデータを管理</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}}% 視聴済み</string>
+    <string name="player_post_play_play_manually">手動で再生</string>
 </resources>

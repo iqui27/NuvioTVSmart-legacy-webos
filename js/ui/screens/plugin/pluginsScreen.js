@@ -149,6 +149,7 @@ export const PluginsScreen = {
     this.diagnosticsProviderId = null;
     this.testAbortController = null;
     this.pendingScraperEnable = null;
+    this.keyboardVisible = false;
     this.ensureStartupSyncSubscription();
     const deferRuntimeProbe = Platform.isTizen();
     if (!deferRuntimeProbe) {
@@ -203,6 +204,11 @@ export const PluginsScreen = {
     if (!Platform.isTizen() && !Platform.isWebOS()) {
       return false;
     }
+    if (Platform.isWebOS() && this.keyboardVisible === false) {
+      // webOS keeps the input as activeElement after its native keyboard has
+      // disappeared; the D-pad must be handed back to the page at that point.
+      return false;
+    }
     const active = document.activeElement;
     const eventTarget = event?.target || null;
     return Boolean(
@@ -221,6 +227,13 @@ export const PluginsScreen = {
   },
 
   bindEvents() {
+    if (Platform.isWebOS() && !this.keyboardStateChangeBound) {
+      this.keyboardStateChangeHandler = (event) => {
+        this.keyboardVisible = event?.detail?.visibility === true;
+      };
+      document.addEventListener("keyboardStateChange", this.keyboardStateChangeHandler, false);
+      this.keyboardStateChangeBound = true;
+    }
     if (this.eventsBound || !this.container) return;
     this.eventsBound = true;
     this.container.addEventListener("input", (event) => {
@@ -234,6 +247,9 @@ export const PluginsScreen = {
         if (node !== target) node.classList.remove("focused");
       });
       target.classList.add("focused");
+      if (Platform.isWebOS() && target.matches?.("input, textarea")) {
+        this.keyboardVisible = true;
+      }
       this.rememberFocusedTarget(target);
       this.ensureMainVisibility(target);
     });
@@ -770,6 +786,38 @@ export const PluginsScreen = {
     this.ensureMainVisibility(target);
   },
 
+  moveFocusWithinHorizontalRow(direction) {
+    const current = this.container?.querySelector?.(".plugins-focusable:not([disabled]).focused");
+    const row = current?.closest?.(
+      ".plugins-add-row, .plugins-repository-actions, .plugins-provider-actions"
+    );
+    if (!current || !row) return false;
+
+    const rowFocusables = Array.from(
+      row.querySelectorAll(".plugins-focusable:not([disabled])")
+    ).filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    const currentIndex = rowFocusables.indexOf(current);
+    if (currentIndex < 0) return false;
+
+    const nextIndex = currentIndex + (direction === "left" ? -1 : 1);
+    const next = rowFocusables[nextIndex];
+    if (!next) return true;
+
+    current.classList.remove("focused");
+    next.classList.add("focused");
+    this.rememberFocusedTarget(next);
+    try {
+      next.focus({ preventScroll: true });
+    } catch (_) {
+      next.focus();
+    }
+    this.ensureMainVisibility(next);
+    return true;
+  },
+
   async activateTarget(target) {
     const action = String(target?.dataset?.action || "");
     if (
@@ -807,9 +855,14 @@ export const PluginsScreen = {
       await this.addRepository();
       return;
     }
-    const [kind, id, flag] = action.split(":");
+    // Scraper IDs intentionally use `repositoryId:manifestId`, so preserve
+    // every segment instead of truncating the ID at its first colon.
+    const [kind, ...actionParts] = action.split(":");
+    const id = actionParts.join(":");
     if (kind === "toggle-all") {
-      PluginManager.setAllScrapersEnabled(id, flag === "1");
+      const flag = actionParts.pop();
+      const repositoryId = actionParts.join(":");
+      PluginManager.setAllScrapersEnabled(repositoryId, flag === "1");
       this.render();
       return;
     }
@@ -996,8 +1049,18 @@ export const PluginsScreen = {
       }
       return;
     }
-    if (event?.target?.matches?.("input") && (code === 37 || code === 39)) {
+    if (
+      event?.target?.matches?.("input") &&
+      (code === 37 || code === 39) &&
+      (!Platform.isWebOS() || this.keyboardVisible !== false)
+    ) {
       return;
+    }
+    if ([37, 39].includes(code)) {
+      if (this.moveFocusWithinHorizontalRow(code === 37 ? "left" : "right")) {
+        event?.preventDefault?.();
+        return;
+      }
     }
     if ([38, 40, 37, 39].includes(code)) {
       if (
@@ -1037,6 +1100,10 @@ export const PluginsScreen = {
     this.testResult = null;
     this.diagnosticsProviderId = null;
     this.pendingScraperEnable = null;
+    if (this.keyboardStateChangeHandler) {
+      document.removeEventListener("keyboardStateChange", this.keyboardStateChangeHandler, false);
+      this.keyboardStateChangeBound = false;
+    }
     ScreenUtils.hide(this.container);
   }
 };

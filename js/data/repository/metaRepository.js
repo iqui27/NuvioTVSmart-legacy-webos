@@ -86,7 +86,7 @@ class MetaRepository {
     }
   }
 
-  async getMetaFromAllAddons(type, id) {
+  async getMetaFromAllAddons(type, id, sourceAddonBaseUrl = null) {
     const requestedType = String(type || "").trim();
     const inferredType = this.inferCanonicalType(requestedType, id);
     const cacheKey = `all:${inferredType.toLowerCase()}:${String(id || "").trim()}`;
@@ -100,6 +100,9 @@ class MetaRepository {
 
     const request = (async () => {
       const addons = await addonRepository.getInstalledAddons();
+      const normalizedSourceUrl = sourceAddonBaseUrl
+        ? addonRepository.canonicalizeUrl(sourceAddonBaseUrl)
+        : "";
       const candidates = [];
       const seenCandidates = new Set();
       const addCandidate = (addon, candidateType) => {
@@ -173,6 +176,18 @@ class MetaRepository {
       }
 
       for (const { addon, type: candidateType } of candidates) {
+        // Android treats the catalog/source addon as sufficient for a
+        // recommendation candidate: it uses the candidate preview metadata
+        // instead of issuing a second detail request to that same addon.
+        if (
+          normalizedSourceUrl &&
+          addonRepository.canonicalizeUrl(addon.baseUrl) === normalizedSourceUrl
+        ) {
+          return {
+            status: "source-sufficient",
+            message: "Source addon metadata is sufficient"
+          };
+        }
         const result = await this.getMeta(addon.baseUrl, candidateType, id);
         if (result.status === "success") {
           this.metaCache.set(cacheKey, result.data);
@@ -189,6 +204,35 @@ class MetaRepository {
     } finally {
       this.inFlightMetaAll.delete(cacheKey);
     }
+  }
+
+  getCachedMeta(type, id) {
+    const requestedType = String(type || "").trim();
+    const normalizedId = String(id || "").trim();
+    if (!normalizedId) {
+      return null;
+    }
+    const inferredType = this.inferCanonicalType(requestedType, normalizedId);
+    const allKey = `all:${inferredType.toLowerCase()}:${normalizedId}`;
+    if (this.metaCache.has(allKey)) {
+      return this.metaCache.get(allKey);
+    }
+
+    const candidateTypes = [requestedType, inferredType]
+      .filter(Boolean)
+      .filter(
+        (candidate, index, values) =>
+          values.findIndex((value) => value.toLowerCase() === candidate.toLowerCase()) === index
+      );
+    for (const candidateType of candidateTypes) {
+      const suffix = `:${candidateType}:${normalizedId}`;
+      for (const [cacheKey, meta] of this.metaCache.entries()) {
+        if (cacheKey.endsWith(suffix)) {
+          return meta;
+        }
+      }
+    }
+    return null;
   }
 
   buildMetaUrl(baseUrl, type, id) {

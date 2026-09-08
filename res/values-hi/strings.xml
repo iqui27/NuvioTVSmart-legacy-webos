@@ -1363,4 +1363,6 @@
     <string name="plugin_test_found_streams">%1$d स्ट्रीम मिलीं</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">चलने योग्य Nuvio JS प्रदाताओं और सुरक्षित बाहरी मेटाडेटा को प्रबंधित करें</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}}% देखा गया</string>
+    <string name="player_post_play_play_manually">मैन्युअली चलाएँ</string>
 </resources>

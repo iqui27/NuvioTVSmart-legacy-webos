@@ -34,6 +34,8 @@
     <string name="hero_mark_unwatched">Oznacz jako nieobejrzane</string>
     <string name="hero_play_trailer">Odtwórz zwiastun</string>
     <string name="hero_press_back_trailer">Naciśnij wstecz, aby wyjść ze zwiastuna</string>
+    <string name="hero_synopsis_read_more">Czytaj więcej</string>
+    <string name="hero_synopsis_dismiss_hint">Naciśnij wstecz, aby zamknąć</string>
     <string name="cd_rating">Ocena</string>
     <string name="episodes_season">Sezon %1$d</string>
     <string name="episodes_specials">Specjalne</string>
@@ -2768,4 +2770,19 @@
     <string name="plugin_security_note">Kod pluginu działa w ograniczonym Workerze. Sieć jest obsługiwana przez dołączoną usługę TV, z publicznymi celami HTTP(S), limitami rozmiaru, limitami czasu i anulowaniem, bez dostępu do pamięci TV ani natywnych API.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Zarządzaj wykonywalnymi dostawcami Nuvio JS i zachowanymi zewnętrznymi metadanymi</string>
+    <string name="home.continueStatusWatchedPercent">Obejrzano {{percent}}%</string>
+    <string name="autoplay_post_play_recommendations">Rekomendacje po odtwarzaniu</string>
+    <string name="autoplay_post_play_recommendations_sub">Pokaż rekomendowane filmy i seriale po zakończeniu odtwarzania.</string>
+    <string name="autoplay_post_play_movie_threshold">Czas rekomendacji filmowych</string>
+    <string name="autoplay_post_play_movie_threshold_sub">Wybierz kiedy pojawiają się rekomendacje filmowe. Odcinki korzystają z ustawienia progu następnego odcinka.</string>
+    <string name="player_post_play_because">Ponieważ obejrzałeś %1$s</string>
+    <string name="player_post_play_recommended">Rekomendowane dla Ciebie</string>
+    <string name="player_post_play_play">Odtwórz</string>
+    <string name="player_post_play_previous_recommendation">Poprzednia rekomendacja</string>
+    <string name="player_post_play_next_recommendation">Następna rekomendacja</string>
+    <string name="player_post_play_return_to_player">Wróć do odtwarzacza</string>
+    <string name="player_post_play_trailer_countdown">Zwiastun za %1$d</string>
+    <string name="player_post_play_trailer_playing">Zwiastun jest odtwarzany</string>
+    <string name="player_post_play_trailer">Zwiastun</string>
+    <string name="player_post_play_play_manually">Odtwórz ręcznie</string>
 </resources>

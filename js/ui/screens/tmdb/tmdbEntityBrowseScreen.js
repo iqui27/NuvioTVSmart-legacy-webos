@@ -250,7 +250,6 @@ export const TmdbEntityBrowseScreen = {
     this.posterOptionsFocusKey = "";
     this.pendingPosterHoldTarget = null;
     this.pendingPosterHoldTimer = null;
-    await this.refreshWatchedTitleIds();
 
     if (
       navigationContext?.isBackNavigation &&
@@ -260,8 +259,26 @@ export const TmdbEntityBrowseScreen = {
       return;
     }
 
+    const routeLoadToken = this.loadToken;
+    const watchedTitleIdsPromise = this.refreshWatchedTitleIds();
     this.renderLoading();
-    await this.load();
+
+    // Android starts the browse ViewModel from the composed screen. Waiting
+    // for the local watched snapshot must not keep Router.navigate() pending;
+    // metadata remains responsible for publishing the loaded/error state.
+    void (async () => {
+      await watchedTitleIdsPromise;
+      if (routeLoadToken !== this.loadToken || Router.getCurrent() !== "tmdbEntityBrowse") {
+        return;
+      }
+      await this.load();
+    })().catch((error) => {
+      if (routeLoadToken !== this.loadToken || Router.getCurrent() !== "tmdbEntityBrowse") {
+        return;
+      }
+      console.warn("TMDB entity browse background start failed", error);
+      this.renderError(t("tmdb_entity_error_load", {}, "Could not load this selection"));
+    });
   },
 
   async load() {

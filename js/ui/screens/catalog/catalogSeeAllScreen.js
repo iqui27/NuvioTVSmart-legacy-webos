@@ -294,7 +294,6 @@ export const CatalogSeeAllScreen = {
     this.posterOptionsFocusKey = "";
     this.pendingPosterHoldTarget = null;
     this.pendingPosterHoldTimer = null;
-    await this.refreshWatchedTitleIds();
 
     if (
       navigationContext?.isBackNavigation &&
@@ -305,10 +304,38 @@ export const CatalogSeeAllScreen = {
       return;
     }
 
+    const routeLoadToken = this.loadToken;
+    const watchedTitleIdsPromise = this.refreshWatchedTitleIds();
+
+    // Android composes the catalog grid while the watched-state flow and the
+    // first catalog page are still loading. Keep the existing initial items
+    // (when supplied by Home/Search) interactive and fetch the rest after the
+    // route has completed.
+    this.loading = !this.items.length;
     this.render();
-    if (!this.items.length) {
-      await this.loadNextPage();
-    }
+    void (async () => {
+      await watchedTitleIdsPromise;
+      if (routeLoadToken !== this.loadToken || Router.getCurrent() !== "catalogSeeAll") {
+        return;
+      }
+      if (!this.items.length) {
+        this.loading = false;
+        await this.loadNextPage();
+        return;
+      }
+      // Watched badges are cosmetic. Do not replace a grid that the user has
+      // already focused while the local watched snapshot was being read.
+      if (!this.container?.querySelector(".seeall-card.focusable.focused")) {
+        this.render();
+      }
+    })().catch((error) => {
+      if (routeLoadToken === this.loadToken && Router.getCurrent() === "catalogSeeAll") {
+        this.loading = false;
+        this.hasMore = false;
+        this.render();
+        console.warn("Catalog See All background load failed", error);
+      }
+    });
   },
 
   async loadNextPage({ preserveViewport = false } = {}) {

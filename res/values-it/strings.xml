@@ -129,6 +129,8 @@
     <string name="hero_mark_unwatched">Segna come non visto</string>
     <string name="hero_play_trailer">Riproduci trailer</string>
     <string name="hero_press_back_trailer">Premi indietro per uscire dal trailer</string>
+    <string name="hero_synopsis_read_more">Leggi altro</string>
+    <string name="hero_synopsis_dismiss_hint">Premi indietro per chiudere</string>
     <string name="cd_rating">Valutazione</string>
     <string name="episodes_season">Stagione %1$d</string>
     <string name="episodes_specials">Speciali</string>
@@ -2799,4 +2801,6 @@
     <string name="player_error_tizen_p2p_unsupported">La riproduzione Torrent/P2P non è supportata su questa TV.</string>
     <string name="player_tizen_mkv_subtitles_unavailable">I sottotitoli incorporati negli MKV non sono esposti dal player web di questa TV.</string>
     <string name="player_tizen_mkv_audio_unavailable">Le tracce audio incorporate negli MKV non sono esposte dal player web di questa TV.</string>
+    <string name="home.continueStatusWatchedPercent">Visto {{percent}}%</string>
+    <string name="player_post_play_play_manually">Riproduci manualmente</string>
 </resources>

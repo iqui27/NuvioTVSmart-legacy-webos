@@ -163,6 +163,8 @@
     <string name="hero_mark_unwatched">Marquer comme non vu</string>
     <string name="hero_play_trailer">Regarder la bande-annonce</string>
     <string name="hero_press_back_trailer">Appuie sur «&#160;Retour&#160;» pour quitter la bande-annonce</string>
+    <string name="hero_synopsis_read_more">Lire la suite</string>
+    <string name="hero_synopsis_dismiss_hint">Appuyez sur Retour pour fermer</string>
     <string name="cd_rating">Note</string>
     <string name="episodes_season">Saison %1$d</string>
     <string name="episodes_specials">Spéciaux</string>
@@ -2655,4 +2657,6 @@
     <string name="plugin_security_note">Le code du plugin s’exécute dans un Worker limité. Le réseau passe par le service TV inclus dans le package, avec des cibles HTTP(S) publiques, des limites de taille, des délais et l’annulation, sans accès au stockage TV ni aux API natives.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Gérer les fournisseurs Nuvio JS exécutables et les métadonnées externes conservées</string>
+    <string name="home.continueStatusWatchedPercent">{{percent}} % regardé</string>
+    <string name="player_post_play_play_manually">Regarder manuellement</string>
 </resources>

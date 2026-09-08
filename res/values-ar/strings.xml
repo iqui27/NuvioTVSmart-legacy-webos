@@ -129,6 +129,8 @@
     <string name="hero_mark_unwatched">تحديد كغير مشاهد</string>
     <string name="hero_play_trailer">تشغيل الإعلان</string>
     <string name="hero_press_back_trailer">اضغط "رجوع" للخروج من الإعلان</string>
+    <string name="hero_synopsis_read_more">اقرأ المزيد</string>
+    <string name="hero_synopsis_dismiss_hint">اضغط رجوع للإغلاق</string>
     <string name="cd_rating">التقييم</string>
     <string name="episodes_season">الموسم %1$d</string>
     <string name="episodes_specials">الحلقات الخاصة</string>
@@ -2227,4 +2229,5 @@
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.addRepositoryPrompt">أضف عنوان URL للمستودع</string>
     <string name="settings.plugins.openSubtitle">إدارة موفري Nuvio JS القابلين للتنفيذ والبيانات الوصفية الخارجية المحفوظة</string>
+    <string name="player_post_play_play_manually">تشغيل يدوي</string>
 </resources>

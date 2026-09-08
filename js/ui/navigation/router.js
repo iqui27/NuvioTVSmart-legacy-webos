@@ -179,6 +179,7 @@ export const Router = {
   routeReturnBackGuardUntil: 0,
   routeReturnBackGuardNavigationId: 0,
   pendingHistoryReturn: null,
+  pendingPostPlayNavigation: null,
 
   routes: {
     home: HomeScreen,
@@ -360,6 +361,9 @@ export const Router = {
     window.addEventListener("popstate", async (event) => {
       const state = event?.state || null;
       if (await this.consumePendingHistoryReturn(state)) {
+        return;
+      }
+      if (await this.consumePendingPostPlayNavigation(state)) {
         return;
       }
       if (this.ignoreNextPopstate) {
@@ -797,6 +801,94 @@ export const Router = {
     this.persistWebOsResumeRoute(this.current, this.currentParams);
   },
 
+  navigateFromPostPlayRecommendation(routeName, params = {}, options = {}) {
+    const targetRoute = String(routeName || "").trim();
+    if (!targetRoute || !this.routes[targetRoute]) {
+      return false;
+    }
+
+    // Android removes the current Player and, when Player was opened from a
+    // Stream destination, removes that Stream destination as the pop-up root
+    // before pushing the recommendation Detail. The Router keeps the current
+    // route out of `stack`, so compact both the logical stack and browser
+    // history before mounting the new route.
+    if (this.current !== "player") {
+      void this.navigate(targetRoute, params, options);
+      return true;
+    }
+
+    const topStackIndex = this.stack.length - 1;
+    const topStackRoute = getStackEntryRoute(this.stack[topStackIndex]);
+    const removesStreamRoot = topStackRoute === "stream";
+    const historySteps = topStackRoute ? (removesStreamRoot ? 2 : 1) : 0;
+    if (removesStreamRoot) {
+      this.stack.pop();
+    }
+
+    const navigateOptions = {
+      ...options,
+      skipStackPush: true,
+      replaceHistory: true
+    };
+
+    if (
+      historySteps > 0 &&
+      this.historyInitialized &&
+      window?.history &&
+      typeof window.history.go === "function" &&
+      String(window.history.state?.route || "") === "player"
+    ) {
+      this.pendingPostPlayNavigation = {
+        route: targetRoute,
+        params: params && typeof params === "object" ? params : {},
+        // We are already positioned on the retained stack root after
+        // history.go(); a normal pushState creates the new Detail entry and
+        // truncates the obsolete Player/Stream forward entries.
+        options: { ...navigateOptions, replaceHistory: false },
+        sourceRoute: "player",
+        expectedRoute: getStackEntryRoute(this.stack[this.stack.length - 1]),
+        requestedAt: Date.now()
+      };
+      try {
+        window.history.go(-historySteps);
+        return true;
+      } catch (error) {
+        this.pendingPostPlayNavigation = null;
+        console.warn("Failed to compact post-play browser history", error);
+      }
+    }
+
+    void this.navigate(targetRoute, params, navigateOptions);
+    return true;
+  },
+
+  async consumePendingPostPlayNavigation(state = null) {
+    const pending = this.pendingPostPlayNavigation;
+    if (!pending) {
+      return false;
+    }
+    this.pendingPostPlayNavigation = null;
+    if (this.current !== pending.sourceRoute) {
+      return false;
+    }
+
+    // A successful traversal lands on the route immediately before the
+    // Android pop-up root. Do not mount that intermediate route: push the
+    // recommendation directly, which truncates the old forward entries.
+    if (
+      pending.expectedRoute &&
+      String(state?.route || "") &&
+      String(state.route) !== pending.expectedRoute
+    ) {
+      console.warn("Post-play history target differed from the logical stack", {
+        expected: pending.expectedRoute,
+        actual: state.route
+      });
+    }
+    await this.navigate(pending.route, pending.params, pending.options);
+    return true;
+  },
+
   async backFromPendingNavigation() {
     // The current history entry still represents the caller until mount completes.
     // Restore that entry in place so a fast Back neither skips it nor records a stale route.
@@ -821,7 +913,7 @@ export const Router = {
   },
 
   async back(options = {}) {
-    if (this.pendingHistoryReturn) {
+    if (this.pendingHistoryReturn || this.pendingPostPlayNavigation) {
       return;
     }
 

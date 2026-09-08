@@ -1412,4 +1412,6 @@
     <string name="plugin_test_found_streams">Se encontraron %1$d transmisiones</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Gestionar proveedores Nuvio JS ejecutables y metadatos externos conservados</string>
+    <string name="home.continueStatusWatchedPercent">Visto {{percent}}%</string>
+    <string name="player_post_play_play_manually">Reproducir manualmente</string>
 </resources>

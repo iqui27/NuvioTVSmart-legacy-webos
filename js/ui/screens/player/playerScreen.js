@@ -62,7 +62,10 @@ import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.j
 import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
 import { matchStreamBadges } from "../../../core/streams/streamBadgeRules.js";
 import { hasReleaseToken } from "../../../core/streams/releaseToken.js";
-import { selectAutoPlayStream } from "../../../core/streams/streamAutoPlaySelector.js";
+import {
+  isAutoPlayEffectivelyEnabled,
+  selectAutoPlayStream
+} from "../../../core/streams/streamAutoPlaySelector.js";
 import { orderStreamsByAddonOrder } from "../../../core/streams/streamOrdering.js";
 import { metaRepository } from "../../../data/repository/metaRepository.js";
 import { I18n } from "../../../i18n/index.js";
@@ -94,6 +97,17 @@ import {
   shouldShowNextEpisodeCard as shouldShowNextEpisodeCardRule
 } from "./playerNextEpisodeRules.js";
 import { normalizePlaybackDisplayLineBreaks } from "./playbackDisplayText.js";
+import { formatHeroRuntime } from "../detail/episodeCardMetadata.js";
+import { localizedGenreLabel } from "../../../i18n/genreLabels.js";
+import {
+  buildInlineYoutubePlayerUrl,
+  PostPlayRecommendationController,
+  POST_PLAY_IN_APP_TRAILER_PLAYBACK_ENABLED
+} from "./postPlayRecommendationController.js";
+import {
+  normalizePlayerEpisodeMetadata,
+  resolvePostPlayEpisodeMetadataResolved
+} from "../../../core/player/playerEpisodeMetadata.js";
 import {
   buildHtmlSubtitleCue,
   getSubtitleAssAlignment,
@@ -104,6 +118,8 @@ import {
   SUBTITLE_VERTICAL_OFFSET_DEFAULT,
   SUBTITLE_VERTICAL_OFFSET_PLAYER_STEP,
   formatSubtitleVerticalOffset,
+  getSubtitleVerticalOffsetVh,
+  getSubtitleVerticalResidualOffsetVh,
   normalizeSubtitleVerticalOffset,
   splitSubtitleVerticalOffset
 } from "../../../core/player/subtitleVerticalOffset.js";
@@ -1747,6 +1763,15 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function hasExplicitSubtitleVerticalPosition(snapshot) {
+  const rawLine = snapshot?.line;
+  if (rawLine == null || String(rawLine).trim().toLowerCase() === "auto") {
+    return false;
+  }
+  const line = Number(rawLine);
+  return Number.isFinite(line) && line !== -1;
+}
+
 function trackListToArray(trackList) {
   if (!trackList) {
     return [];
@@ -1801,8 +1826,14 @@ function trackListToArray(trackList) {
 }
 
 function normalizeItemType(value) {
-  const normalized = String(value || "movie").toLowerCase();
+  const normalized = String(value || "movie")
+    .trim()
+    .toLowerCase();
   return normalized || "movie";
+}
+
+function isSeriesItemType(value) {
+  return ["series", "tv", "show", "tvshow"].includes(normalizeItemType(value));
 }
 
 function escapeHtml(value) {
@@ -1817,6 +1848,48 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value);
 }
+
+function postPlayFastOutSlowIn(progress) {
+  const target = Math.max(0, Math.min(1, Number(progress) || 0));
+  let low = 0;
+  let high = 1;
+  // Android's default tween easing is FastOutSlowIn (0.4, 0, 0.2, 1).
+  // Solve the cubic-bezier x component so the native AVPlay rectangle follows
+  // the same curve as the CSS/Compose player-surface transition.
+  for (let index = 0; index < 12; index += 1) {
+    const time = (low + high) / 2;
+    const x = 3 * (1 - time) ** 2 * time * 0.4 + 3 * (1 - time) * time ** 2 * 0.2 + time ** 3;
+    if (x < target) {
+      low = time;
+    } else {
+      high = time;
+    }
+  }
+  const time = (low + high) / 2;
+  return 3 * (1 - time) * time ** 2 + time ** 3;
+}
+
+function interpolatePostPlayRect(from = {}, to = {}, progress = 1) {
+  const eased = postPlayFastOutSlowIn(progress);
+  return {
+    x: Math.round(Number(from.x || 0) + (Number(to.x || 0) - Number(from.x || 0)) * eased),
+    y: Math.round(Number(from.y || 0) + (Number(to.y || 0) - Number(from.y || 0)) * eased),
+    width: Math.max(
+      1,
+      Math.round(
+        Number(from.width || 1) + (Number(to.width || 1) - Number(from.width || 1)) * eased
+      )
+    ),
+    height: Math.max(
+      1,
+      Math.round(
+        Number(from.height || 1) + (Number(to.height || 1) - Number(from.height || 1)) * eased
+      )
+    )
+  };
+}
+
+const POST_PLAY_LONG_PRESS_DELAY_MS = 500;
 
 function cleanPlaybackDiagnosticValue(value, maxLength = 320) {
   const text = String(value ?? "")
@@ -2838,7 +2911,17 @@ export const PlayerScreen = {
     this.speedDialogVisible = false;
     this.speedDialogIndex = Math.max(0, PLAYER_SPEEDS.indexOf(1));
 
-    this.episodes = Array.isArray(params.episodes) ? params.episodes : [];
+    this.postPlayEpisodeMetadataProvided = Array.isArray(params.episodes);
+    this.episodes = isSeriesItemType(params?.itemType || "movie")
+      ? normalizePlayerEpisodeMetadata(params.episodes, { fallbackSeason: params?.season })
+      : this.postPlayEpisodeMetadataProvided
+        ? params.episodes
+        : [];
+    this.postPlayEpisodeMetadataResolved = resolvePostPlayEpisodeMetadataResolved({
+      explicitResolution: params.nextEpisodeMetadataResolved,
+      episodes: this.episodes,
+      nextEpisodeVideoId: params.nextEpisodeVideoId
+    });
     this.invalidateNextEpisodeInfoCache();
     this.episodePanelVisible = false;
     const explicitEpisodeIndex = this.episodes.findIndex((entry) => entry.id === params.videoId);
@@ -2900,6 +2983,45 @@ export const PlayerScreen = {
     this.playerBackNavigationInProgress = false;
     this.nextEpisodeCardDismissed = false;
     this.nextEpisodeBackExitArmed = false;
+    this.postPlayPlaybackEnded = false;
+    this.postPlayNaturalEndPending = false;
+    this.postPlayNaturalCompletionPrepared = false;
+    this.postPlayDescriptionTruncated = false;
+    this.postPlayFocusedAction = "primary";
+    this.postPlayPendingSelect = false;
+    this.postPlayPendingSelectAction = "";
+    this.postPlayLastRecommendationIndex = -1;
+    this.postPlayLastVisible = false;
+    this.postPlayLastTrailerPlaying = false;
+    this.postPlayRenderedSignature = "";
+    this.postPlayBackdropTransitionTimer = null;
+    this.postPlaySummaryTransitionTimer = null;
+    this.postPlayTrailerActionTransitionFrame = null;
+    this.postPlayTrailerLabelTimer = null;
+    this.postPlayNativeSurfaceStateKey = "";
+    this.postPlayNativeSurfaceAnimationFrame = null;
+    this.postPlayNativeSurfaceAnimationUsesRaf = false;
+    this.postPlayNativeSurfaceRect = null;
+    this.postPlayTrailerMedia = null;
+    this.postPlayTrailerMessageHandler = null;
+    this.postPlayTrailerGeneration = 0;
+    this.postPlayTrailerExitTimer = null;
+    this.postPlayFocusTimer = null;
+    this.postPlayDescriptionMeasureFrame = null;
+    this.postPlayManualDialogVisible = false;
+    this.postPlaySynopsisVisible = false;
+    this.postPlaySynopsisScrollFrame = null;
+    this.postPlaySynopsisScrollTarget = null;
+    this.postPlaySynopsisScrollPreviousFrameAt = 0;
+    this.postPlayLongPressTimer = null;
+    this.postPlayLongPressTriggered = false;
+    this.postPlayRecommendationController?.stop?.();
+    this.postPlayRecommendationController = new PostPlayRecommendationController({
+      onStateChange: (state) => this.onPostPlayRecommendationStateChange(state),
+      onStartTrailer: (recommendation, options) =>
+        this.startPostPlayTrailer(recommendation, options),
+      onStopTrailer: () => this.stopPostPlayTrailer()
+    });
 
     this.parentalWarnings = normalizeParentalWarnings(
       params.parentalWarnings || params.parentalGuide
@@ -3064,6 +3186,7 @@ export const PlayerScreen = {
       void this.fetchParentalGuide();
       void this.fetchSkipIntervals();
       void this.hydratePauseOverlayMeta();
+      void this.loadPostPlayEpisodeMetadata(mountToken);
     }
     this.renderEpisodePanel();
     this.applyAspectMode({ showToast: false });
@@ -3151,6 +3274,1452 @@ export const PlayerScreen = {
       this.updateLoadingVisibility();
       this.setControlsVisible(false);
     }
+  },
+
+  getPostPlayState() {
+    return (
+      this.postPlayRecommendationController?.getState?.() || {
+        recommendation: null,
+        recommendations: [],
+        recommendationIndex: 0,
+        recommendationCount: 0,
+        isLoadingRecommendation: false,
+        isChangingRecommendation: false,
+        isLoadingTrailer: false,
+        isVisible: false,
+        hasReturnedToPlayer: false,
+        countdownSeconds: null,
+        countdownKind: "",
+        isTrailerPlaying: false,
+        hasAutoPlayedTrailer: false,
+        canNavigatePrevious: false,
+        canNavigateNext: false,
+        canReturnToPlayer: false,
+        blocksNaturalCompletion: false
+      }
+    );
+  },
+
+  isPostPlayVisible() {
+    return Boolean(this.getPostPlayState().isVisible);
+  },
+
+  isPostPlayLoading() {
+    return Boolean(this.getPostPlayState().isLoadingRecommendation);
+  },
+
+  getPostPlayCurrentTitle() {
+    return (
+      String(
+        this.params?.playerTitle ||
+          this.params?.itemTitle ||
+          this.params?.title ||
+          this.params?.itemId ||
+          ""
+      ).trim() || ""
+    );
+  },
+
+  getPostPlaySourceAddonBaseUrl() {
+    return String(
+      this.activePlaybackSourceContext?.addonBaseUrl ||
+        this.activePlaybackSourceContext?.baseUrl ||
+        this.params?.addonBaseUrl ||
+        this.params?.sourceAddonBaseUrl ||
+        ""
+    ).trim();
+  },
+
+  isPostPlayManualPlayOptionEnabled() {
+    return isAutoPlayEffectivelyEnabled(PlayerSettingsStore.get());
+  },
+
+  isPostPlayEpisodeMetadataResolved() {
+    if (!isSeriesItemType(this.params?.itemType || "movie")) {
+      return true;
+    }
+    return Boolean(this.postPlayEpisodeMetadataResolved);
+  },
+
+  async loadPostPlayEpisodeMetadata(mountToken = null) {
+    const itemType = normalizeItemType(this.params?.itemType || "movie");
+    if (
+      !isSeriesItemType(itemType) ||
+      this.isExternalFrameMode() ||
+      this.isPostPlayEpisodeMetadataResolved() ||
+      !this.isActiveMountToken(mountToken)
+    ) {
+      return;
+    }
+
+    const itemId = String(this.params?.itemId || this.params?.contentId || "").trim();
+    if (!itemId) {
+      return;
+    }
+
+    try {
+      // Match Android's player-runtime ownership: resolve the canonical series
+      // metadata independently of whatever extras the stream route carried.
+      const result = await metaRepository.getMetaFromAllAddons(itemType, itemId);
+      if (
+        !this.isActiveMountToken(mountToken) ||
+        Router.getCurrent() !== "player" ||
+        result?.status !== "success" ||
+        !result?.data
+      ) {
+        return;
+      }
+
+      this.episodes = normalizePlayerEpisodeMetadata(result.data.videos, {
+        fallbackSeason: this.params?.season
+      });
+      this.postPlayEpisodeMetadataProvided = true;
+      this.postPlayEpisodeMetadataResolved = true;
+
+      const currentVideoId = String(this.params?.videoId || "").trim();
+      const currentEpisodeIndex = currentVideoId
+        ? this.episodes.findIndex((episode) => String(episode?.id || "") === currentVideoId)
+        : -1;
+      if (currentEpisodeIndex >= 0) {
+        this.episodePanelIndex = currentEpisodeIndex;
+      } else {
+        const currentSeason = this.params?.season == null ? null : Number(this.params.season);
+        const currentEpisode = Number(this.params?.episode || 0);
+        const positionIndex = this.episodes.findIndex(
+          (episode) =>
+            (currentSeason == null || Number(episode?.season) === currentSeason) &&
+            Number(episode?.episode) === currentEpisode
+        );
+        if (positionIndex >= 0) {
+          this.episodePanelIndex = positionIndex;
+        }
+      }
+
+      if (this.episodePanelVisible) {
+        this.syncEpisodePanelSeasonToIndex();
+        this.renderEpisodePanel();
+      }
+      this.evaluatePostPlayRecommendation();
+    } catch (error) {
+      // Android keeps the metadata gate unresolved on failure. Failing closed
+      // prevents a missing next-episode decision from changing post-play
+      // behavior or competing with autoplay.
+      if (this.isActiveMountToken(mountToken)) {
+        console.warn("Player episode metadata load failed", error);
+      }
+    }
+  },
+
+  blocksPostPlayRecommendation() {
+    return Boolean(
+      this.seekOverlayVisible ||
+      this.seekPreviewSeconds != null ||
+      this.pauseOverlayVisible ||
+      this.pauseOverlayTimer ||
+      this.sourcesPanelVisible ||
+      this.episodePanelVisible ||
+      this.subtitleDialogVisible ||
+      this.audioDialogVisible ||
+      this.speedDialogVisible ||
+      this.moreActionsVisible ||
+      this.stillWatchingPromptVisible ||
+      this.parentalGuideVisible
+    );
+  },
+
+  buildPostPlayRecommendationSnapshot({ playbackEnded = this.postPlayPlaybackEnded } = {}) {
+    const settings = PlayerSettingsStore.get();
+    const rawContentType = normalizeItemType(this.params?.itemType || "movie");
+    const contentType = isSeriesItemType(rawContentType) ? "series" : rawContentType;
+    const current = Number(this.getPlaybackCurrentSeconds() || 0);
+    const duration = Number(this.getPlaybackDurationSeconds() || 0);
+    const nextEpisode = this.resolveNextEpisodeInfo();
+    const positionMs = Number.isFinite(current) && current > 0 ? Math.round(current * 1000) : 0;
+    const durationMs = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) : 0;
+    const nextEpisodeThresholdReached = isSeriesItemType(rawContentType)
+      ? this.getNextEpisodeCardThresholdReached(current, duration)
+      : false;
+    return {
+      contentType,
+      contentId: this.params?.itemId || this.params?.contentId || this.params?.videoId || "",
+      videoId: this.params?.videoId || "",
+      season: this.params?.season ?? null,
+      episode: this.params?.episode ?? null,
+      currentTitle: this.getPostPlayCurrentTitle(),
+      poster: this.params?.playerPosterUrl || this.params?.poster || "",
+      backdrop: this.params?.playerBackdropUrl || this.params?.backdrop || "",
+      imdbId: this.params?.imdbId || this.params?.imdb_id || "",
+      tmdbId: this.params?.tmdbId || this.params?.tmdb_id || "",
+      traktId: this.params?.traktId || this.params?.trakt_id || "",
+      sourceAddonBaseUrl: this.getPostPlaySourceAddonBaseUrl(),
+      contentLanguage: this.contentLanguage || this.params?.contentLanguage || "",
+      enabled: settings.postPlayRecommendationsEnabled !== false,
+      movieThresholdPercent: settings.postPlayMovieThresholdPercent,
+      nextEpisodeMetadataResolved: this.isPostPlayEpisodeMetadataResolved(),
+      nextEpisodeHasAired: nextEpisode?.hasAired ?? null,
+      seriesThresholdReached: nextEpisodeThresholdReached,
+      hasFatalError: this.hasFatalPlaybackError(),
+      hasBlockingInteraction: this.blocksPostPlayRecommendation(),
+      playbackEnded: Boolean(playbackEnded),
+      positionMs,
+      durationMs,
+      hasActiveAutoPlay: Boolean(this.nextEpisodeLaunching || this.switchingEpisode),
+      nextEpisodeVideoId: nextEpisode?.videoId || null
+    };
+  },
+
+  evaluatePostPlayRecommendation({ playbackEnded = false } = {}) {
+    if (playbackEnded) {
+      this.postPlayPlaybackEnded = true;
+    }
+    if (!this.postPlayRecommendationController || this.isExternalFrameMode()) {
+      return this.getPostPlayState();
+    }
+    return this.postPlayRecommendationController.update(
+      this.buildPostPlayRecommendationSnapshot({
+        playbackEnded: playbackEnded || this.postPlayPlaybackEnded
+      })
+    );
+  },
+
+  onPostPlayRecommendationStateChange(state = this.getPostPlayState()) {
+    const wasVisible = Boolean(this.postPlayLastVisible);
+    const wasTrailerPlaying = Boolean(this.postPlayLastTrailerPlaying);
+    const previousIndex = Number(this.postPlayLastRecommendationIndex);
+    const currentIndex = Number(state.recommendationIndex ?? -1);
+    const becameVisible = Boolean(state.isVisible) && !wasVisible;
+    const changedTrailerPlaying = wasTrailerPlaying !== Boolean(state.isTrailerPlaying);
+    const changedIndex =
+      Boolean(state.isVisible) &&
+      previousIndex >= 0 &&
+      currentIndex >= 0 &&
+      currentIndex !== previousIndex;
+    this.postPlayLastVisible = Boolean(state.isVisible);
+    this.postPlayLastTrailerPlaying = Boolean(state.isTrailerPlaying);
+    this.postPlayLastRecommendationIndex = currentIndex;
+    if (changedIndex) {
+      this.postPlayDescriptionTruncated = false;
+    }
+    this.renderPostPlayRecommendation();
+    this.syncPlayerOverlayLayoutState();
+
+    if (becameVisible) {
+      this.schedulePostPlayFocus("primary", 420);
+    } else if (changedIndex) {
+      const directionalAction = currentIndex > previousIndex ? "next" : "previous";
+      this.clearPostPlayFocusTimer();
+      const focusAfterTransition = () => {
+        if (this.isPostPlayVisible()) {
+          this.focusPostPlayAction(directionalAction);
+        }
+      };
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => requestAnimationFrame(focusAfterTransition));
+      } else {
+        this.schedulePostPlayFocus(directionalAction, 32);
+      }
+    } else if (changedTrailerPlaying && state.isVisible) {
+      // Android re-requests the primary action 420ms after either side of the
+      // trailer takeover transition, so focus never remains on a button that
+      // has just been removed from the action row.
+      this.postPlayFocusedAction = "primary";
+      this.schedulePostPlayFocus("primary", 420);
+    }
+
+    if (this.postPlayNaturalEndPending && !state.blocksNaturalCompletion) {
+      this.postPlayNaturalEndPending = false;
+      void this.finishNaturalPlaybackEnded();
+    }
+  },
+
+  renderPostPlayStandardRatings(recommendation = {}) {
+    const items = [];
+    const parsePositiveRating = (value) => {
+      const parsed = Number(
+        String(value ?? "")
+          .trim()
+          .replace(",", ".")
+      );
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+    const imdbRating = recommendation.showStandardRatings
+      ? parsePositiveRating(recommendation.imdbRating)
+      : null;
+    const tmdbRating = recommendation.showStandardRatings
+      ? parsePositiveRating(recommendation.tmdbRating)
+      : null;
+    if (imdbRating != null) {
+      items.push(`
+        <span class="player-post-play-rating player-post-play-standard-rating">
+          <img src="assets/icons/imdb_logo_2016.svg" alt="IMDb" />
+          <span>${escapeHtml(imdbRating.toFixed(1))}</span>
+        </span>
+      `);
+    }
+    if (tmdbRating != null) {
+      items.push(`
+        <span class="player-post-play-rating player-post-play-standard-rating">
+          <img src="assets/icons/mdblist_tmdb.svg" alt="TMDB" />
+          <span>${escapeHtml(String(Math.trunc(tmdbRating * 10)))}</span>
+        </span>
+      `);
+    }
+    return items.length
+      ? `<div class="player-post-play-standard-ratings">${items.join('<span class="player-post-play-rating-separator">•</span>')}</div>`
+      : "";
+  },
+
+  renderPostPlayMdbListRatings(recommendation = {}) {
+    const ratings = recommendation.mdbListRatings || {};
+    const items = [];
+    const formatRating = (provider, value) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) {
+        return "";
+      }
+      const parsed = Number(raw.replace(",", "."));
+      if (!Number.isFinite(parsed)) {
+        return raw.replace(",", ".");
+      }
+      const fixed = parsed.toFixed(1);
+      return ["imdb", "tmdb", "letterboxd"].includes(provider) ? fixed : fixed.replace(/\.0$/, "");
+    };
+    const external = [
+      ["trakt", "assets/icons/mdblist_trakt.svg"],
+      ["imdb", "assets/icons/imdb_logo_2016.svg"],
+      ["tmdb", "assets/icons/mdblist_tmdb.svg"],
+      ["letterboxd", "assets/icons/mdblist_letterboxd.svg"],
+      ["mal", "assets/icons/mdblist_mal.svg"],
+      ["tomatoes", "assets/icons/mdblist_tomatoes.svg"],
+      ["audience", "assets/icons/mdblist_audience.png"],
+      ["metacritic", "assets/icons/mdblist_metacritic.png"]
+    ];
+    external.forEach(([provider, icon]) => {
+      const value = ratings[provider];
+      if (value == null || String(value).trim() === "") {
+        return;
+      }
+      items.push(`
+        <span class="player-post-play-rating player-post-play-external-rating">
+          <img src="${escapeAttribute(icon)}" alt="${escapeAttribute(provider)}" />
+          <span>${escapeHtml(formatRating(provider, value))}</span>
+        </span>
+      `);
+    });
+    return items.length
+      ? `<div class="player-post-play-mdblist-ratings" aria-label="Ratings">${items.join("")}</div>`
+      : "";
+  },
+
+  renderPostPlayManualDialog(recommendation = {}) {
+    if (!this.postPlayManualDialogVisible) {
+      return "";
+    }
+    return `
+      <div class="nuvio-dialog-backdrop nuvio-dialog-backdrop-enter" data-player-post-play-modal="manual">
+        <section class="nuvio-dialog-panel nuvio-dialog-panel-enter player-post-play-manual-dialog" role="dialog" aria-modal="true" aria-label="${escapeAttribute(recommendation.title || "")}" style="max-width:54.2vw">
+          <div class="nuvio-dialog-title">${escapeHtml(recommendation.title || "")}</div>
+          <div class="nuvio-dialog-subtitle">${escapeHtml(t("hero_play", {}, { fallback: "Play" }))}</div>
+          <div class="nuvio-dialog-actions">
+            <button class="nuvio-dialog-button focusable focused" type="button" tabindex="-1" data-player-post-play-action="manualPlay">
+              <span class="nuvio-dialog-button-label">${escapeHtml(t("player_post_play_play_manually", {}, "Play manually"))}</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    `;
+  },
+
+  renderPostPlaySynopsisDialog(recommendation = {}) {
+    if (!this.postPlaySynopsisVisible) {
+      return "";
+    }
+    return `
+      <section class="player-post-play-synopsis-overlay" data-player-post-play-modal="synopsis" role="dialog" aria-modal="true" aria-label="${escapeAttribute(recommendation.title || "Description")}">
+        <h2 class="player-post-play-synopsis-title">${escapeHtml(recommendation.title || "")}</h2>
+        <div class="player-post-play-synopsis-scroll" tabindex="-1" data-player-post-play-synopsis-content>
+          <p class="player-post-play-synopsis-full-text">${escapeHtml(recommendation.description || "")}</p>
+        </div>
+        <div class="player-post-play-synopsis-hint">${escapeHtml(t("hero_synopsis_dismiss_hint", {}, "Press back to close"))}</div>
+      </section>
+    `;
+  },
+
+  clearPostPlaySynopsisScrollAnimation() {
+    if (this.postPlaySynopsisScrollFrame) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(this.postPlaySynopsisScrollFrame);
+      }
+      this.postPlaySynopsisScrollFrame = null;
+    }
+    this.postPlaySynopsisScrollTarget = null;
+    this.postPlaySynopsisScrollPreviousFrameAt = 0;
+  },
+
+  focusPostPlaySynopsisContent() {
+    const content = this.uiRefs?.postPlay?.querySelector?.(
+      "[data-player-post-play-synopsis-content]"
+    );
+    if (!content) {
+      return false;
+    }
+    this.clearPostPlaySynopsisScrollAnimation();
+    content.scrollTop = 0;
+    this.uiRefs?.postPlay?.querySelectorAll?.(".focusable.focused")?.forEach?.((node) => {
+      node.classList.remove("focused");
+    });
+    const focus = () => {
+      if (!this.postPlaySynopsisVisible || !content.isConnected) {
+        return;
+      }
+      try {
+        content.focus({ preventScroll: true });
+      } catch (_) {
+        content.focus?.();
+      }
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => requestAnimationFrame(focus));
+    } else {
+      setTimeout(focus, 0);
+    }
+    return true;
+  },
+
+  scrollPostPlaySynopsis(direction = 1) {
+    const content = this.uiRefs?.postPlay?.querySelector?.(
+      "[data-player-post-play-synopsis-content]"
+    );
+    if (!content) {
+      return false;
+    }
+    const maxScroll = Math.max(
+      0,
+      Number(content.scrollHeight || 0) - Number(content.clientHeight || 0)
+    );
+    if (maxScroll <= 0) {
+      return true;
+    }
+    const current = Number(content.scrollTop || 0);
+    const baseTarget = Number.isFinite(this.postPlaySynopsisScrollTarget)
+      ? this.postPlaySynopsisScrollTarget
+      : current;
+    const target = Math.max(
+      0,
+      Math.min(maxScroll, baseTarget + (Number(direction) >= 0 ? 260 : -260))
+    );
+    this.postPlaySynopsisScrollTarget = target;
+    if (this.postPlaySynopsisScrollFrame || target === current) {
+      return true;
+    }
+    if (typeof requestAnimationFrame !== "function") {
+      content.scrollTop = target;
+      return true;
+    }
+    this.postPlaySynopsisScrollPreviousFrameAt = 0;
+    const animate = (timestamp) => {
+      this.postPlaySynopsisScrollFrame = null;
+      if (!this.postPlaySynopsisVisible || !content.isConnected) {
+        this.clearPostPlaySynopsisScrollAnimation();
+        return;
+      }
+      const elapsedSeconds = this.postPlaySynopsisScrollPreviousFrameAt
+        ? Math.min(
+            0.05,
+            Math.max(0, (timestamp - this.postPlaySynopsisScrollPreviousFrameAt) / 1000)
+          )
+        : 0;
+      this.postPlaySynopsisScrollPreviousFrameAt = timestamp;
+      const requestedTarget = Number(this.postPlaySynopsisScrollTarget ?? content.scrollTop);
+      const distance = requestedTarget - Number(content.scrollTop || 0);
+      if (Math.abs(distance) < 0.5) {
+        content.scrollTop = requestedTarget;
+        this.postPlaySynopsisScrollPreviousFrameAt = 0;
+        return;
+      }
+      const smoothing = elapsedSeconds > 0 ? 1 - Math.exp(-12 * elapsedSeconds) : 0.16;
+      content.scrollTop += distance * smoothing;
+      this.postPlaySynopsisScrollFrame = requestAnimationFrame(animate);
+    };
+    this.postPlaySynopsisScrollFrame = requestAnimationFrame(animate);
+    return true;
+  },
+
+  clearPostPlayBackdropTransition() {
+    if (this.postPlayBackdropTransitionTimer) {
+      clearTimeout(this.postPlayBackdropTransitionTimer);
+      this.postPlayBackdropTransitionTimer = null;
+    }
+  },
+
+  clearPostPlaySummaryTransition() {
+    if (this.postPlaySummaryTransitionTimer) {
+      clearTimeout(this.postPlaySummaryTransitionTimer);
+      this.postPlaySummaryTransitionTimer = null;
+    }
+    this.uiRefs?.postPlay?.querySelector?.(".player-post-play-summary-previous")?.remove?.();
+  },
+
+  syncPostPlaySummaryTransition(
+    mount,
+    previousSummary,
+    previousRecommendationId,
+    recommendationId
+  ) {
+    const content = mount?.querySelector?.(".player-post-play-content");
+    const currentSummary = content?.querySelector?.(
+      ".player-post-play-summary:not(.player-post-play-summary-previous)"
+    );
+    if (
+      !content ||
+      !currentSummary ||
+      !previousSummary ||
+      !previousRecommendationId ||
+      previousRecommendationId === recommendationId
+    ) {
+      return;
+    }
+
+    this.clearPostPlaySummaryTransition();
+    const previousLayer = previousSummary.cloneNode(true);
+    previousLayer.className = "player-post-play-summary player-post-play-summary-previous";
+    previousLayer.setAttribute("aria-hidden", "true");
+    previousLayer.querySelectorAll?.("[data-player-post-play-action]")?.forEach?.((node) => {
+      node.removeAttribute("data-player-post-play-action");
+      node.setAttribute("tabindex", "-1");
+    });
+    content.insertBefore(previousLayer, currentSummary);
+    currentSummary.classList.add("is-recommendation-changing");
+
+    const reveal = () => {
+      currentSummary.classList.add("is-recommendation-visible");
+      previousLayer.classList.add("is-recommendation-exiting");
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(reveal);
+    } else {
+      setTimeout(reveal, 0);
+    }
+    this.postPlaySummaryTransitionTimer = setTimeout(() => {
+      previousLayer.remove?.();
+      currentSummary.classList.remove("is-recommendation-changing", "is-recommendation-visible");
+      this.postPlaySummaryTransitionTimer = null;
+    }, 350);
+  },
+
+  clearPostPlayTrailerActionTransition() {
+    if (this.postPlayTrailerActionTransitionFrame != null) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(this.postPlayTrailerActionTransitionFrame);
+      } else {
+        clearTimeout(this.postPlayTrailerActionTransitionFrame);
+      }
+      this.postPlayTrailerActionTransitionFrame = null;
+    }
+    if (this.postPlayTrailerLabelTimer) {
+      clearTimeout(this.postPlayTrailerLabelTimer);
+      this.postPlayTrailerLabelTimer = null;
+    }
+  },
+
+  syncPostPlayTrailerLabel(node, nextText) {
+    if (!node) {
+      return;
+    }
+    const text = String(nextText || "");
+    if (node.textContent === text) {
+      return;
+    }
+    if (this.postPlayTrailerLabelTimer) {
+      clearTimeout(this.postPlayTrailerLabelTimer);
+      this.postPlayTrailerLabelTimer = null;
+    }
+    node.classList.add("is-changing");
+    this.postPlayTrailerLabelTimer = setTimeout(() => {
+      this.postPlayTrailerLabelTimer = null;
+      if (!node || node.isConnected === false) {
+        return;
+      }
+      node.textContent = text;
+      const reveal = () => node.classList.remove("is-changing");
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(reveal);
+      } else {
+        setTimeout(reveal, 0);
+      }
+    }, 100);
+  },
+
+  syncPostPlayIdentityAssets(mount) {
+    const logo = mount?.querySelector?.("[data-player-post-play-logo]");
+    const titleStates = mount?.querySelector?.("[data-player-post-play-title-states]");
+    if (!logo) {
+      if (titleStates) {
+        titleStates.hidden = false;
+      }
+      return;
+    }
+
+    const showTitleFallback = () => {
+      logo.hidden = true;
+      logo.classList.remove("is-loaded");
+      if (titleStates) {
+        titleStates.hidden = false;
+      }
+    };
+    const showLogo = () => {
+      logo.hidden = false;
+      logo.classList.add("is-loaded");
+      if (titleStates) {
+        titleStates.hidden = true;
+      }
+    };
+    if (!logo.dataset.postPlayAssetBound) {
+      logo.dataset.postPlayAssetBound = "true";
+      logo.addEventListener("load", showLogo, { once: true });
+      logo.addEventListener("error", showTitleFallback, { once: true });
+    }
+    if (logo.complete) {
+      if (Number(logo.naturalWidth || 0) > 0) {
+        showLogo();
+      } else {
+        showTitleFallback();
+      }
+    }
+  },
+
+  syncPostPlayDynamicState(
+    mount,
+    state,
+    recommendation,
+    { animateTrailerTransition = false, initialTrailerVisible = false } = {}
+  ) {
+    const actions = mount?.querySelector?.(".player-post-play-actions");
+    const trailerSlot = mount?.querySelector?.(".player-post-play-trailer-slot");
+    const trailerButton = trailerSlot?.querySelector?.('[data-player-post-play-action="trailer"]');
+    const trailerLabelNode = trailerButton?.querySelector?.(
+      "[data-player-post-play-trailer-label]"
+    );
+    const targetTrailerVisible = Boolean(
+      POST_PLAY_IN_APP_TRAILER_PLAYBACK_ENABLED &&
+      !state.isTrailerPlaying &&
+      (recommendation?.trailerYtId || recommendation?.trailerVideoUrl)
+    );
+    this.clearPostPlayTrailerActionTransition();
+    const trailerLabel = state.isTrailerPlaying
+      ? t("player_post_play_trailer_playing", {}, "Trailer playing")
+      : state.countdownSeconds != null
+        ? t(
+            "player_post_play_trailer_countdown",
+            { seconds: state.countdownSeconds },
+            `Trailer in ${state.countdownSeconds}`
+          )
+        : t("player_post_play_trailer", {}, "Trailer");
+
+    this.syncPostPlayTrailerLabel(trailerLabelNode, trailerLabel);
+    this.syncPostPlayIdentityAssets(mount);
+    if (!actions || !trailerSlot || !trailerButton) {
+      return;
+    }
+
+    const applyVisibility = (visible, interactive = targetTrailerVisible) => {
+      actions.classList.toggle("has-trailer", Boolean(visible));
+      trailerSlot.classList.toggle("is-visible", Boolean(visible));
+      trailerSlot.setAttribute("aria-hidden", String(!visible));
+      trailerButton.disabled = !(interactive && visible);
+      trailerButton.setAttribute("aria-hidden", String(!(interactive && visible)));
+      trailerButton.setAttribute("aria-label", trailerLabel);
+    };
+
+    if (animateTrailerTransition && initialTrailerVisible !== targetTrailerVisible) {
+      applyVisibility(initialTrailerVisible, false);
+      const reveal = () => {
+        this.postPlayTrailerActionTransitionFrame = null;
+        applyVisibility(targetTrailerVisible, targetTrailerVisible);
+      };
+      if (typeof requestAnimationFrame === "function") {
+        this.postPlayTrailerActionTransitionFrame = requestAnimationFrame(reveal);
+      } else {
+        this.postPlayTrailerActionTransitionFrame = setTimeout(reveal, 0);
+      }
+      return;
+    }
+    applyVisibility(targetTrailerVisible, targetTrailerVisible);
+  },
+
+  syncPostPlayBackdropTransition(mount, previousImage, previousRecommendationId, recommendationId) {
+    const backdrop = mount?.querySelector?.(".player-post-play-backdrop");
+    const currentImage = backdrop?.querySelector?.(".player-post-play-backdrop-image.is-current");
+    if (!backdrop || !currentImage) {
+      return;
+    }
+    if (
+      !previousImage ||
+      !previousRecommendationId ||
+      previousRecommendationId === recommendationId
+    ) {
+      currentImage.classList.add("is-current");
+      return;
+    }
+    const oldImage = previousImage.cloneNode(true);
+    oldImage.className = "player-post-play-backdrop-image is-previous";
+    backdrop.appendChild(oldImage);
+    currentImage.classList.remove("is-current");
+    currentImage.classList.add("is-entering");
+    const reveal = () => currentImage.classList.add("is-loaded");
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(reveal);
+    } else {
+      setTimeout(reveal, 0);
+    }
+    this.postPlayBackdropTransitionTimer = setTimeout(() => {
+      oldImage.remove?.();
+      currentImage.classList.remove("is-entering", "is-loaded");
+      currentImage.classList.add("is-current");
+      this.postPlayBackdropTransitionTimer = null;
+    }, 350);
+  },
+
+  renderPostPlayRecommendation() {
+    const mount = this.uiRefs?.postPlay;
+    if (!mount) {
+      return;
+    }
+    const state = this.getPostPlayState();
+    const recommendation = state.recommendation;
+    if (!state.isVisible && !state.hasReturnedToPlayer) {
+      this.clearPostPlayTrailerActionTransition();
+      mount.classList.remove("is-rendered", "is-exiting", "is-loading");
+      mount.setAttribute("aria-hidden", "true");
+      mount.innerHTML = "";
+      this.postPlayRenderedSignature = "";
+      return;
+    }
+    if (!recommendation && !state.isVisible) {
+      this.clearPostPlayTrailerActionTransition();
+      mount.classList.add("is-exiting");
+      mount.classList.remove("is-rendered", "is-loading");
+      mount.setAttribute("aria-hidden", "true");
+      return;
+    }
+    if (!recommendation) {
+      this.clearPostPlayTrailerActionTransition();
+      mount.classList.add("is-loading", "is-rendered");
+      mount.classList.remove("is-exiting");
+      mount.setAttribute("aria-hidden", "false");
+      mount.innerHTML = `<div class="player-post-play-loading-content">${renderLoadingIndicator({ className: "player-post-play-loading-spinner" })}</div>`;
+      return;
+    }
+
+    const isSeries = recommendation.contentType === "series";
+    const backdrop = recommendation.backdrop || recommendation.background || recommendation.poster;
+    const currentTitle = this.getPostPlayCurrentTitle();
+    const header = currentTitle
+      ? t(
+          "player_post_play_because",
+          { title: currentTitle },
+          `Because you watched ${currentTitle}`
+        )
+      : t("player_post_play_recommended", {}, "Recommended for you");
+    const genres = (Array.isArray(recommendation.genres) ? recommendation.genres : [])
+      .map(localizedGenreLabel)
+      .filter(Boolean)
+      .slice(0, 2);
+    const details = [
+      ...genres,
+      recommendation.releaseInfo || "",
+      formatHeroRuntime(recommendation.runtime) || ""
+    ].filter(Boolean);
+    const standardRatings = this.renderPostPlayStandardRatings(recommendation);
+    const mdbListRatings = this.renderPostPlayMdbListRatings(recommendation);
+    const trailerFeatureEnabled = Boolean(POST_PLAY_IN_APP_TRAILER_PLAYBACK_ENABLED);
+    const trailerAvailable =
+      trailerFeatureEnabled &&
+      !state.isTrailerPlaying &&
+      Boolean(recommendation.trailerYtId || recommendation.trailerVideoUrl);
+    const trailerLabel = state.isTrailerPlaying
+      ? t("player_post_play_trailer_playing", {}, "Trailer playing")
+      : state.countdownSeconds != null
+        ? t(
+            "player_post_play_trailer_countdown",
+            { seconds: state.countdownSeconds },
+            `Trailer in ${state.countdownSeconds}`
+          )
+        : t("player_post_play_trailer", {}, "Trailer");
+    const primaryLabel = isSeries
+      ? t("tmdb_details_title", {}, "Details")
+      : t("player_post_play_play", {}, "Play");
+    const primaryActionIcon = isSeries
+      ? `<svg class="player-post-play-action-icon player-post-play-info-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17h2v-6h-2v6zm1-15C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM11 9h2V7h-2v2z" fill="currentColor" /></svg>`
+      : `<img class="player-post-play-action-icon" src="assets/icons/ic_player_play.svg" alt="" />`;
+    const signature = JSON.stringify([
+      recommendation.id,
+      recommendation.title,
+      recommendation.logo,
+      recommendation.backdrop,
+      recommendation.description,
+      recommendation.releaseInfo,
+      recommendation.runtime,
+      recommendation.imdbRating,
+      recommendation.tmdbRating,
+      recommendation.showStandardRatings,
+      JSON.stringify(recommendation.genres || []),
+      recommendation.country,
+      recommendation.language,
+      recommendation.status,
+      recommendation.ageRating,
+      recommendation.trailerYtId,
+      recommendation.trailerVideoUrl,
+      recommendation.detailsLoaded,
+      JSON.stringify(recommendation.mdbListRatings || null),
+      state.recommendationIndex,
+      state.isChangingRecommendation,
+      state.canReturnToPlayer,
+      this.postPlayManualDialogVisible,
+      this.postPlaySynopsisVisible,
+      this.postPlayFocusedAction
+    ]);
+    mount.classList.add("is-rendered");
+    mount.classList.remove("is-exiting", "is-loading");
+    mount.setAttribute("aria-hidden", "false");
+    if (signature === this.postPlayRenderedSignature) {
+      this.syncPostPlayDynamicState(mount, state, recommendation);
+      this.syncPostPlayTrailerMedia();
+      return;
+    }
+    this.clearPostPlayBackdropTransition();
+    const previousBackdrop = mount.querySelector(".player-post-play-backdrop");
+    const previousSummary = mount.querySelector(".player-post-play-summary");
+    const previousBackdropId = String(previousBackdrop?.dataset?.recommendationId || "");
+    const previousBackdropImage =
+      previousBackdrop?.querySelector?.(
+        ".player-post-play-backdrop-image.is-current, .player-post-play-backdrop-image.is-entering"
+      ) || previousBackdrop?.querySelector?.(".player-post-play-backdrop-image");
+    const previousTrailerSlot = mount.querySelector(".player-post-play-trailer-slot");
+    const previousTrailerVisible = Boolean(previousTrailerSlot?.classList.contains("is-visible"));
+    const initialTrailerVisible = previousTrailerSlot ? previousTrailerVisible : trailerAvailable;
+    const trailerVisibilityChanged =
+      Boolean(previousTrailerSlot) && initialTrailerVisible !== trailerAvailable;
+    this.postPlayRenderedSignature = signature;
+    mount.innerHTML = `
+      <div class="player-post-play-backdrop" data-recommendation-id="${escapeAttribute(recommendation.id)}" aria-hidden="true">
+        ${backdrop ? `<img class="player-post-play-backdrop-image is-current" src="${escapeAttribute(backdrop)}" alt="" decoding="async" />` : ""}
+      </div>
+      <div class="player-post-play-trailer-media" aria-hidden="true"></div>
+      <div class="player-post-play-scrim" aria-hidden="true"></div>
+      ${this.renderPostPlayPlayerWindow(state)}
+      <div class="player-post-play-content${state.isChangingRecommendation ? " is-changing" : ""}">
+        <div class="player-post-play-summary">
+          <div class="player-post-play-header-block">
+            <div class="player-post-play-header">${escapeHtml(header)}</div>
+          </div>
+          <div class="player-post-play-identity">
+            <div class="player-post-play-identity-content">
+              ${
+                recommendation.logo
+                  ? `<img class="player-post-play-logo is-loading" data-player-post-play-logo src="${escapeAttribute(recommendation.logo)}" alt="${escapeAttribute(recommendation.title)}" decoding="async" />`
+                  : ""
+              }
+              <div class="player-post-play-title-states${recommendation.logo ? " is-logo-pending" : ""}" data-player-post-play-title-states${recommendation.logo ? " hidden" : ""}>
+                <h1 class="player-post-play-title player-post-play-title-state player-post-play-title-state--normal" aria-hidden="true">${escapeHtml(recommendation.title)}</h1>
+                <h1 class="player-post-play-title player-post-play-title-state player-post-play-title-state--trailer" aria-hidden="true">${escapeHtml(recommendation.title)}</h1>
+              </div>
+            </div>
+          </div>
+          <div class="player-post-play-details-block">
+            ${details.length || standardRatings ? `<div class="player-post-play-meta-row">${details.length ? `<div class="player-post-play-details">${details.map((item) => `<span>${escapeHtml(item)}</span>`).join('<span class="player-post-play-detail-separator">  •  </span>')}</div>` : ""}${details.length && standardRatings ? '<span class="player-post-play-meta-separator">•</span>' : ""}${standardRatings}</div>` : ""}
+            ${mdbListRatings}
+            ${
+              recommendation.description
+                ? `<button class="player-post-play-synopsis focusable${this.postPlayDescriptionTruncated ? " is-truncated" : ""}" type="button" tabindex="-1" data-player-post-play-action="synopsis" aria-label="${escapeAttribute(t("hero_synopsis_read_more", {}, "Read more"))}"><span class="player-post-play-synopsis-text">${escapeHtml(recommendation.description)}</span><span class="player-post-play-synopsis-read-more">${escapeHtml(t("hero_synopsis_read_more", {}, "Read more"))}</span></button>`
+                : ""
+            }
+          </div>
+        </div>
+        <div class="player-post-play-actions${initialTrailerVisible ? " has-trailer" : ""}${state.recommendationCount > 1 ? " has-navigation" : ""}" role="group" aria-label="${escapeAttribute(t("player_post_play_recommended", {}, "Recommended for you"))}">
+          <button class="player-post-play-action player-post-play-primary focusable${this.postPlayFocusedAction === "primary" ? " focused" : ""}" type="button" tabindex="-1" data-player-post-play-action="primary">
+            ${primaryActionIcon}<span>${escapeHtml(primaryLabel)}</span>
+          </button>
+          ${
+            trailerFeatureEnabled
+              ? `<div class="player-post-play-trailer-slot${initialTrailerVisible ? " is-visible" : ""}" data-player-post-play-trailer-slot aria-hidden="${String(!initialTrailerVisible)}"><button class="player-post-play-action player-post-play-trailer-button focusable${this.postPlayFocusedAction === "trailer" ? " focused" : ""}" type="button" tabindex="-1" data-player-post-play-action="trailer"${trailerAvailable && initialTrailerVisible ? "" : " disabled"} aria-hidden="${String(!(trailerAvailable && initialTrailerVisible))}" aria-label="${escapeAttribute(trailerLabel)}"><img class="player-post-play-action-icon" src="assets/icons/trailer_play_button.svg" alt="" /><span class="player-post-play-trailer-label" data-player-post-play-trailer-label>${escapeHtml(trailerLabel)}</span></button></div>`
+              : ""
+          }
+          ${
+            state.recommendationCount > 1
+              ? `<button class="player-post-play-action player-post-play-nav focusable${this.postPlayFocusedAction === "previous" ? " focused" : ""}" type="button" tabindex="-1" data-player-post-play-action="previous"${state.canNavigatePrevious ? "" : " disabled"} aria-label="${escapeAttribute(t("player_post_play_previous_recommendation", {}, "Previous recommendation"))}"><img class="player-post-play-nav-icon player-post-play-nav-icon-previous" src="assets/icons/ic_chevron_compact_left.png" alt="" /></button>
+                 <button class="player-post-play-action player-post-play-nav focusable${this.postPlayFocusedAction === "next" ? " focused" : ""}" type="button" tabindex="-1" data-player-post-play-action="next"${state.canNavigateNext ? "" : " disabled"} aria-label="${escapeAttribute(t("player_post_play_next_recommendation", {}, "Next recommendation"))}"><img class="player-post-play-nav-icon player-post-play-nav-icon-next" src="assets/icons/ic_chevron_compact_left.png" alt="" /></button>`
+              : ""
+          }
+        </div>
+      </div>
+      ${this.renderPostPlayManualDialog(recommendation)}
+      ${this.renderPostPlaySynopsisDialog(recommendation)}
+    `;
+    this.syncPostPlayBackdropTransition(
+      mount,
+      previousBackdropImage,
+      previousBackdropId,
+      String(recommendation.id || "")
+    );
+    this.syncPostPlayDynamicState(mount, state, recommendation, {
+      animateTrailerTransition: trailerVisibilityChanged,
+      initialTrailerVisible
+    });
+    this.syncPostPlaySummaryTransition(
+      mount,
+      previousSummary,
+      previousBackdropId,
+      String(recommendation.id || "")
+    );
+    this.schedulePostPlayDescriptionMeasurement();
+    this.syncPostPlayTrailerMedia();
+  },
+
+  renderPostPlayPlayerWindow(state = this.getPostPlayState()) {
+    if (!state.canReturnToPlayer) {
+      return "";
+    }
+    return `
+      <button
+        class="player-post-play-player-window player-post-play-action focusable${this.postPlayFocusedAction === "playerWindow" ? " focused" : ""}"
+        type="button"
+        tabindex="-1"
+        data-player-post-play-action="playerWindow"
+        aria-label="${escapeAttribute(t("player_post_play_return_to_player", {}, "Return to player"))}"
+      ></button>
+    `;
+  },
+
+  schedulePostPlayDescriptionMeasurement() {
+    if (this.postPlayDescriptionMeasureFrame) {
+      cancelAnimationFrame(this.postPlayDescriptionMeasureFrame);
+      this.postPlayDescriptionMeasureFrame = null;
+    }
+    if (typeof requestAnimationFrame !== "function") {
+      return;
+    }
+    this.postPlayDescriptionMeasureFrame = requestAnimationFrame(() => {
+      this.postPlayDescriptionMeasureFrame = null;
+      const description = this.uiRefs?.postPlay?.querySelector(".player-post-play-synopsis");
+      const descriptionText =
+        description?.querySelector?.(".player-post-play-synopsis-text") || description;
+      if (!descriptionText || !descriptionText.isConnected) {
+        return;
+      }
+      const truncated = descriptionText.scrollHeight > descriptionText.clientHeight + 1;
+      this.postPlayDescriptionTruncated = truncated;
+      description.classList.toggle("is-truncated", truncated);
+    });
+  },
+
+  getPostPlayFocusableActions() {
+    return Array.from(
+      this.uiRefs?.postPlay?.querySelectorAll?.(
+        ".focusable[data-player-post-play-action]:not([disabled])"
+      ) || []
+    );
+  },
+
+  focusPostPlayAction(action = "primary") {
+    const mount = this.uiRefs?.postPlay;
+    if (!mount) {
+      return false;
+    }
+    const actions = this.getPostPlayFocusableActions();
+    const requestedAction = String(action || "primary");
+    const node =
+      actions.find((entry) => entry.dataset.playerPostPlayAction === requestedAction) ||
+      actions.find((entry) => entry.dataset.playerPostPlayAction === "primary") ||
+      actions[0];
+    if (!node || node.disabled) {
+      return false;
+    }
+    this.postPlayFocusedAction = String(node.dataset.playerPostPlayAction || action);
+    mount.querySelectorAll(".focusable.focused").forEach((entry) => {
+      entry.classList.toggle("focused", entry === node);
+    });
+    try {
+      node.focus({ preventScroll: true });
+    } catch (_) {
+      node.focus?.();
+    }
+    return true;
+  },
+
+  clearPostPlayFocusTimer() {
+    if (this.postPlayFocusTimer) {
+      clearTimeout(this.postPlayFocusTimer);
+      this.postPlayFocusTimer = null;
+    }
+  },
+
+  schedulePostPlayFocus(action = "primary", delayMs = 420) {
+    this.clearPostPlayFocusTimer();
+    this.postPlayFocusTimer = setTimeout(
+      () => {
+        this.postPlayFocusTimer = null;
+        if (this.isPostPlayVisible()) {
+          this.focusPostPlayAction(action);
+        }
+      },
+      Math.max(0, Number(delayMs) || 0)
+    );
+  },
+
+  clearPostPlayLongPressTimer() {
+    if (this.postPlayLongPressTimer) {
+      clearTimeout(this.postPlayLongPressTimer);
+      this.postPlayLongPressTimer = null;
+    }
+  },
+
+  triggerPostPlayLongPress() {
+    if (
+      !this.postPlayPendingSelect ||
+      this.postPlayPendingSelectAction !== "primary" ||
+      this.postPlayLongPressTriggered ||
+      this.getPostPlayState().recommendation?.contentType !== "movie" ||
+      !this.isPostPlayManualPlayOptionEnabled()
+    ) {
+      return false;
+    }
+    this.postPlayLongPressTriggered = true;
+    this.clearPostPlayLongPressTimer();
+    this.openPostPlayManualDialog();
+    return true;
+  },
+
+  schedulePostPlayLongPress() {
+    this.clearPostPlayLongPressTimer();
+    this.postPlayLongPressTriggered = false;
+    this.postPlayLongPressTimer = setTimeout(() => {
+      this.postPlayLongPressTimer = null;
+      this.triggerPostPlayLongPress();
+    }, POST_PLAY_LONG_PRESS_DELAY_MS);
+  },
+
+  syncPostPlayTrailerMedia() {
+    const mediaMount = this.uiRefs?.postPlay?.querySelector(".player-post-play-trailer-media");
+    if (!mediaMount || !this.postPlayTrailerMedia) {
+      return;
+    }
+    if (
+      this.postPlayTrailerMedia.node &&
+      this.postPlayTrailerMedia.node.parentElement !== mediaMount
+    ) {
+      mediaMount.replaceChildren(this.postPlayTrailerMedia.node);
+    }
+  },
+
+  clearPostPlayTrailerExitTimer() {
+    if (this.postPlayTrailerExitTimer) {
+      clearTimeout(this.postPlayTrailerExitTimer);
+      this.postPlayTrailerExitTimer = null;
+    }
+  },
+
+  startPostPlayTrailer(recommendation = {}, { auto = false } = {}) {
+    this.stopPostPlayTrailer();
+    this.clearPostPlayTrailerExitTimer();
+    try {
+      // Android releases the main player before TrailerPlayer takes over the
+      // full screen. Stop the active web/native session as well; keeping it
+      // merely paused can leave AVPlay or the HTML pipeline alive underneath
+      // the trailer during the pre-end autoplay path.
+      PlayerController.stop?.({
+        forceCloudSync: false,
+        allowCloudSync: false,
+        flushProgress: false
+      });
+    } catch (_) {}
+    const generation = ++this.postPlayTrailerGeneration;
+    const mediaMount = this.uiRefs?.postPlay?.querySelector(".player-post-play-trailer-media");
+    if (!mediaMount) {
+      this.postPlayRecommendationController?.onTrailerEnded?.();
+      return;
+    }
+    if (recommendation.trailerYtId) {
+      const frame = document.createElement("iframe");
+      frame.className = "player-post-play-trailer-frame is-loading";
+      frame.src = buildInlineYoutubePlayerUrl(recommendation.trailerYtId);
+      frame.title = recommendation.title || "Trailer";
+      frame.allow = "autoplay; encrypted-media; picture-in-picture";
+      frame.referrerPolicy = "strict-origin-when-cross-origin";
+      frame.allowFullscreen = true;
+      frame.addEventListener("load", () => frame.classList.add("is-ready"), { once: true });
+      mediaMount.replaceChildren(frame);
+      const handler = (event) => {
+        if (
+          generation !== this.postPlayTrailerGeneration ||
+          event?.source !== frame.contentWindow
+        ) {
+          return;
+        }
+        const data = event?.data;
+        if (!data || typeof data !== "object" || data.source !== "nuvio-youtube-proxy") {
+          return;
+        }
+        if (data.type === "ended" || (data.type === "state" && data.state?.ended)) {
+          this.postPlayRecommendationController?.onTrailerEnded?.();
+        }
+      };
+      this.postPlayTrailerMessageHandler = handler;
+      window.addEventListener("message", handler);
+      this.postPlayTrailerMedia = { kind: "youtube", node: frame, auto };
+      return;
+    }
+    if (recommendation.trailerVideoUrl) {
+      const video = document.createElement("video");
+      video.className = "player-post-play-trailer-video is-loading";
+      video.src = recommendation.trailerVideoUrl;
+      video.autoplay = true;
+      video.controls = false;
+      video.playsInline = true;
+      video.preload = "auto";
+      const markReady = () => video.classList.add("is-ready");
+      video.addEventListener("loadeddata", markReady, { once: true });
+      video.addEventListener("canplay", markReady, { once: true });
+      video.addEventListener("ended", () => {
+        if (generation === this.postPlayTrailerGeneration) {
+          this.postPlayRecommendationController?.onTrailerEnded?.();
+        }
+      });
+      mediaMount.replaceChildren(video);
+      this.postPlayTrailerMedia = { kind: "direct", node: video, auto };
+      const playPromise = video.play?.();
+      if (playPromise?.catch) {
+        playPromise.catch(() => {});
+      }
+      return;
+    }
+    this.postPlayRecommendationController?.onTrailerEnded?.();
+  },
+
+  stopPostPlayTrailer() {
+    this.clearPostPlayTrailerExitTimer();
+    this.postPlayTrailerGeneration += 1;
+    if (this.postPlayTrailerMessageHandler) {
+      window.removeEventListener("message", this.postPlayTrailerMessageHandler);
+      this.postPlayTrailerMessageHandler = null;
+    }
+    const node = this.postPlayTrailerMedia?.node;
+    const mediaMount = this.uiRefs?.postPlay?.querySelector(".player-post-play-trailer-media");
+    if (node && typeof node.pause === "function") {
+      try {
+        node.pause();
+      } catch (_) {}
+    }
+    if (node?.tagName === "IFRAME") {
+      try {
+        node.contentWindow?.postMessage(
+          {
+            source: "nuvio-detail-trailer",
+            type: "command",
+            command: "pause",
+            payload: {}
+          },
+          "*"
+        );
+      } catch (_) {}
+    }
+    const cleanupNode = () => {
+      if (node?.parentElement === mediaMount) {
+        node.remove();
+      }
+      if (node && node.tagName === "VIDEO") {
+        try {
+          node.removeAttribute("src");
+          node.load?.();
+        } catch (_) {}
+      }
+    };
+    if (node) {
+      // Android keeps TrailerPlayer mounted through its 500ms exit fade. Do
+      // the same here so the media layer can visibly fade below the scrim.
+      this.postPlayTrailerExitTimer = setTimeout(() => {
+        this.postPlayTrailerExitTimer = null;
+        cleanupNode();
+      }, 500);
+    }
+    // Keep the node mounted until the CSS exit transition completes. A new
+    // start clears the timer before replacing this node, preventing stale
+    // cleanup from touching a newly selected trailer.
+    this.postPlayTrailerMedia = null;
+  },
+
+  invokePostPlayAction(action = "") {
+    const state = this.getPostPlayState();
+    const recommendation = state.recommendation;
+    if (!recommendation) {
+      return false;
+    }
+    switch (String(action || "")) {
+      case "primary":
+        return this.navigateToPostPlayRecommendation(recommendation, {
+          openDetails: recommendation.contentType === "series"
+        });
+      case "trailer":
+        if (state.isTrailerPlaying) {
+          return Boolean(this.postPlayRecommendationController?.onTrailerEnded?.());
+        }
+        return Boolean(this.postPlayRecommendationController?.startTrailer?.({ auto: false }));
+      case "previous":
+        if (!state.canNavigatePrevious) {
+          return false;
+        }
+        return Boolean(
+          this.postPlayRecommendationController?.selectRecommendation?.(
+            state.recommendationIndex - 1
+          )
+        );
+      case "next":
+        if (!state.canNavigateNext) {
+          return false;
+        }
+        return Boolean(
+          this.postPlayRecommendationController?.selectRecommendation?.(
+            state.recommendationIndex + 1
+          )
+        );
+      case "return":
+      case "playerWindow":
+        return this.returnToPlayerFromPostPlay();
+      case "synopsis":
+        this.postPlaySynopsisVisible = true;
+        this.postPlayManualDialogVisible = false;
+        this.postPlayFocusedAction = "synopsis";
+        this.postPlayRenderedSignature = "";
+        this.renderPostPlayRecommendation();
+        this.focusPostPlaySynopsisContent();
+        return true;
+      case "synopsisClose":
+        this.postPlaySynopsisVisible = false;
+        this.clearPostPlaySynopsisScrollAnimation();
+        this.postPlayRenderedSignature = "";
+        this.renderPostPlayRecommendation();
+        this.focusPostPlayAction("primary");
+        return true;
+      case "manualPlay":
+        this.postPlayManualDialogVisible = false;
+        this.postPlayRenderedSignature = "";
+        this.renderPostPlayRecommendation();
+        return this.navigateToPostPlayRecommendation(recommendation, {
+          openDetails: false,
+          manualSelection: true
+        });
+      case "manualCancel":
+        this.postPlayManualDialogVisible = false;
+        this.postPlayRenderedSignature = "";
+        this.renderPostPlayRecommendation();
+        this.focusPostPlayAction("primary");
+        return true;
+      default:
+        return false;
+    }
+  },
+
+  openPostPlayManualDialog() {
+    const state = this.getPostPlayState();
+    if (
+      !state.isVisible ||
+      state.recommendation?.contentType !== "movie" ||
+      !this.isPostPlayManualPlayOptionEnabled()
+    ) {
+      return false;
+    }
+    this.postPlayManualDialogVisible = true;
+    this.postPlaySynopsisVisible = false;
+    this.postPlayRenderedSignature = "";
+    this.renderPostPlayRecommendation();
+    this.focusPostPlayAction("manualPlay");
+    return true;
+  },
+
+  handlePostPlayPointer(target) {
+    const actionNode = target?.closest?.("[data-player-post-play-action]");
+    const modalNode = target?.closest?.("[data-player-post-play-modal]");
+    if (modalNode && !actionNode && target === modalNode) {
+      if (this.postPlayManualDialogVisible) {
+        return this.invokePostPlayAction("manualCancel");
+      }
+      if (this.postPlaySynopsisVisible) {
+        return this.invokePostPlayAction("synopsisClose");
+      }
+    }
+    if (!actionNode) {
+      return false;
+    }
+    const action = String(actionNode.dataset.playerPostPlayAction || "");
+    this.postPlayFocusedAction = action;
+    if (action === "manualPlay" || action === "manualCancel" || action === "synopsisClose") {
+      return this.invokePostPlayAction(action);
+    }
+    if (this.postPlayManualDialogVisible || this.postPlaySynopsisVisible) {
+      return true;
+    }
+    const result = this.invokePostPlayAction(action);
+    if (action === "previous" || action === "next") {
+      this.schedulePostPlayFocus(action, 32);
+    }
+    return result;
+  },
+
+  handlePostPlayKey(event) {
+    const keyCode = Number(event?.keyCode || 0);
+    const mount = this.uiRefs?.postPlay;
+    if (!this.isPostPlayVisible()) {
+      return false;
+    }
+    const modalOpen = this.postPlayManualDialogVisible || this.postPlaySynopsisVisible;
+    if (modalOpen) {
+      if (this.postPlaySynopsisVisible) {
+        if (keyCode === 38) {
+          return this.scrollPostPlaySynopsis(-1);
+        }
+        if (keyCode === 40) {
+          return this.scrollPostPlaySynopsis(1);
+        }
+        // SynopsisOverlay has a single focusable scrolling surface. Select
+        // and horizontal navigation do not dismiss it; Back is handled by
+        // consumeBackRequest(), exactly like Android's Dialog.
+        return true;
+      }
+      if (keyCode === 37 || keyCode === 39) {
+        return true;
+      }
+      if (isSelectKeyCode(keyCode)) {
+        this.invokePostPlayAction("manualPlay");
+        return true;
+      }
+      return false;
+    }
+    if (this.getPostPlayState().isChangingRecommendation) {
+      return true;
+    }
+    if (keyCode === 18 || keyCode === 82) {
+      if (
+        this.getPostPlayState().recommendation?.contentType === "movie" &&
+        this.isPostPlayManualPlayOptionEnabled()
+      ) {
+        this.openPostPlayManualDialog();
+      }
+      return true;
+    }
+    if (keyCode === 37 || keyCode === 39) {
+      const state = this.getPostPlayState();
+      const sequence = ["primary"];
+      if (
+        !state.isTrailerPlaying &&
+        (state.recommendation?.trailerYtId || state.recommendation?.trailerVideoUrl)
+      ) {
+        sequence.push("trailer");
+      }
+      if (state.recommendationCount > 1) {
+        sequence.push("previous", "next");
+      }
+      const availableSequence = sequence.filter((action) =>
+        mount?.querySelector?.(`[data-player-post-play-action="${action}"]:not([disabled])`)
+      );
+      if (!availableSequence.length) {
+        return true;
+      }
+      const current = availableSequence.includes(this.postPlayFocusedAction)
+        ? availableSequence.indexOf(this.postPlayFocusedAction)
+        : 0;
+      const nextIndex = Math.max(
+        0,
+        Math.min(availableSequence.length - 1, current + (keyCode === 39 ? 1 : -1))
+      );
+      this.focusPostPlayAction(availableSequence[nextIndex]);
+      return true;
+    }
+    if (keyCode === 38) {
+      const state = this.getPostPlayState();
+      if (this.postPlayFocusedAction === "synopsis" && !state.hasAutoPlayedTrailer) {
+        this.focusPostPlayAction("playerWindow");
+      } else if (this.postPlayDescriptionTruncated) {
+        this.focusPostPlayAction("synopsis");
+      } else if (!state.hasAutoPlayedTrailer) {
+        this.focusPostPlayAction("playerWindow");
+      }
+      return true;
+    }
+    if (keyCode === 40) {
+      this.focusPostPlayAction("primary");
+      return true;
+    }
+    if (isSelectKeyCode(keyCode)) {
+      this.invokePostPlayAction(this.postPlayFocusedAction || "primary");
+      return true;
+    }
+    return false;
+  },
+
+  navigateToPostPlayRecommendation(
+    recommendation = {},
+    { openDetails = false, manualSelection = false } = {}
+  ) {
+    if (!recommendation?.id) {
+      return false;
+    }
+    this.stopPostPlayTrailer();
+    this.postPlayRecommendationController?.stop?.();
+    this.postPlayPlaybackEnded = false;
+    this.postPlayNaturalEndPending = false;
+    this.postPlayNaturalCompletionPrepared = false;
+    const itemType = recommendation.contentType === "series" ? "series" : "movie";
+    const detailParams = {
+      itemId: recommendation.id,
+      itemType,
+      fallbackTitle: recommendation.title || recommendation.name || recommendation.id,
+      fallbackPoster: recommendation.poster || "",
+      fallbackBackground:
+        recommendation.backdrop || recommendation.background || recommendation.poster || "",
+      addonBaseUrl: recommendation.sourceAddonBaseUrl || "",
+      imdbId: recommendation.imdbId || null,
+      tmdbId: recommendation.tmdbId || null,
+      traktId: recommendation.traktId || null,
+      contentLanguage: recommendation.contentLanguage || this.contentLanguage || "",
+      returnHomeOnBack: Boolean(this.params?.returnHomeOnBack || this.params?.returnToHomeOnBack),
+      returnToHomeOnBack: Boolean(this.params?.returnHomeOnBack || this.params?.returnToHomeOnBack),
+      returnToSearchOnBack: Boolean(this.params?.returnToSearchOnBack),
+      playOnLoad: !openDetails,
+      manualSelection: Boolean(manualSelection),
+      heroBackdropUrl: recommendation.backdrop || recommendation.background || ""
+    };
+    this.releaseCurrentEngineFsStreamBestEffort("post-play-recommendation", {
+      removeTorrent: true
+    });
+    void Router.navigateFromPostPlayRecommendation("detail", detailParams);
+    return true;
+  },
+
+  returnToPlayerFromPostPlay() {
+    const state = this.getPostPlayState();
+    if (!state.canReturnToPlayer) {
+      return false;
+    }
+    this.postPlayNaturalEndPending = false;
+    this.postPlayPlaybackEnded = false;
+    this.postPlayNaturalCompletionPrepared = false;
+    this.postPlayPendingSelect = false;
+    this.postPlayPendingSelectAction = "";
+    this.clearPostPlayLongPressTimer();
+    this.postPlayLongPressTriggered = false;
+    this.postPlayManualDialogVisible = false;
+    this.postPlaySynopsisVisible = false;
+    this.clearPostPlaySynopsisScrollAnimation();
+    this.postPlayRenderedSignature = "";
+    this.postPlayRecommendationController?.returnToPlayer?.();
+    this.paused = false;
+    try {
+      PlayerController.resume();
+    } catch (_) {}
+    this.updateMediaSessionPlaybackState();
+    this.setControlsVisible(false, { focus: false });
+    this.updateUiTick();
+    return true;
   },
 
   isExternalFrameMode() {
@@ -3465,7 +5034,7 @@ export const PlayerScreen = {
     return {
       contentId: String(this.params?.itemId || identity.imdbId || ""),
       videoId: String(this.params?.videoId || this.params?.playerVideoId || ""),
-      contentType: identity.itemType === "series" ? "series" : "movie",
+      contentType: isSeriesItemType(identity.itemType) ? "series" : "movie",
       imdbId: identity.imdbId,
       tmdbId: identity.tmdbId || null,
       traktId: identity.traktId || null,
@@ -3509,7 +5078,7 @@ export const PlayerScreen = {
       return;
     }
     const response =
-      (itemType === "series" || itemType === "tv") && season && episode
+      isSeriesItemType(itemType) && season && episode
         ? await parentalGuideRepository.getTvGuide(imdbId, season, episode)
         : await parentalGuideRepository.getMovieGuide(imdbId);
     const warnings = buildLocalizedParentalWarnings(response?.parentalGuide || {});
@@ -5833,6 +7402,8 @@ export const PlayerScreen = {
 
         <div id="playerNextEpisodeCard" class="player-next-episode-card hidden"></div>
 
+        <div id="playerPostPlayRecommendation" class="player-post-play-recommendation" aria-hidden="true"></div>
+
         <div id="playerModalBackdrop" class="player-modal-backdrop hidden"></div>
         <div id="playerSubtitleDialog" class="player-modal player-subtitle-modal hidden"></div>
         <div id="playerAudioDialog" class="player-modal player-audio-modal hidden"></div>
@@ -5930,6 +7501,7 @@ export const PlayerScreen = {
           seekFill: uiRoot.querySelector("#playerSeekFill"),
           pauseOverlay: uiRoot.querySelector("#playerPauseOverlay"),
           nextEpisodeCard: uiRoot.querySelector("#playerNextEpisodeCard"),
+          postPlay: uiRoot.querySelector("#playerPostPlayRecommendation"),
           modalBackdrop: uiRoot.querySelector("#playerModalBackdrop"),
           subtitleDialog: uiRoot.querySelector("#playerSubtitleDialog"),
           audioDialog: uiRoot.querySelector("#playerAudioDialog"),
@@ -6202,8 +7774,13 @@ export const PlayerScreen = {
   getPlaybackEventErrorDetail(eventDetail = {}) {
     const detail = eventDetail && typeof eventDetail === "object" ? eventDetail : {};
     const hlsResponseCode = Number(detail.hlsResponseCode || 0);
+    const avplayErrorDetail =
+      detail.avplayErrorDetail && typeof detail.avplayErrorDetail === "object"
+        ? JSON.stringify(detail.avplayErrorDetail)
+        : detail.avplayErrorDetail;
     return [
       detail.avplayError,
+      avplayErrorDetail,
       detail.hlsErrorType,
       detail.hlsErrorDetails,
       hlsResponseCode >= 400 && hlsResponseCode <= 599 ? `HTTP ${hlsResponseCode}` : "",
@@ -6376,6 +7953,10 @@ export const PlayerScreen = {
     const engineFs = candidate?.engineFs || raw?.engineFs || this.currentEngineFsStream || null;
     const mediaError = video?.error || null;
     const eventErrorDetail = this.getPlaybackEventErrorDetail(eventDetail);
+    const avplaySnapshot =
+      eventDetail?.avplaySnapshot || PlayerController.getAvPlayDiagnosticSnapshot?.() || null;
+    const avplayErrorDiagnostic =
+      eventDetail?.avplayErrorDetail || PlayerController.getLastAvPlayErrorDiagnostic?.() || null;
     const rememberedHlsError =
       typeof PlayerController.getLastHlsErrorDetail === "function"
         ? PlayerController.getLastHlsErrorDetail()
@@ -6441,6 +8022,46 @@ export const PlayerScreen = {
     );
     pushPlaybackDiagnosticLine(lines, "DASH error", eventDetail?.dashError);
     pushPlaybackDiagnosticLine(lines, "AVPlay error", eventDetail?.avplayError);
+    pushPlaybackDiagnosticLine(
+      lines,
+      "AVPlay error detail",
+      avplayErrorDiagnostic && typeof avplayErrorDiagnostic === "object"
+        ? JSON.stringify(avplayErrorDiagnostic)
+        : avplayErrorDiagnostic,
+      600
+    );
+    pushPlaybackDiagnosticLine(lines, "AVPlay state", avplaySnapshot?.state);
+    pushPlaybackDiagnosticLine(lines, "AVPlay current time ms", avplaySnapshot?.currentTimeMs);
+    pushPlaybackDiagnosticLine(lines, "AVPlay duration ms", avplaySnapshot?.durationMs);
+    pushPlaybackDiagnosticLine(
+      lines,
+      "AVPlay buffering",
+      avplaySnapshot?.buffering == null ? "" : String(Boolean(avplaySnapshot.buffering))
+    );
+    pushPlaybackDiagnosticLine(
+      lines,
+      "AVPlay buffering duration ms",
+      avplaySnapshot?.bufferingDurationMs
+    );
+    pushPlaybackDiagnosticLine(
+      lines,
+      "AVPlay buffering progress",
+      avplaySnapshot?.bufferingProgress == null ? "" : `${avplaySnapshot.bufferingProgress}%`
+    );
+    pushPlaybackDiagnosticLine(lines, "AVPlay current bandwidth", avplaySnapshot?.currentBandwidth);
+    pushPlaybackDiagnosticLine(lines, "AVPlay available bitrate", avplaySnapshot?.availableBitrate);
+    pushPlaybackDiagnosticLine(
+      lines,
+      "AVPlay audio tracks",
+      avplaySnapshot?.audioTracks?.length ? JSON.stringify(avplaySnapshot.audioTracks) : "",
+      900
+    );
+    pushPlaybackDiagnosticLine(
+      lines,
+      "AVPlay current streams",
+      avplaySnapshot?.currentStreams?.length ? JSON.stringify(avplaySnapshot.currentStreams) : "",
+      1200
+    );
     pushPlaybackDiagnosticLine(lines, "HTML media error", mediaError?.message || mediaError?.code);
     pushPlaybackDiagnosticLine(lines, "Video readyState", video?.readyState);
     pushPlaybackDiagnosticLine(lines, "Video networkState", video?.networkState);
@@ -7651,7 +9272,7 @@ export const PlayerScreen = {
 
   computeNextEpisodeInfo() {
     const itemType = normalizeItemType(this.params?.itemType || "movie");
-    if (itemType !== "series") {
+    if (!isSeriesItemType(itemType)) {
       return null;
     }
 
@@ -7672,16 +9293,13 @@ export const PlayerScreen = {
     if (!nextEpisode && this.episodes.length) {
       const currentSeasonRaw = this.params?.season;
       const currentSeason = Number(currentSeasonRaw);
+      const hasCurrentSeason =
+        currentSeasonRaw != null && Number.isFinite(currentSeason) && currentSeason >= 0;
       const currentEpisode = Number(this.params?.episode || 0);
-      if (
-        currentSeasonRaw != null &&
-        Number.isFinite(currentSeason) &&
-        currentSeason >= 0 &&
-        currentEpisode > 0
-      ) {
+      if (currentEpisode > 0 && (currentSeasonRaw == null || hasCurrentSeason)) {
         const currentEntry = this.episodes.find(
           (episode) =>
-            Number(episode?.season || 0) === currentSeason &&
+            (!hasCurrentSeason || Number(episode?.season) === currentSeason) &&
             Number(episode?.episode || 0) === currentEpisode
         );
         nextEpisode = this.getNextEpisodeInSequence(currentEntry);
@@ -7717,13 +9335,23 @@ export const PlayerScreen = {
       return null;
     }
     const currentSeason = Number(currentEpisode?.season);
-    const sequence = this.episodes.filter((episode) =>
-      currentSeason === 0 ? Number(episode?.season) === 0 : Number(episode?.season) > 0
-    );
+    const hasCurrentSeason =
+      currentEpisode?.season != null && Number.isFinite(currentSeason) && currentSeason >= 0;
+    const sequence = hasCurrentSeason
+      ? this.episodes.filter((episode) =>
+          currentSeason === 0 ? Number(episode?.season) === 0 : Number(episode?.season) > 0
+        )
+      : [...this.episodes]
+          .filter((episode) => Number(episode?.episode || 0) > 0)
+          .sort(
+            (left, right) =>
+              (Number(left?.season) || 0) - (Number(right?.season) || 0) ||
+              Number(left?.episode || 0) - Number(right?.episode || 0)
+          );
     const currentIndex = sequence.findIndex(
       (episode) =>
         String(episode?.id || "") === String(currentEpisode?.id || "") ||
-        (Number(episode?.season || 0) === currentSeason &&
+        ((!hasCurrentSeason || Number(episode?.season) === currentSeason) &&
           Number(episode?.episode || 0) === Number(currentEpisode?.episode || 0))
     );
     return currentIndex >= 0 ? sequence[currentIndex + 1] || null : null;
@@ -7765,18 +9393,18 @@ export const PlayerScreen = {
 
   buildStreamRouteParamsFromPlayer() {
     const itemType = normalizeItemType(this.params?.itemType || "movie");
-    const currentEpisode = itemType === "series" ? this.resolveCurrentEpisodeEntry() : null;
-    const nextEpisode = itemType === "series" ? this.resolveNextEpisodeInfo() : null;
+    const seriesItem = isSeriesItemType(itemType);
+    const currentEpisode = seriesItem ? this.resolveCurrentEpisodeEntry() : null;
+    const nextEpisode = seriesItem ? this.resolveNextEpisodeInfo() : null;
     const currentPositionMs = Math.round(this.getPlaybackCurrentSeconds() * 1000);
     const title =
       this.params?.playerTitle || this.params?.itemTitle || this.params?.itemId || "Untitled";
     const backdrop =
       this.params?.playerBackdropUrl || this.params?.backdrop || this.params?.poster || null;
     const logo = this.params?.playerLogoUrl || this.params?.logo || null;
-    const videoId =
-      itemType === "series"
-        ? this.params?.videoId || currentEpisode?.id || null
-        : this.params?.videoId || this.params?.itemId || null;
+    const videoId = seriesItem
+      ? this.params?.videoId || currentEpisode?.id || null
+      : this.params?.videoId || this.params?.itemId || null;
 
     return {
       itemId: this.params?.itemId || null,
@@ -7787,7 +9415,7 @@ export const PlayerScreen = {
       returnToDetail: true,
       fromDetailRoute: Boolean(this.params?.fromDetailRoute),
       itemTitle: title,
-      itemSubtitle: itemType === "series" ? "" : this.params?.playerSubtitle || "",
+      itemSubtitle: seriesItem ? "" : this.params?.playerSubtitle || "",
       year: this.params?.playerReleaseYear || this.params?.year || "",
       backdrop,
       poster: this.params?.poster || backdrop,
@@ -7795,17 +9423,14 @@ export const PlayerScreen = {
       parentalWarnings: this.params?.parentalWarnings || null,
       parentalGuide: this.params?.parentalGuide || null,
       videoId,
-      season:
-        itemType === "series" ? (this.params?.season ?? currentEpisode?.season ?? null) : null,
-      episode:
-        itemType === "series" ? (this.params?.episode ?? currentEpisode?.episode ?? null) : null,
-      episodeTitle:
-        itemType === "series"
-          ? this.params?.playerEpisodeTitle ||
-            this.params?.playerSubtitle ||
-            currentEpisode?.title ||
-            ""
-          : "",
+      season: seriesItem ? (this.params?.season ?? currentEpisode?.season ?? null) : null,
+      episode: seriesItem ? (this.params?.episode ?? currentEpisode?.episode ?? null) : null,
+      episodeTitle: seriesItem
+        ? this.params?.playerEpisodeTitle ||
+          this.params?.playerSubtitle ||
+          currentEpisode?.title ||
+          ""
+        : "",
       episodes: Array.isArray(this.episodes) ? this.episodes : [],
       nextEpisodeVideoId: nextEpisode?.videoId || null,
       nextEpisodeLabel: nextEpisode?.episodeLabel || null,
@@ -7850,13 +9475,13 @@ export const PlayerScreen = {
 
   buildDetailRouteParamsFromPlayer() {
     const itemType = normalizeItemType(this.params?.itemType || "movie");
+    const seriesItem = isSeriesItemType(itemType);
     const streamRouteParams =
       this.params?.streamRouteParams && typeof this.params.streamRouteParams === "object"
         ? this.params.streamRouteParams
         : null;
-    const currentEpisode = itemType === "series" ? this.resolveCurrentEpisodeEntry() : null;
-    const preferredSeasonRaw =
-      itemType === "series" ? (this.params?.season ?? currentEpisode?.season) : null;
+    const currentEpisode = seriesItem ? this.resolveCurrentEpisodeEntry() : null;
+    const preferredSeasonRaw = seriesItem ? (this.params?.season ?? currentEpisode?.season) : null;
     const preferredSeason = Number(preferredSeasonRaw);
     return {
       itemId: this.params?.itemId || null,
@@ -7878,6 +9503,7 @@ export const PlayerScreen = {
 
   buildStreamRouteParamsForEpisode(episode = null) {
     const itemType = normalizeItemType(this.params?.itemType || "movie");
+    const seriesItem = isSeriesItemType(itemType);
     const targetEpisode = episode || null;
     const title =
       this.params?.playerTitle || this.params?.itemTitle || this.params?.itemId || "Untitled";
@@ -7893,7 +9519,7 @@ export const PlayerScreen = {
       returnToDetail: true,
       fromDetailRoute: Boolean(this.params?.fromDetailRoute),
       itemTitle: title,
-      itemSubtitle: itemType === "series" ? "" : this.params?.playerSubtitle || "",
+      itemSubtitle: seriesItem ? "" : this.params?.playerSubtitle || "",
       year: this.params?.playerReleaseYear || this.params?.year || "",
       backdrop,
       poster: this.params?.poster || backdrop,
@@ -7903,8 +9529,7 @@ export const PlayerScreen = {
       videoId: targetEpisode?.videoId || targetEpisode?.id || null,
       season: targetEpisode?.season == null ? null : Number(targetEpisode.season),
       episode: targetEpisode?.episode == null ? null : Number(targetEpisode.episode),
-      episodeTitle:
-        itemType === "series" ? targetEpisode?.episodeTitle || targetEpisode?.title || "" : "",
+      episodeTitle: seriesItem ? targetEpisode?.episodeTitle || targetEpisode?.title || "" : "",
       episodes: Array.isArray(this.episodes) ? this.episodes : []
     };
   },
@@ -8132,7 +9757,7 @@ export const PlayerScreen = {
   ensureNextEpisodeStreamsPrefetch({ force = false } = {}) {
     const nextEpisode = this.resolveNextEpisodeInfo();
     const itemType = normalizeItemType(this.params?.itemType || "movie");
-    if (!nextEpisode?.videoId || itemType !== "series" || nextEpisode.hasAired === false) {
+    if (!nextEpisode?.videoId || !isSeriesItemType(itemType) || nextEpisode.hasAired === false) {
       return;
     }
     if (!force && !this.shouldPrefetchNextEpisodeStreams()) {
@@ -8300,7 +9925,7 @@ export const PlayerScreen = {
     }
 
     const nextEpisode = this.resolveNextEpisodeInfo();
-    if (!nextEpisode || normalizeItemType(this.params?.itemType || "movie") !== "series") {
+    if (!nextEpisode || !isSeriesItemType(this.params?.itemType || "movie")) {
       this.nextEpisodeAutoplayAttemptedKey = "";
       return false;
     }
@@ -8674,7 +10299,7 @@ export const PlayerScreen = {
     const itemType = normalizeItemType(this.params?.itemType || "movie");
     if (
       !nextEpisode?.videoId ||
-      itemType !== "series" ||
+      !isSeriesItemType(itemType) ||
       nextEpisode.hasAired === false ||
       this.nextEpisodeLaunching
     ) {
@@ -8885,7 +10510,8 @@ export const PlayerScreen = {
       return;
     }
     const style = this.subtitleStyleSettings || {};
-    const verticalOffset = splitSubtitleVerticalOffset(style.verticalOffset);
+    const verticalOffsetVh = getSubtitleVerticalOffsetVh(style.verticalOffset);
+    const residualOffsetVh = getSubtitleVerticalResidualOffsetVh(style.verticalOffset);
     const subtitleTextOpacity = normalizeSubtitleTextOpacity(style.textOpacity);
     const subtitleColor = subtitleTextColorWithOpacity(
       style.textColor || "#FFFFFF",
@@ -8918,10 +10544,7 @@ export const PlayerScreen = {
     uiRoot.style.setProperty("--player-html-subtitle-font-size", htmlSubtitleFontSize);
     uiRoot.style.setProperty("--player-subtitle-font-weight", subtitleFontWeight);
     uiRoot.style.setProperty("--player-subtitle-shadow", subtitleShadow);
-    uiRoot.style.setProperty(
-      "--player-subtitle-offset",
-      `${(verticalOffset.value * -2).toFixed(2)}vh`
-    );
+    uiRoot.style.setProperty("--player-subtitle-offset", `${verticalOffsetVh.toFixed(2)}vh`);
     video.style.setProperty("--player-subtitle-color", subtitleColor);
     video.style.setProperty(
       "--player-subtitle-background",
@@ -8931,10 +10554,7 @@ export const PlayerScreen = {
     video.style.setProperty("--player-subtitle-font-size", `${subtitleFontSize}%`);
     video.style.setProperty("--player-subtitle-font-weight", subtitleFontWeight);
     video.style.setProperty("--player-subtitle-shadow", subtitleShadow);
-    video.style.setProperty(
-      "--player-subtitle-offset",
-      `${(verticalOffset.residualOffset * -2).toFixed(2)}vh`
-    );
+    video.style.setProperty("--player-subtitle-offset", `${residualOffsetVh.toFixed(2)}vh`);
     this.refreshSubtitleCueStyles();
     this.renderBitmapSubtitleAtCurrentTime({ force: true });
     if (refreshTrackRendering) {
@@ -9235,7 +10855,10 @@ export const PlayerScreen = {
       return;
     }
     const { lineOffset } = splitSubtitleVerticalOffset(offset);
-    if (lineOffset === 0) {
+    // A source-authored line (including percentage positioning) belongs to
+    // the subtitle itself. Keep it intact; Android applies its bottom padding
+    // only when the cue has no explicit line.
+    if (hasExplicitSubtitleVerticalPosition(snapshot) || lineOffset === 0) {
       this.restoreSubtitleCueSnapshot(cue, snapshot);
       return;
     }
@@ -10211,6 +11834,24 @@ export const PlayerScreen = {
         // of the only two things that can move it.
         this.invalidatePlayerOverlayLayout();
         this.applyAspectMode({ showToast: false });
+        // applyAspectMode() restores the native AVPlay surface to full screen.
+        // In post-play the same mode key may still be current, so invalidate it
+        // before re-applying the Android mini-window geometry.
+        this.cancelPostPlayNativeSurfaceAnimation();
+        const viewport = PlayerController.getAvPlayViewportSize?.() || {
+          width: 1920,
+          height: 1080
+        };
+        if (this.isPostPlayVisible()) {
+          this.postPlayNativeSurfaceStateKey = "";
+          this.postPlayNativeSurfaceRect = {
+            x: 0,
+            y: 0,
+            width: Math.max(1, Math.round(Number(viewport.width || 1920))),
+            height: Math.max(1, Math.round(Number(viewport.height || 1080)))
+          };
+        }
+        this.syncPostPlayPlayerSurface(this.getPostPlayState());
       };
       window.addEventListener("resize", onViewportResize);
       this.videoListeners.push({
@@ -10344,6 +11985,13 @@ export const PlayerScreen = {
     }
     const wrap = this.uiRefs?.controlButtons;
     if (!wrap) {
+      return;
+    }
+
+    if (this.isPostPlayVisible() || this.isPostPlayLoading()) {
+      wrap.innerHTML = "";
+      this.renderedControlSignature = "";
+      this.syncPlayerOverlayLayoutState();
       return;
     }
 
@@ -10520,11 +12168,161 @@ export const PlayerScreen = {
     if (!root) {
       return;
     }
+    const postPlayState = this.getPostPlayState();
+    const postPlayVisible = Boolean(postPlayState.isVisible);
+    const postPlayTrailer = Boolean(postPlayState.isTrailerPlaying);
+    const postPlayTrailerConsumed = Boolean(postPlayVisible && postPlayState.hasAutoPlayedTrailer);
     root.classList.toggle(
       "controls-visible",
-      Boolean(this.controlsVisible) && !this.isExternalFrameMode()
+      Boolean(this.controlsVisible) && !this.isExternalFrameMode() && !postPlayVisible
     );
+    root.classList.toggle("post-play-visible", postPlayVisible);
+    root.classList.toggle("post-play-loading", Boolean(postPlayState.isLoadingRecommendation));
+    root.classList.toggle("post-play-trailer", postPlayTrailer);
+    root.classList.toggle("post-play-trailer-consumed", postPlayTrailerConsumed);
+    root.classList.toggle("post-play-returning", Boolean(postPlayState.hasReturnedToPlayer));
+    this.container?.classList.toggle("post-play-visible", postPlayVisible);
+    this.container?.classList.toggle("post-play-trailer", postPlayTrailer);
+    this.container?.classList.toggle("post-play-trailer-consumed", postPlayTrailerConsumed);
+    this.container?.classList.toggle(
+      "post-play-returning",
+      Boolean(postPlayState.hasReturnedToPlayer)
+    );
+    this.syncPostPlayPlayerSurface(postPlayState);
     this.syncPlayerActionOverlayOffset();
+  },
+
+  cancelPostPlayNativeSurfaceAnimation() {
+    if (this.postPlayNativeSurfaceAnimationFrame == null) {
+      return;
+    }
+    if (this.postPlayNativeSurfaceAnimationUsesRaf) {
+      globalThis.cancelAnimationFrame?.(this.postPlayNativeSurfaceAnimationFrame);
+    } else {
+      clearTimeout(this.postPlayNativeSurfaceAnimationFrame);
+    }
+    this.postPlayNativeSurfaceAnimationFrame = null;
+  },
+
+  syncPostPlayPlayerSurface(state = this.getPostPlayState()) {
+    if (!Environment.isTizen() || !PlayerController.isUsingAvPlay?.()) {
+      return;
+    }
+    const avPlayObject = document.getElementById("avPlayerObject");
+    const viewport = PlayerController.getAvPlayViewportSize?.() || {
+      width: 1920,
+      height: 1080
+    };
+    const viewportWidth = Math.max(1, Math.round(Number(viewport.width || 1920)));
+    const viewportHeight = Math.max(1, Math.round(Number(viewport.height || 1080)));
+    const isTrailerSurfaceHidden = Boolean(
+      state.isVisible && (state.isTrailerPlaying || state.hasAutoPlayedTrailer)
+    );
+    const isMiniSurface = Boolean(state.isVisible && !isTrailerSurfaceHidden);
+    const surfaceMode = isTrailerSurfaceHidden ? "hidden" : isMiniSurface ? "mini" : "normal";
+    const key = `${surfaceMode}:${viewportWidth}x${viewportHeight}:${document.documentElement?.dir || "ltr"}`;
+    if (key === this.postPlayNativeSurfaceStateKey) {
+      return;
+    }
+    this.postPlayNativeSurfaceStateKey = key;
+    this.cancelPostPlayNativeSurfaceAnimation();
+    const fullRect = {
+      x: 0,
+      y: 0,
+      width: viewportWidth,
+      height: viewportHeight
+    };
+    if (avPlayObject?.style) {
+      avPlayObject.style.visibility = isTrailerSurfaceHidden ? "hidden" : "visible";
+    }
+
+    if (surfaceMode === "hidden") {
+      // The Android implementation releases the player surface while the
+      // trailer owns the screen. Keep the native surface out of the way and
+      // reset its geometry so a later lifecycle cannot resurrect a stale mini
+      // rectangle.
+      this.postPlayNativeSurfaceRect = fullRect;
+      PlayerController.setAvPlayDisplayRect?.(fullRect, "PLAYER_DISPLAY_MODE_FULL_SCREEN");
+      return;
+    }
+
+    const video = PlayerController.video;
+    if (video?.style) {
+      // Tizen's AVPlay object is the visible surface; the HTML video element
+      // still needs the same fullscreen box when the mini-window is restored.
+      video.style.position = "fixed";
+      video.style.left = "0px";
+      video.style.top = "0px";
+      video.style.right = "auto";
+      video.style.bottom = "auto";
+      video.style.width = "100vw";
+      video.style.height = "100vh";
+      video.style.maxWidth = "100vw";
+      video.style.maxHeight = "100vh";
+      video.style.objectFit = "fill";
+      video.style.transform = "none";
+    }
+
+    const targetRect = { ...fullRect };
+    if (surfaceMode === "mini") {
+      const cssViewportWidth = Math.max(1, Number(window.innerWidth || viewportWidth));
+      const scale = viewportWidth / cssViewportWidth;
+      const gutter = Math.max(0, Math.round(32 * scale));
+      const width = Math.min(
+        viewportWidth,
+        Math.max(1, Math.round(cssViewportWidth * 0.32 * scale))
+      );
+      targetRect.width = width;
+      targetRect.height = Math.min(viewportHeight, Math.max(1, Math.round(width * (9 / 16))));
+      targetRect.x =
+        document.documentElement?.dir === "rtl"
+          ? gutter
+          : Math.max(0, viewportWidth - width - gutter);
+      targetRect.y = gutter;
+    }
+
+    const currentRect =
+      this.postPlayNativeSurfaceRect || PlayerController.avplayDisplayRect || fullRect;
+    const sameRect = ["x", "y", "width", "height"].every(
+      (keyName) => Number(currentRect[keyName]) === Number(targetRect[keyName])
+    );
+    if (sameRect) {
+      this.postPlayNativeSurfaceRect = { ...targetRect };
+      PlayerController.setAvPlayDisplayRect?.(targetRect, "PLAYER_DISPLAY_MODE_FULL_SCREEN");
+      return;
+    }
+
+    const startedAt =
+      typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now();
+    const schedule = (callback) => {
+      if (typeof requestAnimationFrame === "function") {
+        this.postPlayNativeSurfaceAnimationUsesRaf = true;
+        return requestAnimationFrame(callback);
+      }
+      this.postPlayNativeSurfaceAnimationUsesRaf = false;
+      return setTimeout(callback, 16);
+    };
+    const applyRect = (rect) => {
+      this.postPlayNativeSurfaceRect = { ...rect };
+      PlayerController.setAvPlayDisplayRect?.(rect, "PLAYER_DISPLAY_MODE_FULL_SCREEN");
+    };
+    const animate = () => {
+      if (this.postPlayNativeSurfaceStateKey !== key) {
+        return;
+      }
+      const now =
+        typeof globalThis.performance?.now === "function"
+          ? globalThis.performance.now()
+          : Date.now();
+      const progress = Math.max(0, Math.min(1, (now - startedAt) / 420));
+      applyRect(interpolatePostPlayRect(currentRect, targetRect, progress));
+      if (progress >= 1) {
+        this.postPlayNativeSurfaceAnimationFrame = null;
+        return;
+      }
+      this.postPlayNativeSurfaceAnimationFrame = schedule(animate);
+    };
+    animate();
   },
 
   measurePlayerActionOverlayOffset() {
@@ -10582,6 +12380,7 @@ export const PlayerScreen = {
   },
 
   setControlsVisible(visible, { focus = false } = {}) {
+    const wasControlsVisible = this.controlsVisible;
     this.controlsVisible = Boolean(visible);
     this.invalidatePlayerOverlayLayout();
     if (this.isExternalFrameMode()) {
@@ -10603,7 +12402,18 @@ export const PlayerScreen = {
       this.resetControlsAutoHide();
     } else {
       this.clearControlsAutoHide();
-      this.focusPlayerRootForHiddenControls();
+      // Android transfers focus to the visible next-episode overlay as part
+      // of the same controls-hidden state update. Smart manages focus
+      // manually, so waiting for the next playback tick leaves the DOM card
+      // selected while the logical focus remains on the player root.
+      if (wasControlsVisible) {
+        this.renderNextEpisodeCard();
+      }
+      if (this.controlFocusZone === "nextEpisode" && this.isNextEpisodeCardFocusable()) {
+        this.syncNextEpisodeCardFocusState();
+      } else {
+        this.focusPlayerRootForHiddenControls();
+      }
     }
   },
 
@@ -11499,6 +13309,13 @@ export const PlayerScreen = {
         this.torrentOverlayData)
     ) {
       void this.refreshLoadingOverlayProgress();
+    }
+    // Upstream evaluates this on every timeupdate. It rides the 900 ms slow
+    // subsystem tick here for the same reason the block above does, and the
+    // post-play threshold is a percentage of a runtime measured in minutes, so
+    // sub-second precision buys nothing.
+    if (slowSubsystemsDue) {
+      this.evaluatePostPlayRecommendation();
     }
     const effectiveProgressSeconds =
       this.controlsVisible &&
@@ -12712,20 +14529,11 @@ export const PlayerScreen = {
     if (Number(this.lastPlaybackProgressAt || 0) < startedAt) {
       return engineAlreadyValidated;
     }
-    const stablePlaybackMs = Date.now() - startedAt;
     if (this.playbackEngineValidated) {
       this.postValidationRecoveryValidationActive = false;
       this.postValidationSameEngineRecoveryAttempts = 0;
-      console.info("Playback engine remained stable after same-engine recovery", {
-        engine: currentEngine,
-        stablePlaybackMs
-      });
     } else {
       this.playbackEngineValidated = true;
-      console.info("Playback engine validated after stable playback", {
-        engine: currentEngine,
-        stablePlaybackMs
-      });
     }
     return true;
   },
@@ -14694,11 +16502,9 @@ export const PlayerScreen = {
       // not fire it; make ass.js capture requestAnimationFrame instead.
       forceRafFrameLoop: Environment.isWebOS(),
       // The webOS native pipeline can leave video.paused=true while the app
-      // is playing. Kick the newly-created renderer only when the controller
-      // and player UI both still consider playback active, so a paused
-      // selection does not start an uncancellable frame loop.
-      forcePlaybackFrameLoopKick:
-        Environment.isWebOS() && PlayerController.isPlaying && !this.paused
+      // is playing, and the UI paused flag can lag that state. The controller
+      // state is authoritative when deciding whether to kick the renderer.
+      forcePlaybackFrameLoopKick: Environment.isWebOS() && PlayerController.isPlaying
     });
     if (!renderer || typeof renderer.init !== "function") {
       return { applied: false, fallbackVtt: convertAssBodyToVtt(body) };
@@ -15288,8 +17094,8 @@ export const PlayerScreen = {
     );
     const style = this.subtitleStyleSettings || {};
     const sizeScale = normalizeSubtitleFontSize(style.fontSize) / 100;
-    const verticalOffsetPx =
-      splitSubtitleVerticalOffset(style.verticalOffset).value * -0.02 * viewportHeight;
+    const verticalOffsetVh = getSubtitleVerticalOffsetVh(style.verticalOffset);
+    const verticalOffsetPx = (verticalOffsetVh / 100) * viewportHeight;
     const mode = this.getAspectModeDefinition();
     const rect = this.calculateAspectRect(mode.id, PlayerController.video);
     const modeScaleX = Number(rect.scaleX || 1);
@@ -15366,8 +17172,14 @@ export const PlayerScreen = {
       const baseCenterX = rect.x + (composition.x + composition.width / 2) * contentScaleX;
       const baseCenterY = rect.y + (composition.y + composition.height / 2) * contentScaleY;
       const targetCenterX = viewportWidth / 2 + (baseCenterX - viewportWidth / 2) * modeScaleX;
-      const targetCenterY =
+      const requestedCenterY =
         viewportHeight / 2 + (baseCenterY - viewportHeight / 2) * modeScaleY + verticalOffsetPx;
+      const targetCenterY =
+        verticalOffsetPx === 0
+          ? requestedCenterY
+          : targetHeight >= viewportHeight
+            ? viewportHeight / 2
+            : clamp(requestedCenterY, targetHeight / 2, viewportHeight - targetHeight / 2);
       context.drawImage(
         scratch,
         targetCenterX - targetWidth / 2,
@@ -15448,7 +17260,7 @@ export const PlayerScreen = {
           cueNode.style.left = `${group.position}%`;
           cueNode.style.right = "auto";
           const anchor = group.align === "start" ? "0%" : group.align === "end" ? "-100%" : "-50%";
-          cueNode.style.transform = `translate(${anchor}, -50%) translateY(var(--player-subtitle-offset))`;
+          cueNode.style.transform = `translate(${anchor}, -50%)`;
         }
       }
       if (group.size != null && group.line != null) {
@@ -21924,6 +23736,16 @@ export const PlayerScreen = {
   },
 
   onPointerFocus(target) {
+    if (this.isPostPlayVisible()) {
+      const actionNode = target?.closest?.("[data-player-post-play-action]");
+      if (actionNode && !actionNode.disabled) {
+        this.postPlayFocusedAction = String(actionNode.dataset.playerPostPlayAction || "primary");
+        this.uiRefs?.postPlay
+          ?.querySelectorAll?.(".focusable.focused")
+          ?.forEach((entry) => entry.classList.toggle("focused", entry === actionNode));
+      }
+      return;
+    }
     this.syncPointerFocus(target);
   },
 
@@ -21932,6 +23754,10 @@ export const PlayerScreen = {
       return false;
     }
     this.syncPointerFocus(target);
+
+    if (this.isPostPlayVisible() && this.handlePostPlayPointer(target, event)) {
+      return true;
+    }
 
     const errorAction = target.closest?.("[data-player-error-action]");
     if (errorAction && this.isStartupErrorVisible()) {
@@ -22106,6 +23932,29 @@ export const PlayerScreen = {
       return true;
     }
 
+    const postPlayState = this.getPostPlayState();
+    if (postPlayState.isTrailerPlaying) {
+      this.postPlayRecommendationController?.onTrailerEnded?.();
+      return true;
+    }
+    if (this.postPlayManualDialogVisible) {
+      this.invokePostPlayAction("manualCancel");
+      return true;
+    }
+    if (this.postPlaySynopsisVisible) {
+      this.invokePostPlayAction("synopsisClose");
+      return true;
+    }
+    if (postPlayState.isVisible && postPlayState.canReturnToPlayer && !this.postPlayPlaybackEnded) {
+      return this.returnToPlayerFromPostPlay();
+    }
+    if (postPlayState.isVisible || postPlayState.isLoadingRecommendation) {
+      this.postPlayNaturalEndPending = false;
+      this.postPlayPlaybackEnded = false;
+      this.postPlayRecommendationController?.stop?.();
+      return this.navigateBackToStreamScreen();
+    }
+
     if (this.stillWatchingPromptVisible) {
       return this.onDismissStillWatchingPrompt();
     }
@@ -22202,6 +24051,31 @@ export const PlayerScreen = {
       event?.stopPropagation?.();
       event?.stopImmediatePropagation?.();
       this.consumeBackRequest();
+      return;
+    }
+    if (this.isPostPlayVisible()) {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      event?.stopImmediatePropagation?.();
+      if (
+        isSelectKeyCode(keyCode) &&
+        !this.postPlayManualDialogVisible &&
+        !this.postPlaySynopsisVisible
+      ) {
+        if (!event?.repeat) {
+          this.postPlayPendingSelect = true;
+          this.postPlayPendingSelectAction = this.postPlayFocusedAction || "primary";
+          if (this.postPlayPendingSelectAction === "primary") {
+            this.schedulePostPlayLongPress();
+          }
+        } else {
+          // Android's LongPressKeyTracker opens the manual-play dialog on the
+          // first repeated key-down, before the remote sends key-up.
+          this.triggerPostPlayLongPress();
+        }
+        return;
+      }
+      this.handlePostPlayKey(event);
       return;
     }
     if (this.nextEpisodeBackExitArmed) {
@@ -22501,6 +24375,38 @@ export const PlayerScreen = {
     this.resetControlsAutoHide();
   },
 
+  onKeyUp(event) {
+    const keyCode = Number(event?.keyCode || 0);
+    if (!isSelectKeyCode(keyCode) || !this.isPostPlayVisible()) {
+      return;
+    }
+    const pendingAction =
+      this.postPlayPendingSelectAction || this.postPlayFocusedAction || "primary";
+    const wasLongPress =
+      this.postPlayLongPressTriggered ||
+      Number(event?.keyDownDurationMs || 0) >= POST_PLAY_LONG_PRESS_DELAY_MS;
+    this.clearPostPlayLongPressTimer();
+    this.postPlayPendingSelect = false;
+    this.postPlayPendingSelectAction = "";
+    event?.preventDefault?.();
+    if (
+      wasLongPress &&
+      this.getPostPlayState().recommendation?.contentType === "movie" &&
+      pendingAction === "primary" &&
+      this.isPostPlayManualPlayOptionEnabled()
+    ) {
+      if (!this.postPlayLongPressTriggered) {
+        this.openPostPlayManualDialog();
+      }
+      this.postPlayLongPressTriggered = false;
+      return;
+    }
+    if (!wasLongPress) {
+      this.invokePostPlayAction(pendingAction);
+    }
+    this.postPlayLongPressTriggered = false;
+  },
+
   selectBestStreamCandidate(streams = []) {
     if (!Array.isArray(streams) || !streams.length) {
       return null;
@@ -22696,6 +24602,42 @@ export const PlayerScreen = {
   async handlePlaybackEnded() {
     const naturalCompletion = this.isNaturalPlaybackCompletionEligible();
     if (!naturalCompletion) {
+      this.postPlayPlaybackEnded = false;
+      return this.finishNaturalPlaybackEnded();
+    }
+
+    // The Android player commits the watched state at the real media end, then
+    // lets the post-play controller decide whether navigation/autoplay must be
+    // held while recommendations are resolved.
+    if (!this.postPlayNaturalCompletionPrepared) {
+      if (TrackingScrobbleService.isEnabled()) {
+        TrackingScrobbleService.stop(this.buildScrobbleContext());
+      }
+      this.clearPlaybackStallGuard();
+      this.releaseStartupAudioGate({ resume: false });
+      this.postPlayNaturalCompletionPrepared = true;
+    }
+    this.postPlayPlaybackEnded = true;
+    const postPlayState = this.evaluatePostPlayRecommendation({ playbackEnded: true });
+    if (postPlayState.blocksNaturalCompletion) {
+      this.postPlayNaturalEndPending = true;
+      this.loadingVisible = false;
+      this.bufferingActive = false;
+      this.paused = true;
+      this.dismissPauseOverlay();
+      this.updateLoadingVisibility();
+      this.updateMediaSessionPlaybackState();
+      this.setControlsVisible(false, { focus: false });
+      this.renderControlButtons();
+      this.renderNextEpisodeCard();
+      return;
+    }
+    return this.finishNaturalPlaybackEnded();
+  },
+
+  async finishNaturalPlaybackEnded() {
+    const naturalCompletion = this.isNaturalPlaybackCompletionEligible();
+    if (!naturalCompletion) {
       // Match Android: an error/placeholder end is not a completion, so it
       // must not stop scrobbling, mark watched, navigate away, or auto-play.
       TrackingScrobbleService.cancel();
@@ -22719,9 +24661,13 @@ export const PlayerScreen = {
       return;
     }
 
-    // Immediate scrobble stop (may trigger mark-as-watched)
-    if (TrackingScrobbleService.isEnabled()) {
-      TrackingScrobbleService.stop(this.buildScrobbleContext());
+    if (!this.postPlayNaturalCompletionPrepared) {
+      // Direct callers and environments without the native ended event still
+      // get the same one-time completion commit.
+      if (TrackingScrobbleService.isEnabled()) {
+        TrackingScrobbleService.stop(this.buildScrobbleContext());
+      }
+      this.postPlayNaturalCompletionPrepared = true;
     }
     this.clearPlaybackStallGuard();
     this.releaseStartupAudioGate({ resume: false });
@@ -22760,7 +24706,7 @@ export const PlayerScreen = {
       return;
     }
 
-    if (itemType === "series") {
+    if (isSeriesItemType(itemType)) {
       this.releaseCurrentEngineFsStreamBestEffort("playback-ended", { removeTorrent: true });
       void Router.navigate("detail", detailParams, {
         skipStackPush: true,
@@ -22794,6 +24740,25 @@ export const PlayerScreen = {
       this.nextEpisodeAutoplayAttemptedKey = "";
       this.resetStillWatchingPromptState({ render: false });
       this.consecutiveAutoPlayCount = 0;
+      this.postPlayNaturalEndPending = false;
+      this.postPlayPlaybackEnded = false;
+      this.postPlayNaturalCompletionPrepared = false;
+      this.postPlayPendingSelect = false;
+      this.postPlayPendingSelectAction = "";
+      this.clearPostPlayFocusTimer();
+      this.clearPostPlayLongPressTimer();
+      this.clearPostPlaySynopsisScrollAnimation();
+      this.postPlayLongPressTriggered = false;
+      this.cancelPostPlayNativeSurfaceAnimation();
+      this.postPlayNativeSurfaceStateKey = "";
+      this.postPlayNativeSurfaceRect = null;
+      if (this.postPlayDescriptionMeasureFrame) {
+        cancelAnimationFrame(this.postPlayDescriptionMeasureFrame);
+        this.postPlayDescriptionMeasureFrame = null;
+      }
+      this.stopPostPlayTrailer();
+      this.clearPostPlaySummaryTransition();
+      this.postPlayRecommendationController?.stop?.();
       this.unbindVideoEvents();
       if (this.endedHandler && PlayerController.video) {
         PlayerController.video.removeEventListener("ended", this.endedHandler);

@@ -2967,4 +2967,6 @@
     <string name="settings.plugins.openSubtitle">Menaxho ofruesit Nuvio JS të ekzekutueshëm dhe metadata të jashtme të ruajtura</string>
     <string name="settings.plugins.refreshRepository">Përditëso repository-n</string>
     <string name="settings.plugins.removeRepository">Hiq repository-n</string>
+    <string name="home.continueStatusWatchedPercent">Shikuar {{percent}}%</string>
+    <string name="player_post_play_play_manually">Luaj manualisht</string>
 </resources>

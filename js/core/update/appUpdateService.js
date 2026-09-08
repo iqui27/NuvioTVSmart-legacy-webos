@@ -1,5 +1,7 @@
 const LATEST_RELEASE_URL = "https://api.github.com/repos/NuvioMedia/NuvioTVSmart/releases/latest";
 const DEFAULT_TIMEOUT_MS = 8000;
+const DEFAULT_RETRY_DELAY_MS = 2000;
+const DEFAULT_MAX_ATTEMPTS = 2;
 
 export function normalizeAppVersion(raw) {
   return String(raw || "")
@@ -104,7 +106,9 @@ export async function getLatestAppUpdate({
     ]);
 
     if (!response?.ok) {
-      throw new Error(`GitHub release check failed: HTTP ${response?.status || 0}`);
+      const error = new Error(`GitHub release check failed: HTTP ${response?.status || 0}`);
+      error.status = Number(response?.status || 0);
+      throw error;
     }
 
     const release = parseLatestRelease(await response.json());
@@ -117,4 +121,34 @@ export async function getLatestAppUpdate({
       clearTimeout(timeoutId);
     }
   }
+}
+
+function isRetryableUpdateCheckError(error) {
+  const status = Number(error?.status || 0);
+  return status === 0 || status === 408 || status === 429 || status >= 500;
+}
+
+export async function getLatestAppUpdateWithRetry({
+  currentVersion,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+  maxAttempts = DEFAULT_MAX_ATTEMPTS
+} = {}) {
+  const attempts = Math.max(1, Number(maxAttempts) || DEFAULT_MAX_ATTEMPTS);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await getLatestAppUpdate({ currentVersion, fetchImpl, timeoutMs });
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableUpdateCheckError(error)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(retryDelayMs) || 0)));
+    }
+  }
+
+  throw lastError || new Error("App update check failed");
 }

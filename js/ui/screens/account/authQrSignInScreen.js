@@ -69,7 +69,15 @@ export const AuthQrSignInScreen = {
 
     ScreenUtils.indexFocusables(this.container);
     ScreenUtils.setInitialFocus(this.container);
-    await this.startQr();
+    // Android starts QR login from LaunchedEffect after composing the screen;
+    // the QR service must not delay route completion or Back handling.
+    void this.startQr().catch((error) => {
+      if (!this.isMounted || this.isLeaving) {
+        return;
+      }
+      console.warn("QR login background start failed", error);
+      this.setStatus(this.toFriendlyQrError(error?.message || error));
+    });
   },
 
   async startQr() {

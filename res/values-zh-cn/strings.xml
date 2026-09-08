@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">标记为未看</string>
     <string name="hero_play_trailer">播放预告片</string>
     <string name="hero_press_back_trailer">按返回键退出预告片</string>
+    <string name="hero_synopsis_read_more">阅读更多</string>
+    <string name="hero_synopsis_dismiss_hint">按返回键关闭</string>
     <string name="cd_rating">评分</string>
     <string name="episodes_season">第 %1$d 季</string>
     <string name="episodes_specials">特别篇</string>
@@ -2504,4 +2506,6 @@
     <string name="settings.plugins.openSubtitle">管理可执行的 Nuvio JS 提供者和已保留的外部元数据</string>
     <string name="settings.plugins.refreshRepository">刷新仓库</string>
     <string name="settings.plugins.removeRepository">删除仓库</string>
+    <string name="home.continueStatusWatchedPercent">已观看 {{percent}}%</string>
+    <string name="player_post_play_play_manually">手动播放</string>
 </resources>

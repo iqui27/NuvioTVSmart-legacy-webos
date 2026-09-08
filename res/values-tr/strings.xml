@@ -165,6 +165,8 @@
     <string name="hero_mark_unwatched">İzlenmedi olarak işaretle</string>
     <string name="hero_play_trailer">Fragmanı izle</string>
     <string name="hero_press_back_trailer">Fragmandan çıkmak için geri tuşuna basın</string>
+    <string name="hero_synopsis_read_more">Devamını oku</string>
+    <string name="hero_synopsis_dismiss_hint">Kapatmak için geri tuşuna basın</string>
     <string name="cd_rating">Değerlendirme</string>
     <string name="episodes_season">Sezon %1$d</string>
     <string name="episodes_specials">Özel Bölümler</string>
@@ -2746,4 +2748,6 @@
     <string name="plugin_security_note">Eklenti kodu sınırlı bir Worker içinde çalışır. Ağ erişimi pakete dahil TV hizmeti üzerinden sağlanır; herkese açık HTTP(S) hedefleri, boyut sınırları, zaman aşımları ve iptal uygulanır; TV depolamasına veya yerel API'lere erişim yoktur.</string>
     <string name="plugin_default_supported_types">movie/tv</string>
     <string name="settings.plugins.openSubtitle">Çalıştırılabilir Nuvio JS sağlayıcılarını ve korunan harici meta verileri yönet</string>
+    <string name="home.continueStatusWatchedPercent">%{{percent}} izlendi</string>
+    <string name="player_post_play_play_manually">Manuel oynat</string>
 </resources>
