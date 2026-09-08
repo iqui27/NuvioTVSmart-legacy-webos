@@ -10111,6 +10111,35 @@ export const PlayerScreen = {
         return;
       }
 
+      // Playback that ALREADY RAN and then died. Until now every recovery in
+      // this handler was gated on !hasPresentedPlaybackFrame, so a pipeline
+      // that collapsed mid-title went straight to "choose another source" and
+      // the session was over. Measured on the native port against the same TV:
+      // the webOS media pipeline dies on its own some tens of seconds after a
+      // seek on a remote file -- uMediaServer answers subsequent commands with
+      // "com.webos.pipeline.<id> is not running" -- and the source itself is
+      // fine, so re-opening it and seeking back resumes the title.
+      //
+      // The machinery for that already existed here and was only reachable
+      // from the stall guard, which never arms unless the loading overlay is
+      // up. An error event skips it entirely. Route the error path into the
+      // same recovery: it only runs after the engine proved itself over a
+      // stable window, retries once, and re-arms only after another stable
+      // window, so a genuinely broken source still lands on the error below.
+      if (this.hasPresentedPlaybackFrame && this.recoverValidatedPlaybackOnStall()) {
+        this.lastPlaybackErrorAt = 0;
+        this.loadingVisible = true;
+        this.paused = false;
+        this.sourcesError = null;
+        this.updateLoadingVisibility();
+        console.warn("Playback failed after presenting frames; retrying the same source", {
+          url: this.activePlaybackUrl,
+          mediaErrorCode,
+          avplayError
+        });
+        return;
+      }
+
       this.markPlaybackSourceFailed(this.activePlaybackUrl);
 
       this.clearPlaybackStallGuard();
