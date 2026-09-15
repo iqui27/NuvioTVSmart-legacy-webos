@@ -262,7 +262,17 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
       if (forcado) {
         sufixo = "${LEGACY_SCALED_SUFFIX}";
       }
-      window.__NUVIO_UI_PLANE__ = { vp: vp, tela: tela, sufixo: sufixo, escala: 1 };
+      // fatorCss e a escala que o uiScalePlugin ja aplicou nos px da folha de
+      // 720. Sai daqui, e nao do modulo que o consome, porque LEGACY_SCALE mora
+      // neste arquivo -- duplicar o 2/3 do outro lado garantiria divergencia.
+      // Quem le: js/core/util/tmdbImageSize.js, para pedir imagem menor.
+      window.__NUVIO_UI_PLANE__ = {
+        vp: vp,
+        tela: tela,
+        sufixo: sufixo,
+        escala: 1,
+        fatorCss: sufixo ? ${LEGACY_SCALE} : 1
+      };
       var folhas = ${JSON.stringify(LEGACY_SCALED_SHEETS)};
       for (var i = 0; i < folhas.length; i++) {
         document.write(

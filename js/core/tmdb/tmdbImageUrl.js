@@ -1,4 +1,14 @@
+import { fatorDoPlano } from "../util/tmdbImageSize.js";
+
 const TMDB_IMAGE_HOST_PATTERN = /^(?:https?:)?\/\/image\.tmdb\.org\//i;
+
+// Abaixo disto o plano grafico e o de 720 da variante webOS 3. Ver o comentario
+// do degrau em js/core/util/tmdbImageSize.js.
+const LIMIAR_PLANO_REDUZIDO = 0.8;
+
+function planoReduzido() {
+  return fatorDoPlano() <= LIMIAR_PLANO_REDUZIDO;
+}
 
 /**
  * Leva a arte de fundo do TMDB para w1280, subindo o que vem pequeno demais
@@ -23,12 +33,17 @@ export function normalizeTmdbBackdropUrl(value) {
   if (!normalized || !TMDB_IMAGE_HOST_PATTERN.test(normalized)) {
     return normalized;
   }
+  // No plano de 720 o hero desenha ~853px de largura, nao 1920: w780 cobre 0,91x
+  // disso e w1280 seriam 2,7 megapixels decodificados para nada. Pior: a regra
+  // abaixo SOBE o que vem menor, entao sem este alvo um w780 que o addon mandou
+  // do tamanho certo seria inflado para w1280 naquele aparelho.
+  const alvo = planoReduzido() ? 780 : 1280;
   return normalized.replace(/(\/t\/p\/)(original|w\d+)\//i, (todo, base, tamanho) => {
     if (/^original$/i.test(tamanho)) {
-      return `${base}w1280/`;
+      return `${base}w${alvo}/`;
     }
     const largura = Number(tamanho.slice(1));
-    return Number.isFinite(largura) && largura < 1280 ? `${base}w1280/` : `${base}${tamanho}/`;
+    return Number.isFinite(largura) && largura < alvo ? `${base}w${alvo}/` : `${base}${tamanho}/`;
   });
 }
 
@@ -53,5 +68,13 @@ export function tmdbArteParaTelaEstatica(value, tamanho = "original") {
   if (!normalized || !TMDB_IMAGE_HOST_PATTERN.test(normalized)) {
     return normalized;
   }
-  return normalized.replace(/(\/t\/p\/)(original|w\d+)\//i, `$1${tamanho}/`);
+  // O argumento acima vale para a C9: viewport 1920 com devicePixelRatio 2, ou
+  // seja 3840 px fisicos, onde `original` e o unico tamanho que nao sobe escala.
+  // Na variante webOS 3 as duas premissas caem: o plano e 1280x720 e o dpr e 1
+  // (medido na TV do lijovklm: `dpr=1 screen=1280x720`). Ali `original` sao
+  // 3840x2160 = 8,3 megapixels decodificados para desenhar 1280 -- num aparelho
+  // com 624 MB de RAM, ~300 MB livres, e sem `decode()` para tirar esse trabalho
+  // do quadro. w1280 cobre 1,0x e custa 0,92 MP: nove vezes menos.
+  const alvoDoPlano = planoReduzido() && tamanho === "original" ? "w1280" : tamanho;
+  return normalized.replace(/(\/t\/p\/)(original|w\d+)\//i, `$1${alvoDoPlano}/`);
 }
