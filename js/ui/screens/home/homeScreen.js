@@ -7147,6 +7147,17 @@ export const HomeScreen = {
       return;
     }
     const pendingCleanup = this.homeTrailerLayerCleanupTimers?.get?.(container);
+    // Home mounts an empty trailer layer for every poster. Leaving Home used
+    // to traverse and clear all of those no-op nodes synchronously, which is
+    // avoidable on constrained TV runtimes. Keep handling active, populated,
+    // and scheduled layers so trailer teardown semantics remain unchanged.
+    if (
+      !container.classList.contains("is-active") &&
+      !container.firstElementChild &&
+      !pendingCleanup
+    ) {
+      return;
+    }
     if (pendingCleanup) {
       if (pendingCleanup.idleId) {
         globalThis.cancelIdleCallback?.(pendingCleanup.idleId);

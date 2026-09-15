@@ -259,6 +259,25 @@ export const CatalogSeeAllScreen = {
     this.watchedTitleIds = buildWatchedTitleIdSet(projectedItems);
   },
 
+  updateRenderedWatchedBadges() {
+    const cards = this.container?.querySelectorAll(".seeall-card.focusable") || [];
+    cards.forEach((card) => {
+      const itemIndex = Number(card.dataset?.itemIndex);
+      const item = Number.isInteger(itemIndex) ? this.items?.[itemIndex] : null;
+      const posterWrap = card.querySelector(".seeall-card-poster-wrap");
+      if (!item || !posterWrap) {
+        return;
+      }
+      const watched = isTitleItemWatched(item, this.watchedTitleIds);
+      const badge = posterWrap.querySelector(".title-watched-badge");
+      if (watched && !badge) {
+        posterWrap.insertAdjacentHTML("beforeend", renderTitleWatchedBadge());
+      } else if (!watched && badge) {
+        badge.remove();
+      }
+    });
+  },
+
   async mount(params = {}, navigationContext = {}) {
     this.container = document.getElementById("catalogSeeAll");
     ScreenUtils.show(this.container);
@@ -334,6 +353,8 @@ export const CatalogSeeAllScreen = {
       // already focused while the local watched snapshot was being read.
       if (!this.container?.querySelector(".seeall-card.focusable.focused")) {
         this.render();
+      } else {
+        this.updateRenderedWatchedBadges();
       }
     })().catch((error) => {
       if (routeLoadToken === this.loadToken && Router.getCurrent() === "catalogSeeAll") {
@@ -417,7 +438,10 @@ export const CatalogSeeAllScreen = {
     this.preserveViewportOnNextRender = Boolean(preserveViewport && addedCount > 0);
     void this.refreshWatchedTitleIds(this.items).then(() => {
       if (token === this.loadToken && Router.getCurrent() === "catalogSeeAll") {
-        this.render();
+        // Watched state is cosmetic. Updating only the badge avoids rebuilding
+        // the whole grid, which would otherwise drop the focused card and
+        // restore the viewport at the top while the page is still settling.
+        this.updateRenderedWatchedBadges();
       }
     });
     this.render();
@@ -697,7 +721,9 @@ export const CatalogSeeAllScreen = {
           this.render();
         },
         onChanged: () => {
-          void this.refreshWatchedTitleIds(this.items);
+          void this.refreshWatchedTitleIds(this.items).then(() => {
+            this.updateRenderedWatchedBadges();
+          });
         }
       });
     }

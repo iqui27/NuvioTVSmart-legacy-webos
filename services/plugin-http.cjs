@@ -46,6 +46,10 @@ var MAX_REDIRECTS = 20;
 // Android gives each provider request a 60-second budget; the caller still
 // enforces the separate 120-second global plugin-search deadline.
 var DEFAULT_TIMEOUT_MS = 60000;
+// Match Android's OkHttp connect timeout while leaving the existing 60-second
+// request/read timeout unchanged. This is the per-address budget used when a
+// DNS route fails before a response is received.
+var CONNECT_ATTEMPT_TIMEOUT_MS = 30000;
 var PLUGIN_PROTOCOL_VERSION = 1;
 var MAX_ACTIVE_REQUESTS = 10;
 var MAX_REQUESTS_PER_SCRAPER_PER_MINUTE = 60;
@@ -220,14 +224,14 @@ function lookupHost(parsed, callback) {
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
   if (netModule.isIP(host)) {
-    callback(null, host);
+    callback(null, [host]);
     return;
   }
   var done = false;
-  function finish(error, address) {
+  function finish(error, addresses) {
     if (done) return;
     done = true;
-    callback(error || null, address || null);
+    callback(error || null, addresses || null);
   }
   try {
     dnsModule.lookup(host, { all: true, verbatim: true }, function (error, addresses) {
@@ -251,12 +255,17 @@ function lookupHost(parsed, callback) {
         finish(new Error("DNS lookup returned no address"));
         return;
       }
-      finish(null, String(values[0].address || ""));
+      finish(
+        null,
+        values.map(function (entry) {
+          return String(entry.address || "");
+        })
+      );
     });
   } catch (_) {
     try {
       dnsModule.lookup(host, function (error, address) {
-        finish(error || null, address);
+        finish(error || null, address ? [String(address)] : null);
       });
     } catch (error) {
       finish(error);
@@ -331,7 +340,11 @@ function performFetch(payload, callback, redirects, trace) {
   var parsed = parseUrl(validation.url);
   requestTrace = traceRequestDetails(payload, parsed, redirects);
   emitTrace(trace, "fetch begin", requestTrace);
-  function continueWithResolvedHost(lookupError, address) {
+  // Keep one budget across Smart's address attempts. The per-address connect
+  // budget below matches Android's 30-second connect timeout; resetting this
+  // outer budget would exceed the existing 60-second PluginService contract.
+  var requestDeadline = Date.now() + validation.timeoutMs;
+  function continueWithResolvedHost(lookupError, addresses) {
     if (lookupError) {
       emitTrace(
         trace,
@@ -341,10 +354,31 @@ function performFetch(payload, callback, redirects, trace) {
       finish(lookupError);
       return;
     }
+    var resolvedAddresses = (Array.isArray(addresses) ? addresses : [addresses])
+      .map(function (address) {
+        return String(address || "");
+      })
+      .filter(function (address, index, list) {
+        return address && list.indexOf(address) === index;
+      });
+    if (!resolvedAddresses.length) {
+      var missingAddressError = new Error("DNS lookup returned no address");
+      emitTrace(
+        trace,
+        "fetch dns failed",
+        Object.assign({}, requestTrace, { error: traceError(missingAddressError) })
+      );
+      finish(missingAddressError);
+      return;
+    }
+    var address = resolvedAddresses[0];
     emitTrace(
       trace,
       "fetch dns success",
-      Object.assign({}, requestTrace, { address: address || null })
+      Object.assign({}, requestTrace, {
+        address: address || null,
+        addressCount: resolvedAddresses.length
+      })
     );
     var transport;
     try {
@@ -396,6 +430,60 @@ function performFetch(payload, callback, redirects, trace) {
     ) {
       requestHeaders["Content-Length"] = String(Buffer.byteLength(validation.body, "utf8"));
     }
+    function isRetryableAddressError(error) {
+      return (
+        [
+          "ECONNABORTED",
+          "ECONNREFUSED",
+          "ECONNRESET",
+          "EHOSTUNREACH",
+          "ENETUNREACH",
+          "ETIMEDOUT",
+          "EPIPE"
+        ].indexOf(String((error && error.code) || "")) >= 0
+      );
+    }
+    var responseStarted = false;
+    var attemptComplete = false;
+    var request = null;
+    var connectTimer = null;
+    function clearConnectTimer() {
+      if (connectTimer !== null) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+    }
+    function settleAttempt() {
+      if (attemptComplete) return false;
+      attemptComplete = true;
+      clearConnectTimer();
+      return true;
+    }
+    function failTransport(error) {
+      if (attemptComplete) return;
+      var canTryNextAddress =
+        !responseStarted &&
+        isRetryableAddressError(error) &&
+        resolvedAddresses.length > 1 &&
+        requestDeadline > Date.now();
+      if (canTryNextAddress) {
+        settleAttempt();
+        emitTrace(
+          trace,
+          "fetch address fallback",
+          Object.assign({}, requestTrace, {
+            address: address,
+            nextAddress: resolvedAddresses[1],
+            remainingMs: Math.max(0, requestDeadline - Date.now()),
+            error: traceError(error)
+          })
+        );
+        continueWithResolvedHost(null, resolvedAddresses.slice(1));
+        return;
+      }
+      settleAttempt();
+      if (!redirected) finish(error);
+    }
     var requestOptions = {
       protocol: parsed.protocol,
       // Keep the original Host/SNI while using the Android-compatible
@@ -408,10 +496,16 @@ function performFetch(payload, callback, redirects, trace) {
       servername: String(parsed.hostname || "").replace(/^\[|\]$/g, ""),
       agent: false
     };
-    var request;
+    var requestSent = false;
     try {
-      emitTrace(trace, "fetch transport request begin", requestTrace);
+      emitTrace(
+        trace,
+        "fetch transport request begin",
+        Object.assign({}, requestTrace, { address: address })
+      );
       request = transport.request(requestOptions, function (response) {
+        responseStarted = true;
+        clearConnectTimer();
         emitTrace(
           trace,
           "fetch response begin",
@@ -423,6 +517,7 @@ function performFetch(payload, callback, redirects, trace) {
           })
         );
         var responseDone = once(function (error, result) {
+          settleAttempt();
           emitTrace(
             trace,
             error ? "fetch response failed" : "fetch response ended",
@@ -470,6 +565,7 @@ function performFetch(payload, callback, redirects, trace) {
             return;
           }
           redirected = true;
+          settleAttempt();
           var redirectedPayload = Object.assign({}, payload, { url: nextUrl });
           var previousUrl = parseUrl(validation.url);
           var redirectedUrl = parseUrl(nextUrl);
@@ -605,23 +701,52 @@ function performFetch(payload, callback, redirects, trace) {
           });
         });
       });
-      emitTrace(trace, "fetch transport request created", requestTrace);
+      emitTrace(
+        trace,
+        "fetch transport request created",
+        Object.assign({}, requestTrace, { address: address })
+      );
+      var connectTimeoutMs = Math.min(
+        CONNECT_ATTEMPT_TIMEOUT_MS,
+        Math.max(1, requestDeadline - Date.now())
+      );
+      connectTimer = setTimeout(function () {
+        if (attemptComplete || responseStarted) return;
+        var timeoutError = new Error("Plugin provider connection timed out");
+        timeoutError.code = "ETIMEDOUT";
+        emitTrace(
+          trace,
+          "fetch transport connect timeout",
+          Object.assign({}, requestTrace, {
+            address: address,
+            timeoutMs: connectTimeoutMs
+          })
+        );
+        failTransport(timeoutError);
+        if (request && typeof request.destroy === "function") request.destroy(timeoutError);
+      }, connectTimeoutMs);
       request.setTimeout(validation.timeoutMs, function () {
+        if (attemptComplete) return;
         var timeoutError = new Error("Plugin provider request timed out");
+        timeoutError.code = "ETIMEDOUT";
         emitTrace(
           trace,
           "fetch transport timeout",
-          Object.assign({}, requestTrace, { timeoutMs: validation.timeoutMs })
+          Object.assign({}, requestTrace, {
+            address: address,
+            timeoutMs: validation.timeoutMs
+          })
         );
+        failTransport(timeoutError);
         request.destroy(timeoutError);
       });
       request.on("error", function (error) {
         emitTrace(
           trace,
           "fetch transport error",
-          Object.assign({}, requestTrace, { error: traceError(error) })
+          Object.assign({}, requestTrace, { address: address, error: traceError(error) })
         );
-        if (!redirected) finish(error);
+        failTransport(error);
       });
       if (validation.requestId && typeof finish.registerRequest === "function") {
         finish.registerRequest(validation.requestId, request);
@@ -629,14 +754,24 @@ function performFetch(payload, callback, redirects, trace) {
       if (["POST", "PUT"].indexOf(validation.method) >= 0 && validation.body)
         request.write(validation.body);
       request.end();
-      emitTrace(trace, "fetch transport request sent", requestTrace);
+      requestSent = true;
+      emitTrace(
+        trace,
+        "fetch transport request sent",
+        Object.assign({}, requestTrace, { address: address })
+      );
     } catch (error) {
       emitTrace(
         trace,
         "fetch transport request threw",
-        Object.assign({}, requestTrace, { error: traceError(error) })
+        Object.assign({}, requestTrace, { address: address, error: traceError(error) })
       );
-      finish(error);
+      if (requestSent) {
+        settleAttempt();
+        finish(error);
+      } else {
+        failTransport(error);
+      }
     }
   }
   emitTrace(trace, "fetch dns begin", requestTrace);

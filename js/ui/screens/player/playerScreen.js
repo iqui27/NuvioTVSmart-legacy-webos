@@ -10555,10 +10555,8 @@ export const PlayerScreen = {
     const verticalOffsetVh = getSubtitleVerticalOffsetVh(style.verticalOffset);
     const residualOffsetVh = getSubtitleVerticalResidualOffsetVh(style.verticalOffset);
     const subtitleTextOpacity = normalizeSubtitleTextOpacity(style.textOpacity);
-    const subtitleColor = subtitleTextColorWithOpacity(
-      style.textColor || "#FFFFFF",
-      subtitleTextOpacity
-    );
+    const subtitleTextColor = String(style.textColor || "#FFFFFF");
+    const subtitleColor = subtitleTextColorWithOpacity(subtitleTextColor, subtitleTextOpacity);
     const outlineColor = String(style.outlineColor || "#000000");
     const subtitleFontWeight = style.bold ? "800" : Environment.isWebOS() ? "400" : "500";
     const boldShadow = style.bold
@@ -10577,6 +10575,12 @@ export const PlayerScreen = {
       PlayerController.setAvPlayExternalSubtitleDelay?.(this.subtitleDelayMs);
     }
     uiRoot.style.setProperty("--player-subtitle-color", subtitleColor);
+    // HTML subtitles need the alpha composited over the complete text run.
+    // Applying it in rgba() makes overlapping Arabic glyphs accumulate alpha
+    // on affected TV browser engines; native cues keep the Android-equivalent
+    // rgba color below.
+    uiRoot.style.setProperty("--player-subtitle-text-color", subtitleTextColor);
+    uiRoot.style.setProperty("--player-subtitle-text-opacity", String(subtitleTextOpacity / 100));
     uiRoot.style.setProperty(
       "--player-subtitle-background",
       String(style.backgroundColor || "#00000000")
@@ -17473,7 +17477,16 @@ export const PlayerScreen = {
             }
             const lineNode = document.createElement("span");
             lineNode.className = "player-html-subtitle-line";
-            lineNode.textContent = normalizeWebOsHtmlSubtitleText(cleanLine);
+            const shadowNode = document.createElement("span");
+            shadowNode.className = "player-html-subtitle-shadow";
+            shadowNode.setAttribute("aria-hidden", "true");
+            const textNode = document.createElement("span");
+            textNode.className = "player-html-subtitle-text";
+            const normalizedLine = normalizeWebOsHtmlSubtitleText(cleanLine);
+            shadowNode.textContent = normalizedLine;
+            textNode.textContent = normalizedLine;
+            lineNode.appendChild(shadowNode);
+            lineNode.appendChild(textNode);
             cueNode.appendChild(lineNode);
           })
       );

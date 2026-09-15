@@ -12569,6 +12569,8 @@ html.legacy-webos .debug-console-log-frame {
   --player-text-secondary: var(--text-secondary);
   --player-text-tertiary: var(--text-tertiary);
   --player-subtitle-color: #ffffff;
+  --player-subtitle-text-color: #ffffff;
+  --player-subtitle-text-opacity: 1;
   --player-subtitle-background: transparent;
   --player-subtitle-outline-color: #000000;
   --player-subtitle-font-size: 120%;
@@ -12607,7 +12609,7 @@ html.legacy-webos .debug-console-log-frame {
   left: 0;
   inset: 0;
   z-index: 12;
-  color: var(--player-subtitle-color);
+  color: var(--player-subtitle-text-color);
   font-size: var(--player-html-subtitle-font-size);
   font-weight: var(--player-subtitle-font-weight);
   line-height: 1.28;
@@ -12733,12 +12735,33 @@ html.legacy-webos .debug-console-log-frame {
 }
 
 .player-html-subtitle-line {
+  position: relative;
   display: inline-block;
   max-width: min(86vw, 1500px);
   padding: 0.06em 0.28em;
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--player-subtitle-background);
+}
+
+/* Keep the edge layer separate so text alpha does not also dim Android's
+   independent outline/background colors. */
+.player-html-subtitle-shadow {
+  position: absolute;
+  inset: 0.06em 0.28em;
+  z-index: 0;
+  color: transparent;
+  pointer-events: none;
+  text-shadow: var(--player-subtitle-shadow);
+}
+
+/* Composite the complete fill run before applying alpha. This avoids the
+   bright seams produced when Chromium blends overlapping Arabic glyphs twice. */
+.player-html-subtitle-text {
+  position: relative;
+  z-index: 1;
+  opacity: var(--player-subtitle-text-opacity);
+  text-shadow: none;
 }
 
 .settings-shell[data-settings-style="classic"] .settings-workspace {

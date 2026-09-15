@@ -84,7 +84,7 @@ export const TizenPlaybackProxy = {
 
     let service;
     try {
-      service = await TizenEngineFsService.ensureStarted();
+      service = await TizenEngineFsService.ensureStarted({ purpose: "playback-proxy" });
     } catch (error) {
       return {
         status: "unavailable",
