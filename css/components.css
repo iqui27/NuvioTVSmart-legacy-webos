@@ -13046,10 +13046,12 @@ html.legacy-webos .debug-console-log-frame {
 }
 
 .player-html-subtitle-line {
+  --player-html-subtitle-padding-block: 0.06em;
+  --player-html-subtitle-padding-inline: 0.28em;
   position: relative;
   display: inline-block;
   max-width: min(86vw, 1500px);
-  padding: 0.06em 0.28em;
+  padding: var(--player-html-subtitle-padding-block) var(--player-html-subtitle-padding-inline);
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--player-subtitle-background);
@@ -13059,7 +13061,7 @@ html.legacy-webos .debug-console-log-frame {
    independent outline/background colors. */
 .player-html-subtitle-shadow {
   position: absolute;
-  inset: 0.06em 0.28em;
+  inset: var(--player-html-subtitle-padding-block) var(--player-html-subtitle-padding-inline);
   z-index: 0;
   color: transparent;
   pointer-events: none;
@@ -13190,7 +13192,8 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 }
 
 .player-platform-webos .player-html-subtitle-line {
-  padding: 0 0.08em;
+  --player-html-subtitle-padding-block: 0;
+  --player-html-subtitle-padding-inline: 0.08em;
   background-color: transparent !important;
 }
 

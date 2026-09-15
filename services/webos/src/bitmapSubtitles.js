@@ -77,6 +77,7 @@ var ID_CUE_TRACK_POSITIONS = 0xb7;
 var ID_CUE_TRACK = 0xf7;
 var ID_CUE_CLUSTER_POSITION = 0xf1;
 var ID_CUE_RELATIVE_POSITION = 0xf0;
+var ID_CUE_DURATION = 0xb2;
 var ID_CLUSTER = 0x1f43b675;
 var ID_CLUSTER_TIMECODE = 0xe7;
 var ID_SIMPLE_BLOCK = 0xa3;
@@ -472,13 +473,15 @@ function parseCues(data, timecodeScaleNs) {
         data,
         findChild(data, position, ID_CUE_RELATIVE_POSITION)
       );
+      var durationTicks = readUnsigned(data, findChild(data, position, ID_CUE_DURATION));
       if (track == null || clusterPosition == null) return;
       cues.push({
         timeMs: timeMs,
         timeTicks: cueTicks,
         track: track,
         clusterPosition: clusterPosition,
-        relativePosition: relativePosition
+        relativePosition: relativePosition,
+        durationTicks: durationTicks
       });
     });
   });
@@ -715,6 +718,19 @@ function getTrackCues(metadata, trackNumber) {
   });
 }
 
+function selectTextSubtitleCues(metadata, trackNumber, startMs, endMs) {
+  var trackCues = getTrackCues(metadata, trackNumber);
+  var selected = trackCues.filter(function (cue) {
+    return cue.timeMs >= startMs && cue.timeMs <= endMs;
+  });
+  var previous = null;
+  trackCues.forEach(function (cue) {
+    if (cue.timeMs < startMs && (!previous || cue.timeMs > previous.timeMs)) previous = cue;
+  });
+  if (previous && startMs - previous.timeMs <= 30000) selected.unshift(previous);
+  return selected;
+}
+
 function cuePositionKey(cue) {
   return cue.clusterPosition + ":" + cue.relativePosition;
 }
@@ -814,10 +830,12 @@ function findCuedBlockElement(data, track) {
 
 function parseCuedBlock(data, element, track, cue, timecodeScaleNs) {
   var block = null;
+  var blockDurationTicks = 0;
   if (element.id === ID_SIMPLE_BLOCK) {
     block = element;
   } else if (element.id === ID_BLOCK_GROUP) {
     block = findChild(data, element, ID_BLOCK);
+    blockDurationTicks = readUnsigned(data, findChild(data, element, ID_BLOCK_DURATION)) || 0;
   }
   if (!block) {
     throw invalidCuePosition("CueRelativePosition did not reference a subtitle block", {
@@ -845,9 +863,14 @@ function parseCuedBlock(data, element, track, cue, timecodeScaleNs) {
     throw bitmapSubtitleError("BLOCK_TOO_LARGE", "Bitmap subtitle block exceeded its safety limit");
   }
   var timestampNs = cue.timeTicks * timecodeScaleNs;
+  var durationTicks = blockDurationTicks || Number(cue.durationTicks || 0);
   return {
     timestampMs: cue.timeMs,
     timestampNs: timestampNs,
+    durationMs:
+      Number.isFinite(durationTicks) && durationTicks > 0
+        ? (durationTicks * timecodeScaleNs) / 1000000
+        : 0,
     payload: payload,
     blockOrder: cue.relativePosition,
     clusterPosition: cue.clusterPosition
@@ -1916,8 +1939,8 @@ async function buildTextWindow(
   var startMs = Math.max(0, Math.floor(startSeconds * 1000));
   var endMs = Math.max(startMs + 1000, Math.floor(endSeconds * 1000));
   var resolvedTrackNumber = track.number;
-  var positions = selectClusterPositions(metadata, resolvedTrackNumber, startMs, endMs);
-  var loadedFrames = await loadClusterFrames(mediaUrl, metadata, track, positions, requestContext);
+  var cues = selectTextSubtitleCues(metadata, resolvedTrackNumber, startMs, endMs);
+  var loadedFrames = await loadCueFrames(mediaUrl, metadata, track, cues, requestContext);
   var frames = selectTextFramesInRange(loadedFrames, startMs, endMs);
   var payload = buildTextSubtitleWindowPayload(track, frames, startMs, endMs, {
     includeAssBody: includeAssBody

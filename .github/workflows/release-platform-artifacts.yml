@@ -339,14 +339,14 @@ jobs:
           fi
 
           MAIN_ARCHES="$(lipo -archs "$MAIN_BINARY")"
-          if [[ " $MAIN_ARCHES " != *" $EXPECTED_ARCH "*" ]]; then
+          if [[ " $MAIN_ARCHES " != *" $EXPECTED_ARCH "* ]]; then
             echo "Unexpected macOS executable architecture: $MAIN_ARCHES (expected $EXPECTED_ARCH)" >&2
             exit 1
           fi
 
           while IFS= read -r -d '' NATIVE_MODULE; do
             MODULE_ARCHES="$(lipo -archs "$NATIVE_MODULE" 2>/dev/null || true)"
-            if [[ " $MODULE_ARCHES " != *" $EXPECTED_ARCH "*" ]]; then
+            if [[ " $MODULE_ARCHES " != *" $EXPECTED_ARCH "* ]]; then
               echo "Native module is incompatible with $EXPECTED_ARCH: $NATIVE_MODULE ($MODULE_ARCHES)" >&2
               exit 1
             fi
