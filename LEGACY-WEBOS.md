@@ -115,13 +115,36 @@ the number did not change with the images already in the HTTP cache (3983ms vs
 3817ms). Roughly 41ms per poster. With the rows warm, the same traversal produced
 **zero** long frames.
 
-`img.decode()` does not exist (Chrome 64). `createImageBitmap` exists but
+`img.decode()` does not exist (Chrome 64), and that holds across **every**
+webOS release this fork targets — not just this one. The package that supplies
+`libcbe.so` names the engine outright in the firmware symbol dumps
+([dev-toolbox-cli](https://github.com/webosbrew/dev-toolbox-cli), `common/data`):
+
+```
+webOS 3.4.0, 3.9.2   chromium38
+webOS 4.4.2, 4.10.0  chromium53
+webOS 5.3.1          webruntime
+```
+
+Worth stating plainly because a comment in `homeScreen.js` claimed this set was
+Chromium 68 and that `decode()` therefore worked here. It does not, anywhere
+below webOS 5. `createImageBitmap` exists but
 `ImageBitmapOptions.resizeWidth` only landed in Chrome 54, and drawing the result
 still happens on the main thread. `decoding="async"`, `loading` and
 `fetchpriority` attributes are all inert here.
 
 At `devicePixelRatio` 2 a 221 CSS-px poster slot needs 442 device pixels, so a
 TMDB `w500` image is appropriately sized — do not "optimise" it down to `w342`.
+
+> **This paragraph is contradicted by the code and the conflict is not
+> resolved.** `homeScreen.js` today steps catalogue posters down to `w342`, with
+> its own on-device note claiming the poster draws 221×339 and that `w500` is
+> 4.5× the pixels needed — arithmetic that only holds at `devicePixelRatio` 1.
+> One of the two measurements is stale and I do not know which. Whoever next has
+> the C9 in front of them: read `devicePixelRatio` and the poster's
+> `getBoundingClientRect()` on the home screen, and delete the side that loses.
+> Until then, treat both numbers as suspect rather than picking the convenient
+> one.
 
 ## Node 0.12 in the JS service
 
@@ -163,3 +186,24 @@ suffix — a fork label has to live somewhere else.
   "API rate limit exceeded" for session registration and profile sync, and the
   home screen rendered with zero rows — which looks exactly like a regression in
   your own code. Prefer `Page.reload` over relaunching.
+
+## Firmware symbol dumps answer "will this load" without the TV
+
+webosbrew's [dev-toolbox-cli](https://github.com/webosbrew/dev-toolbox-cli)
+carries symbol dumps of 14 retail firmwares under `common/data`, keyed by OTA id
+with the webOS release in `info.json`. `webosbrew-ipk-verify` checks an `.ipk`
+against them and reports every symbol the package needs that the TV does not
+export.
+
+Two things it is good for beyond native apps. It names the web engine per
+release, as above. And it settles "does this old TV have library X" without
+owning one — `libSDL2`, `libAcbAPI`, `libcurl.so.5`, glibc version, all of it is
+right there.
+
+It is how the [native sibling](https://github.com/iqui27/nuvio-native-legacy)
+found that exactly **one** symbol stood between its ARM binary and a 2016 TV.
+
+The limits are stated by the tool's own authors and are worth repeating: the
+bundled dumps stop at 2022 models, and **symbol presence is not function** —
+they say they have already been bitten by treating it as proof. A clean verify
+is a precondition for testing on a device, never a replacement for it.

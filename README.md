@@ -4,12 +4,26 @@
 > third party, with one purpose: to keep Nuvio running on **LG TVs with webOS 4.x**
 > (2018 and 2019 sets — C9, C8, B9, B8).
 >
-> **webOS 3.x and older are NOT supported**, and the app refuses to start there on
-> purpose: the floor in `scripts/compatibilityPolicy.mjs` is webOS 4.0.0 /
-> Chromium 53, while webOS 3.x ships Chromium 38 — a different engine that this
-> build's output does not even parse. Supporting it would mean retargeting the
-> bundle and widening the polyfill and CSS fallback sets, and I have no webOS 3.x
-> set to verify against. If you own one and want to test, open an issue.
+> **webOS 3.x has its own build now.** The main line still refuses to start
+> there on purpose — the floor in `scripts/compatibilityPolicy.mjs` is webOS
+> 4.0.0 / Chromium 53, and this build's output does not parse on the Chromium 38
+> that webOS 3.x ships. The `legacy-tv-webos3` branch retargets it: esbuild
+> bundles at 53, the lowest target it accepts, and a Babel pass afterwards takes
+> the bundle to Chromium 38, with the polyfill and CSS fallback sets widened to
+> match. Its builds go out as prereleases tagged `webos3-exp.*`.
+>
+> Still no webOS 3.x set on this bench — every one of those builds rests on
+> volunteers testing them, in
+> [issue #1](https://github.com/iqui27/NuvioTVSmart-legacy-webos/issues/1). If
+> you own one, that thread is the place.
+>
+> There is also a **native** app for these TVs, written in C against SDL2 rather
+> than running in the browser:
+> [iqui27/nuvio-native-legacy](https://github.com/iqui27/nuvio-native-legacy).
+> It is measured on webOS 4, reported working on 5+, and has an experimental
+> webOS 3 build whose compatibility was checked against retail firmware symbol
+> dumps. For a webOS 3 TV this web fork is still the safer choice, since it is
+> the one people have actually run.
 >
 > Upstream Nuvio TV **0.3.42 requires webOS 5.0.0+ and Chromium 68+**, and its
 > boot guard stops the app before it starts on anything older. On an OLED65C9
@@ -18,7 +32,7 @@
 > Node 0.12 service runtime actually need.
 >
 > - **Original project:** [NuvioMedia/NuvioTVSmart](https://github.com/NuvioMedia/NuvioTVSmart) — please star and support the upstream authors.
-> - **Base version of this fork:** upstream `0.3.42`.
+> - **Base version of this fork:** upstream `1.1.2` (started at `0.3.42`).
 > - **What was changed and when:** [CHANGES.md](./CHANGES.md) (required by GPLv3 §5a).
 > - **Platform notes measured on real hardware:** [LEGACY-WEBOS.md](./LEGACY-WEBOS.md).
 > - **Issues:** [iqui27/NuvioTVSmart-legacy-webos/issues](https://github.com/iqui27/NuvioTVSmart-legacy-webos/issues)

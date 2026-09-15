@@ -11611,10 +11611,23 @@ export const HomeScreen = {
     // perfil de CPU ja mostrava o thread principal ocioso com quadros de 200ms+,
     // que e a assinatura de trabalho fora do JS.
     //
-    // `decode()` (Chromium 64+, e esta TV e 68) faz esse trabalho fora do quadro
-    // e so entao a imagem entra pintada. Falha silenciosa de proposito: se a
-    // promessa rejeitar (imagem trocada, erro de rede) o `src` ja esta no
-    // elemento e o caminho normal de load/onerror continua valendo.
+    // `decode()` faria esse trabalho fora do quadro, e so entao a imagem
+    // entraria pintada. Falha silenciosa de proposito: se a promessa rejeitar
+    // (imagem trocada, erro de rede) o `src` ja esta no elemento e o caminho
+    // normal de load/onerror continua valendo.
+    //
+    // CORRECAO. Este comentario dizia "(Chromium 64+, e esta TV e 68)" e isso
+    // era falso. `decode()` e Chromium 64+, mas o pacote que fornece o
+    // libcbe.so do firmware diz a versao sem margem para duvida:
+    //
+    //   webOS 3.4 e 3.9  ->  chromium38
+    //   webOS 4.4 e 4.10 ->  chromium53
+    //
+    // Ou seja, o ramo do decode() NAO RODA EM NENHUMA das TVs que este fork
+    // atende. O que faz o trabalho e a outra metade: no maximo
+    // HOME_LAZY_HYDRATION_MAX_PER_FRAME atribuicoes por quadro, e hidratar so
+    // quando a rolagem assenta. A chamada fica porque e barata, correta onde
+    // existir, e o guard ja e o certo -- o que estava errado era a explicacao.
     const assign = (entry) => {
       const { image, src } = entry;
       if (!(image instanceof HTMLImageElement) || !image.isConnected) {
