@@ -1,29 +1,35 @@
 import { httpRequest } from "../../../core/network/httpClient.js";
 import { recordSyncFailure } from "../../../core/sync/syncBackoffPolicy.js";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "../../../config.js";
+import { trackSessionRequest } from "../../../core/auth/sessionLifecycle.js";
+import { ServerConfigurationStore } from "../../local/serverConfigurationStore.js";
 
 function trackSyncRequest(request) {
-  return Promise.resolve(request).catch((error) => {
+  return trackSessionRequest(request).catch((error) => {
     recordSyncFailure(error);
     throw error;
   });
 }
 
 function buildHeaders(extra = {}, useSession = true) {
+  const { publishableKey } = ServerConfigurationStore.getActive();
   const headers = {
-    apikey: SUPABASE_ANON_KEY,
+    apikey: publishableKey,
     ...extra
   };
   if (!useSession && headers.Authorization == null) {
-    headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
+    headers.Authorization = `Bearer ${publishableKey}`;
   }
   return headers;
+}
+
+function backendUrl() {
+  return ServerConfigurationStore.getActive().backendUrl;
 }
 
 export const SupabaseApi = {
   rpc(functionName, body = {}, useSession = true) {
     return trackSyncRequest(
-      httpRequest(`${SUPABASE_URL}/rest/v1/rpc/${functionName}`, {
+      httpRequest(`${backendUrl()}/rest/v1/rpc/${functionName}`, {
         method: "POST",
         headers: buildHeaders({ "Content-Type": "application/json" }, useSession),
         includeSessionAuth: useSession,
@@ -35,7 +41,7 @@ export const SupabaseApi = {
   select(table, query = "", useSession = true) {
     const suffix = query ? `?${query}` : "";
     return trackSyncRequest(
-      httpRequest(`${SUPABASE_URL}/rest/v1/${table}${suffix}`, {
+      httpRequest(`${backendUrl()}/rest/v1/${table}${suffix}`, {
         method: "GET",
         headers: buildHeaders({}, useSession),
         includeSessionAuth: useSession
@@ -46,7 +52,7 @@ export const SupabaseApi = {
   upsert(table, rows, onConflict = null, useSession = true) {
     const query = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : "";
     return trackSyncRequest(
-      httpRequest(`${SUPABASE_URL}/rest/v1/${table}${query}`, {
+      httpRequest(`${backendUrl()}/rest/v1/${table}${query}`, {
         method: "POST",
         headers: buildHeaders(
           {
@@ -63,7 +69,7 @@ export const SupabaseApi = {
 
   delete(table, query, useSession = true) {
     return trackSyncRequest(
-      httpRequest(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+      httpRequest(`${backendUrl()}/rest/v1/${table}?${query}`, {
         method: "DELETE",
         headers: buildHeaders({ Prefer: "return=representation" }, useSession),
         includeSessionAuth: useSession
@@ -84,7 +90,7 @@ export const SupabaseApi = {
     }
     return trackSyncRequest(
       httpRequest(
-        `${SUPABASE_URL}/storage/v1/object/authenticated/${normalizedBucket}/${normalizedPath}`,
+        `${backendUrl()}/storage/v1/object/authenticated/${normalizedBucket}/${normalizedPath}`,
         {
           method: "GET",
           headers: buildHeaders({}, useSession),

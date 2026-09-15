@@ -16,6 +16,106 @@ function warn() {
   console.warn.apply(console, args);
 }
 
+function patchTizenMediaRuntimeCode(code, filename) {
+  var source = String(code || "");
+  if (!/media-http\.cjs$/i.test(String(filename || ""))) {
+    return source;
+  }
+
+  // The app-side proxy URL builder encodes each header value once before
+  // placing it in the route. The vendored EngineFS HLS rewriter serializes
+  // those propagated headers again for every child URL, so normalize one
+  // existing URI-encoding layer before serializing them or Referer/Origin
+  // values accumulate an extra layer on cross-host requests.
+  // The same runtime also concatenates url.parse(...).search while rewriting
+  // absolute media URLs. Node's legacy parser returns null for a URL without
+  // a query string, so that concatenation produces a literal `null` suffix
+  // (for example, `segment.tsnull`) and sends malformed HLS segment URLs.
+  if (
+    source.indexOf("function encodeProxyHeaderString(") >= 0 &&
+    source.indexOf("decodeURIComponent(parsed[1])") >= 0 &&
+    source.indexOf('lineUrl.pathname+(lineUrl.search||"")') >= 0 &&
+    source.indexOf('urlJoin([virtualRoot,lineUrl.pathname])+(lineUrl.search||"")') >= 0
+  ) {
+    return source;
+  }
+
+  var helperTarget =
+    'function parseHeaderString(headerString){var headerArray=headerString.split(":");return[headerArray.shift(),headerArray.join(":")]}function urlJoin(segments){';
+  var childTarget = '"/proxy/"+querystring.stringify(newOpts)+lineUrl.pathname+lineUrl.search';
+  var sameHostTarget = "urlJoin([virtualRoot,lineUrl.pathname])+lineUrl.search";
+  var rootTarget =
+    '"/"+querystring.stringify(opts);result.body.pipe(getParserStream(virtualRoot,dest))';
+  var targetCount = [helperTarget, childTarget, sameHostTarget, rootTarget].filter(
+    function (target) {
+      return source.indexOf(target) >= 0;
+    }
+  ).length;
+
+  // A future vendored runtime may already contain an equivalent fix. Fail
+  // fast only if a known vulnerable layout was changed partially.
+  if (targetCount === 0) {
+    return source;
+  }
+  if (targetCount !== 4) {
+    throw new Error("Unsupported Tizen media runtime proxy layout: " + filename);
+  }
+
+  var helperReplacement =
+    'function parseHeaderString(headerString){var headerArray=headerString.split(":");return[headerArray.shift(),headerArray.join(":")]}function encodeProxyHeaderString(headerString){var parsed=parseHeaderString(headerString);try{parsed[1]=decodeURIComponent(parsed[1])}catch(_){ }return parsed[0]+":"+encodeURIComponent(parsed[1])}function stringifyProxyOptions(options,cfgOpts){var serialized=Object.assign({},options);serialized[cfgOpts.DestinationHeader]=ensureArray(serialized[cfgOpts.DestinationHeader]).map(encodeProxyHeaderString);return querystring.stringify(serialized)}function urlJoin(segments){';
+  source = source.replace(helperTarget, helperReplacement);
+  source = source.replace(
+    childTarget,
+    '"/proxy/"+stringifyProxyOptions(newOpts,cfgOpts)+lineUrl.pathname+(lineUrl.search||"")'
+  );
+  source = source.replace(
+    sameHostTarget,
+    'urlJoin([virtualRoot,lineUrl.pathname])+(lineUrl.search||"")'
+  );
+  source = source.replace(
+    rootTarget,
+    '"/"+stringifyProxyOptions(opts,cfgOpts);result.body.pipe(getParserStream(virtualRoot,dest))'
+  );
+
+  return source;
+}
+
+function loadTizenMediaRuntime() {
+  // Tizen's Web Service runtime exposes CommonJS, but older firmware builds
+  // may not expose Node's Module loader helpers. Keep the original require()
+  // path as a compatibility fallback for those runtimes.
+  var runtimeFs;
+  var runtimePath;
+  var RuntimeModule;
+  try {
+    runtimeFs = require("fs");
+    runtimePath = require("path");
+    RuntimeModule = require("module");
+  } catch (_) {
+    return require("./runtime/media-http.cjs");
+  }
+
+  if (
+    !runtimeFs ||
+    typeof runtimeFs.readFileSync !== "function" ||
+    !runtimePath ||
+    typeof runtimePath.join !== "function" ||
+    !RuntimeModule ||
+    typeof RuntimeModule !== "function" ||
+    typeof RuntimeModule._nodeModulePaths !== "function"
+  ) {
+    return require("./runtime/media-http.cjs");
+  }
+
+  var filename = runtimePath.join(__dirname, "runtime", "media-http.cjs");
+  var source = runtimeFs.readFileSync(filename, "utf8");
+  var mod = new RuntimeModule(filename, module);
+  mod.filename = filename;
+  mod.paths = RuntimeModule._nodeModulePaths(runtimePath.dirname(filename));
+  mod._compile(patchTizenMediaRuntimeCode(source, filename), filename);
+  return mod.exports;
+}
+
 function probeNodeRuntime() {
   var requiredModules = [
     "fs",
@@ -91,11 +191,8 @@ function startEngineFsRuntime() {
   probeNodeRuntime();
   configureRuntimeEnv();
   started = true;
-  log("starting local EngineFS runtime", {
-    port: process.env.PORT,
-    expectedBaseUrl: "http://127.0.0.1:" + process.env.PORT
-  });
-  require("./runtime/media-http.cjs");
+  loadTizenMediaRuntime();
+  diagnostic("EngineFS runtime module loaded", { port: process.env.PORT });
   // AVPlay can expose text tracks without rendering them. Keep the fallback
   // extractors beside the existing runtime so Tizen 4+ devices with the
   // packaged web service can render supported timed text through the app HTML

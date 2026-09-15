@@ -1,6 +1,7 @@
 import { LocalStore } from "../../core/storage/localStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
+import { registerSessionTeardownHandler } from "../../core/auth/sessionLifecycle.js";
 
 const PROFILE_SCOPED_VERSION = 1;
 const PROFILES_KEY = "profiles";
@@ -9,6 +10,7 @@ const SETTINGS_SYNC_PENDING_KEY = "profileSettingsSyncPendingProfiles";
 
 const scheduledSettingsSyncTimers = new Map();
 const settingsSyncInFlightByProfile = new Map();
+let settingsSyncGeneration = 0;
 
 function normalizeProfileId(profileId) {
   const raw = String(profileId ?? ProfileManager.getActiveProfileId() ?? "1").trim();
@@ -202,16 +204,26 @@ export function queueProfileSettingsCloudSync(
   delayMs = SETTINGS_SYNC_DEBOUNCE_MS
 ) {
   const normalizedProfileId = normalizeProfileId(profileId);
+  const generation = settingsSyncGeneration;
   markProfileSettingsCloudSyncPending(normalizedProfileId);
   if (scheduledSettingsSyncTimers.has(normalizedProfileId)) {
     clearTimeout(scheduledSettingsSyncTimers.get(normalizedProfileId));
   }
   const timerId = setTimeout(() => {
+    if (generation !== settingsSyncGeneration) {
+      return;
+    }
     scheduledSettingsSyncTimers.delete(normalizedProfileId);
     const runPush = async () => {
+      if (generation !== settingsSyncGeneration) {
+        return;
+      }
       const activePush = settingsSyncInFlightByProfile.get(normalizedProfileId);
       if (activePush) {
         await activePush.catch(() => false);
+      }
+      if (generation !== settingsSyncGeneration) {
+        return;
       }
       const pushPromise = import("../../core/profile/profileSettingsSyncService.js")
         .then(({ ProfileSettingsSyncService }) =>
@@ -228,7 +240,11 @@ export function queueProfileSettingsCloudSync(
         });
       settingsSyncInFlightByProfile.set(normalizedProfileId, pushPromise);
       const didPush = await pushPromise;
-      if (!didPush && hasProfileSettingsCloudSyncPending(normalizedProfileId)) {
+      if (
+        generation === settingsSyncGeneration &&
+        !didPush &&
+        hasProfileSettingsCloudSyncPending(normalizedProfileId)
+      ) {
         const retryDelayMs = getSyncBackoffRemainingMs();
         if (retryDelayMs > 0) {
           queueProfileSettingsCloudSync(normalizedProfileId, Math.max(5000, retryDelayMs));
@@ -239,6 +255,22 @@ export function queueProfileSettingsCloudSync(
   }, delayMs);
   scheduledSettingsSyncTimers.set(normalizedProfileId, timerId);
 }
+
+export function stopProfileSettingsCloudSync({ waitForInFlight = true } = {}) {
+  const pending = waitForInFlight ? [...settingsSyncInFlightByProfile.values()] : [];
+  settingsSyncGeneration += 1;
+  scheduledSettingsSyncTimers.forEach((timerId) => clearTimeout(timerId));
+  scheduledSettingsSyncTimers.clear();
+  settingsSyncInFlightByProfile.clear();
+  if (!waitForInFlight || pending.length === 0) {
+    return Promise.resolve(true);
+  }
+  return Promise.allSettled(pending).then(() => true);
+}
+
+registerSessionTeardownHandler?.(({ waitForInFlight = true } = {}) =>
+  stopProfileSettingsCloudSync({ waitForInFlight })
+);
 
 export function createProfileScopedStore({
   key,

@@ -14,6 +14,7 @@ import {
 } from "../addons/homeCatalogs.js";
 import { isHomePerfDebugEnabled } from "../../ui/screens/home/homeConstants.js";
 import { getSyncBackoffRemainingMs, isSyncBackoffActive } from "../sync/syncBackoffPolicy.js";
+import { registerSessionTeardownHandler } from "../auth/sessionLifecycle.js";
 
 const PULL_RPC = "sync_pull_home_catalog_settings";
 const PUSH_RPC = "sync_push_home_catalog_settings";
@@ -602,6 +603,7 @@ export const HomeCatalogSettingsSyncService = {
   syncingFromRemoteProfiles: new Set(),
   pushTimers: new Map(),
   completedInitialPullTokens: new Set(),
+  syncGeneration: 0,
 
   isSyncingFromRemote(profileId = null) {
     return this.syncingFromRemoteProfiles.has(resolveProfileId(profileId));
@@ -718,6 +720,7 @@ export const HomeCatalogSettingsSyncService = {
     if (this.isSyncingFromRemote(resolvedProfileId)) {
       return;
     }
+    const generation = this.syncGeneration;
     const existingTimer = this.pushTimers.get(resolvedProfileId);
     if (existingTimer) {
       clearTimeout(existingTimer);
@@ -729,12 +732,25 @@ export const HomeCatalogSettingsSyncService = {
       cooldownMs > 0 ? cooldownMs + 50 : 0
     );
     const timerId = setTimeout(async () => {
+      if (generation !== this.syncGeneration) {
+        return;
+      }
       this.pushTimers.delete(resolvedProfileId);
       const didPush = await this.push(resolvedProfileId);
-      if (!didPush && isSyncBackoffActive()) {
+      if (generation === this.syncGeneration && !didPush && isSyncBackoffActive()) {
         this.triggerPush(resolvedProfileId);
       }
     }, effectiveDelayMs);
     this.pushTimers.set(resolvedProfileId, timerId);
   }
 };
+
+registerSessionTeardownHandler?.(() => {
+  HomeCatalogSettingsSyncService.syncGeneration += 1;
+  HomeCatalogSettingsSyncService.pushTimers.forEach((timerId) => clearTimeout(timerId));
+  HomeCatalogSettingsSyncService.pushTimers.clear();
+  HomeCatalogSettingsSyncService.syncingFromRemoteProfiles.clear();
+  HomeCatalogSettingsSyncService.completedInitialPullTokens.clear();
+  cachedSharedSettings = null;
+  return true;
+});

@@ -41,6 +41,16 @@ const DEFAULT_PROFILES = [
   }
 ];
 
+function readBooleanFlag(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+  return false;
+}
+
 function normalizeProfile(profile, index = 0) {
   const fallbackIndex = index + 1;
   const profileIndex = Number(
@@ -59,9 +69,11 @@ function normalizeProfile(profile, index = 0) {
       String(profile?.profileBackgroundId || profile?.profile_background_id || "").trim() || null,
     profileBackgroundUrl:
       String(profile?.profileBackgroundUrl || profile?.profile_background_url || "").trim() || null,
-    isPrimary: Boolean(profile?.isPrimary || normalizedIndex === 1),
-    usesPrimaryAddons: Boolean(profile?.usesPrimaryAddons),
-    usesPrimaryPlugins: Boolean(profile?.usesPrimaryPlugins)
+    isPrimary: readBooleanFlag(profile?.isPrimary) || normalizedIndex === 1,
+    usesPrimaryAddons: readBooleanFlag(profile?.usesPrimaryAddons ?? profile?.uses_primary_addons),
+    usesPrimaryPlugins: readBooleanFlag(
+      profile?.usesPrimaryPlugins ?? profile?.uses_primary_plugins
+    )
   };
 }
 

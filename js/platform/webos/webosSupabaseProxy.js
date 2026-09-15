@@ -7,28 +7,45 @@ import {
 const WEBOS_SUPABASE_PROXY_REQUEST_TIMEOUT_MS = 22000;
 const NULL_BODY_RESPONSE_STATUSES = new Set([204, 205, 304]);
 
-function withTimeout(promise, timeoutMs) {
-  let timeoutId = 0;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(
-      () => reject(new Error("webOS Supabase proxy status timed out")),
-      timeoutMs
+function withTimeout(promise, timeoutMs, signal = null) {
+  return new Promise((resolve, reject) => {
+    let timeoutId = 0;
+    const onAbort = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = 0;
+      }
+      const error = new Error("Request aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = 0;
+      }
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error("webOS Supabase proxy status timed out"));
+    }, timeoutMs);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      }
     );
   });
-  return Promise.race([promise, timeoutPromise]).then(
-    (value) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      return value;
-    },
-    (error) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      throw error;
-    }
-  );
 }
 
 function isProxyableSupabaseUrl(value = "") {
@@ -174,7 +191,8 @@ export async function fetchViaWebOsSupabaseProxy(url, fetchOptions = {}) {
         body
       }
     }),
-    WEBOS_SUPABASE_PROXY_REQUEST_TIMEOUT_MS
+    WEBOS_SUPABASE_PROXY_REQUEST_TIMEOUT_MS,
+    fetchOptions.signal
   ).catch(() => null);
   const serviceResponse = buildResponseFromServicePayload(serviceResult?.payload);
   if (serviceResponse) {

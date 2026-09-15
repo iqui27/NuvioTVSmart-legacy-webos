@@ -1,6 +1,7 @@
 import { SavedLibraryStore } from "../local/savedLibraryStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
+import { registerSessionTeardownHandler } from "../../core/auth/sessionLifecycle.js";
 
 function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
@@ -8,9 +9,11 @@ function activeProfileId() {
 
 let savedLibrarySyncTimers = null;
 const savedLibrarySyncInFlightByProfile = new Map();
+let savedLibrarySyncGeneration = 0;
 
 function queueSavedLibraryCloudSync(profileId = activeProfileId(), delayMs = 500) {
   const profileKey = String(profileId || "1");
+  const generation = savedLibrarySyncGeneration;
   if (savedLibrarySyncTimers) {
     const existingTimer = savedLibrarySyncTimers.get(profileKey);
     if (existingTimer) {
@@ -21,11 +24,20 @@ function queueSavedLibraryCloudSync(profileId = activeProfileId(), delayMs = 500
     savedLibrarySyncTimers = new Map();
   }
   const timerId = setTimeout(() => {
+    if (generation !== savedLibrarySyncGeneration) {
+      return;
+    }
     savedLibrarySyncTimers.delete(profileKey);
     const runPush = async () => {
+      if (generation !== savedLibrarySyncGeneration) {
+        return;
+      }
       const inFlight = savedLibrarySyncInFlightByProfile.get(profileKey);
       if (inFlight) {
         await inFlight.catch(() => false);
+      }
+      if (generation !== savedLibrarySyncGeneration) {
+        return;
       }
       const pushPromise = import("../../core/profile/savedLibrarySyncService.js")
         .then(({ SavedLibrarySyncService }) => SavedLibrarySyncService.push(profileId))
@@ -40,6 +52,9 @@ function queueSavedLibraryCloudSync(profileId = activeProfileId(), delayMs = 500
         });
       savedLibrarySyncInFlightByProfile.set(profileKey, pushPromise);
       const didPush = await pushPromise;
+      if (generation !== savedLibrarySyncGeneration) {
+        return;
+      }
       if (!didPush) {
         const retryDelayMs = getSyncBackoffRemainingMs();
         if (retryDelayMs > 0) {
@@ -51,6 +66,22 @@ function queueSavedLibraryCloudSync(profileId = activeProfileId(), delayMs = 500
   }, delayMs);
   savedLibrarySyncTimers.set(profileKey, timerId);
 }
+
+function stopSavedLibraryCloudSync({ waitForInFlight = true } = {}) {
+  const pending = waitForInFlight ? [...savedLibrarySyncInFlightByProfile.values()] : [];
+  savedLibrarySyncGeneration += 1;
+  savedLibrarySyncTimers?.forEach((timerId) => clearTimeout(timerId));
+  savedLibrarySyncTimers?.clear();
+  savedLibrarySyncInFlightByProfile.clear();
+  if (!waitForInFlight || pending.length === 0) {
+    return Promise.resolve(true);
+  }
+  return Promise.allSettled(pending).then(() => true);
+}
+
+registerSessionTeardownHandler?.(({ waitForInFlight = true } = {}) =>
+  stopSavedLibraryCloudSync({ waitForInFlight })
+);
 
 class SavedLibraryRepository {
   async getAll(limit = 200, profileId = activeProfileId()) {

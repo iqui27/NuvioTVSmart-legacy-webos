@@ -23,6 +23,18 @@ const ANIMESKIP_PROVIDER = "animeskip";
 
 const pushTimers = new Map();
 let syncInFlight = Promise.resolve();
+const activeOperations = new Set();
+let lifecycleGeneration = 0;
+
+function trackOperation(operation) {
+  const tracked = Promise.resolve(operation);
+  activeOperations.add(tracked);
+  tracked.then(
+    () => activeOperations.delete(tracked),
+    () => activeOperations.delete(tracked)
+  );
+  return tracked;
+}
 
 function resolveProfileId(profileId = null) {
   const value = Number(profileId ?? ProfileManager.getActiveProfileId() ?? 1);
@@ -244,10 +256,11 @@ export const ProviderCredentialSyncService = {
 
   queuePush(profileId = null, delayMs = PUSH_DEBOUNCE_MS) {
     if (!AuthManager.isAuthenticated) return;
+    const generation = lifecycleGeneration;
     const resolvedProfileId = resolveProfileId(profileId);
     void currentScope(resolvedProfileId)
       .then((scope) => {
-        if (!scope) return;
+        if (!scope || generation !== lifecycleGeneration || !AuthManager.isAuthenticated) return;
         const key = scopeKey(scope);
         markPending(scope);
         const existing = pushTimers.get(key);
@@ -260,12 +273,19 @@ export const ProviderCredentialSyncService = {
         );
         pushTimers.set(
           key,
-          setTimeout(async () => {
+          setTimeout(() => {
             pushTimers.delete(key);
-            const didPush = await this.pushCurrentToRemote(resolvedProfileId);
-            if (!didPush && isSyncBackoffActive()) {
-              this.queuePush(resolvedProfileId, getSyncBackoffRemainingMs() + 50);
-            }
+            if (generation !== lifecycleGeneration || !AuthManager.isAuthenticated) return;
+            void this.pushCurrentToRemote(resolvedProfileId).then((didPush) => {
+              if (
+                generation === lifecycleGeneration &&
+                !didPush &&
+                isSyncBackoffActive() &&
+                AuthManager.isAuthenticated
+              ) {
+                this.queuePush(resolvedProfileId, getSyncBackoffRemainingMs() + 50);
+              }
+            });
           }, effectiveDelayMs)
         );
       })
@@ -273,50 +293,54 @@ export const ProviderCredentialSyncService = {
   },
 
   async pushCurrentToRemote(profileId = null) {
-    return withSyncLock(async () => {
-      try {
-        if (isSyncBackoffActive()) return false;
-        const scope = await currentScope(profileId);
-        if (!scope) return false;
-        const snapshot = snapshotFromLocal(scope.profileId);
-        await pushSnapshot(snapshot);
-        await requireCurrentScope(scope);
-        clearPending(scope);
-        return true;
-      } catch (error) {
-        console.warn("Provider credential sync push failed", error);
-        return false;
-      }
-    });
+    return trackOperation(
+      withSyncLock(async () => {
+        try {
+          if (isSyncBackoffActive()) return false;
+          const scope = await currentScope(profileId);
+          if (!scope) return false;
+          const snapshot = snapshotFromLocal(scope.profileId);
+          await pushSnapshot(snapshot);
+          await requireCurrentScope(scope);
+          clearPending(scope);
+          return true;
+        } catch (error) {
+          console.warn("Provider credential sync push failed", error);
+          return false;
+        }
+      })
+    );
   },
 
   async syncFromRemote(profileId = null) {
-    return withSyncLock(async () => {
-      try {
-        if (isSyncBackoffActive()) return false;
-        const scope = await currentScope(profileId);
-        if (!scope) return false;
-        const localSnapshot = snapshotFromLocal(scope.profileId);
-        if (isPending(scope)) {
-          await pushSnapshot(localSnapshot);
-          clearPending(scope);
+    return trackOperation(
+      withSyncLock(async () => {
+        try {
+          if (isSyncBackoffActive()) return false;
+          const scope = await currentScope(profileId);
+          if (!scope) return false;
+          const localSnapshot = snapshotFromLocal(scope.profileId);
+          if (isPending(scope)) {
+            await pushSnapshot(localSnapshot);
+            clearPending(scope);
+          }
+          const rows = await pullRows(scope.profileId);
+          if (shouldSeedProviderCredentials(localSnapshot, rows)) {
+            await seedSnapshot(localSnapshot);
+          }
+          await requireCurrentScope(scope);
+          const remoteSnapshot = mergeProviderCredentialRows(localSnapshot, rows);
+          const applied = !snapshotsEqual(localSnapshot, remoteSnapshot);
+          if (applied) applySnapshot(remoteSnapshot);
+          await requireCurrentScope(scope);
+          this.lastForegroundPullAtMs = Date.now();
+          return applied;
+        } catch (error) {
+          console.warn("Provider credential sync failed; keeping local credentials", error);
+          return false;
         }
-        const rows = await pullRows(scope.profileId);
-        if (shouldSeedProviderCredentials(localSnapshot, rows)) {
-          await seedSnapshot(localSnapshot);
-        }
-        await requireCurrentScope(scope);
-        const remoteSnapshot = mergeProviderCredentialRows(localSnapshot, rows);
-        const applied = !snapshotsEqual(localSnapshot, remoteSnapshot);
-        if (applied) applySnapshot(remoteSnapshot);
-        await requireCurrentScope(scope);
-        this.lastForegroundPullAtMs = Date.now();
-        return applied;
-      } catch (error) {
-        console.warn("Provider credential sync failed; keeping local credentials", error);
-        return false;
-      }
-    });
+      })
+    );
   },
 
   requestForegroundPull(force = false) {
@@ -331,14 +355,28 @@ export const ProviderCredentialSyncService = {
       return false;
     }
     if (this.foregroundPullTimer) clearTimeout(this.foregroundPullTimer);
+    const generation = lifecycleGeneration;
     const delayMs = force ? 0 : PROVIDER_CREDENTIAL_FOREGROUND_DELAY_MS;
     this.foregroundPullTimer = setTimeout(() => {
       this.foregroundPullTimer = null;
-      if (!AuthManager.isAuthenticated) return;
+      if (generation !== lifecycleGeneration || !AuthManager.isAuthenticated) return;
       this.foregroundPullInFlight = true;
-      void this.syncFromRemote(ProfileManager.getActiveProfileId()).finally(() => {
-        this.foregroundPullInFlight = false;
-      });
+      const foregroundPullPromise = this.syncFromRemote(ProfileManager.getActiveProfileId());
+      this.foregroundPullPromise = foregroundPullPromise;
+      void foregroundPullPromise.then(
+        () => {
+          if (this.foregroundPullPromise === foregroundPullPromise) {
+            this.foregroundPullInFlight = false;
+            this.foregroundPullPromise = null;
+          }
+        },
+        () => {
+          if (this.foregroundPullPromise === foregroundPullPromise) {
+            this.foregroundPullInFlight = false;
+            this.foregroundPullPromise = null;
+          }
+        }
+      );
     }, delayMs);
     return true;
   },
@@ -348,5 +386,24 @@ export const ProviderCredentialSyncService = {
       clearTimeout(this.foregroundPullTimer);
       this.foregroundPullTimer = null;
     }
+  },
+
+  stop({ waitForInFlight = false } = {}) {
+    const pending = waitForInFlight ? [...activeOperations] : [];
+    lifecycleGeneration += 1;
+    pushTimers.forEach((timerId) => clearTimeout(timerId));
+    pushTimers.clear();
+    this.cancelForegroundPull();
+    this.foregroundPullInFlight = false;
+    this.foregroundPullPromise = null;
+    this.lastForegroundPullAtMs = 0;
+    if (!pending.length) {
+      return Promise.resolve(true);
+    }
+    return Promise.allSettled(pending).then(() => true);
   }
 };
+
+AuthManager.registerSessionTeardownListener?.(() =>
+  ProviderCredentialSyncService.stop({ waitForInFlight: true })
+);

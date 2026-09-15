@@ -8,6 +8,8 @@ const ASSET_STORE_NAME = "assets";
 
 const memoryAssets = new Map();
 let databasePromise = null;
+let storageWriteQueue = Promise.resolve();
+let storageGeneration = 0;
 
 function normalizeCatalogPayload(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -58,6 +60,7 @@ async function readAsset(key) {
   if (memoryAssets.has(key)) {
     return memoryAssets.get(key);
   }
+  const generation = storageGeneration;
   const database = await openDatabase();
   if (!database) {
     return null;
@@ -69,7 +72,9 @@ async function readAsset(key) {
       request.onsuccess = () => {
         const blob = request.result?.blob;
         if (isBlobLike(blob)) {
-          memoryAssets.set(key, blob);
+          if (generation === storageGeneration) {
+            memoryAssets.set(key, blob);
+          }
           resolve(blob);
           return;
         }
@@ -82,25 +87,36 @@ async function readAsset(key) {
   });
 }
 
-async function writeAsset(key, blob) {
+function enqueueStorageWrite(task) {
+  const queued = storageWriteQueue.catch(() => false).then(task);
+  storageWriteQueue = queued.catch(() => false);
+  return queued;
+}
+
+async function writeAsset(key, blob, shouldSave = null) {
   if (!isBlobLike(blob)) {
-    return;
+    return false;
   }
-  memoryAssets.set(key, blob);
-  const database = await openDatabase();
-  if (!database) {
-    return;
-  }
-  await new Promise((resolve) => {
-    try {
-      const transaction = database.transaction(ASSET_STORE_NAME, "readwrite");
-      transaction.objectStore(ASSET_STORE_NAME).put({ key, blob });
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => resolve();
-      transaction.onabort = () => resolve();
-    } catch (_) {
-      resolve();
+  return enqueueStorageWrite(async () => {
+    if (typeof shouldSave === "function" && !shouldSave()) {
+      return false;
     }
+    memoryAssets.set(key, blob);
+    const database = await openDatabase();
+    if (!database) {
+      return true;
+    }
+    return await new Promise((resolve) => {
+      try {
+        const transaction = database.transaction(ASSET_STORE_NAME, "readwrite");
+        transaction.objectStore(ASSET_STORE_NAME).put({ key, blob });
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = () => resolve(false);
+        transaction.onabort = () => resolve(false);
+      } catch (_) {
+        resolve(false);
+      }
+    });
   });
 }
 
@@ -132,8 +148,32 @@ export const MemberCatalogStorage = {
     return readAsset(key);
   },
 
-  saveAsset(kind, id, assetVersion, blob) {
+  saveAsset(kind, id, assetVersion, blob, { shouldSave = null } = {}) {
     const key = assetKey(kind, id, assetVersion);
-    return writeAsset(key, blob);
+    return writeAsset(key, blob, shouldSave);
+  },
+
+  async clearAll() {
+    storageGeneration += 1;
+    LocalStore.remove(AVATAR_CATALOG_KEY);
+    LocalStore.remove(PROFILE_BACKGROUND_CATALOG_KEY);
+    memoryAssets.clear();
+    return enqueueStorageWrite(async () => {
+      const database = await openDatabase();
+      if (!database) {
+        return !canUseIndexedDb();
+      }
+      return await new Promise((resolve) => {
+        try {
+          const transaction = database.transaction(ASSET_STORE_NAME, "readwrite");
+          transaction.objectStore(ASSET_STORE_NAME).clear();
+          transaction.oncomplete = () => resolve(true);
+          transaction.onerror = () => resolve(false);
+          transaction.onabort = () => resolve(false);
+        } catch (_) {
+          resolve(false);
+        }
+      });
+    });
   }
 };

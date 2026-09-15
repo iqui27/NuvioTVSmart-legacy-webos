@@ -385,7 +385,9 @@ const AddonRemotePage = {
 
     try {
       const addonUrls = this.draftAddons.map((addon) => addon.baseUrl);
-      await addonRepository.setAddonOrder(addonUrls);
+      // This page pushes immediately below. Avoid scheduling the same payload
+      // through StartupSyncService's Android-compatible 500 ms change queue.
+      await addonRepository.setAddonOrder(addonUrls, { silent: true });
       HomeCatalogStore.setOrder(this.catalogPrefs.order);
       HomeCatalogStore.set({ disabled: this.catalogPrefs.disabled });
 

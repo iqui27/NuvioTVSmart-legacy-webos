@@ -54,6 +54,17 @@ function shouldTryLegacyTable(error) {
   return message.includes("PGRST205") || message.includes("Could not find the table");
 }
 
+function readBooleanFlag(...values) {
+  const value = values.find((candidate) => candidate !== undefined && candidate !== null);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+  return false;
+}
+
 export function shouldTryProfileTableFallback(error) {
   if (!error) {
     return false;
@@ -82,15 +93,9 @@ function mapProfileRow(row = {}) {
     profileBackgroundId:
       String(row.profile_background_id || row.profileBackgroundId || "").trim() || null,
     profileBackgroundUrl: row.profile_background_url || row.profileBackgroundUrl || null,
-    usesPrimaryAddons:
-      typeof row.uses_primary_addons === "boolean"
-        ? row.uses_primary_addons
-        : Boolean(row.usesPrimaryAddons),
-    usesPrimaryPlugins:
-      typeof row.uses_primary_plugins === "boolean"
-        ? row.uses_primary_plugins
-        : Boolean(row.usesPrimaryPlugins),
-    isPrimary: typeof row.is_primary === "boolean" ? row.is_primary : normalizedIndex === 1
+    usesPrimaryAddons: readBooleanFlag(row.uses_primary_addons, row.usesPrimaryAddons),
+    usesPrimaryPlugins: readBooleanFlag(row.uses_primary_plugins, row.usesPrimaryPlugins),
+    isPrimary: readBooleanFlag(row.is_primary, row.isPrimary) || normalizedIndex === 1
   };
 }
 

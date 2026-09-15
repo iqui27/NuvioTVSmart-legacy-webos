@@ -132,6 +132,18 @@ function normalizeProfileId(profileId = null) {
   return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 1;
 }
 
+function readRemoteBoolean(value, fallback = true) {
+  if (value == null) return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+  }
+  return fallback;
+}
+
 async function verifyEmptyRemotePluginSnapshot(profileId) {
   const profileKey = String(normalizeProfileId(profileId));
   try {
@@ -192,7 +204,7 @@ async function verifyEmptyRemotePluginSnapshot(profileId) {
 export function mapRemotePluginRows(rows = []) {
   const sourceRows = Array.isArray(rows) ? rows : [];
   const mappedRows = sourceRows
-    .map((row) => {
+    .map((row, sourceIndex) => {
       const url = canonicalizePluginUrl(row?.url || row?.url_template || row?.urlTemplate);
       if (!url) return null;
       const hasExplicitType = row?.repo_type != null || row?.repoType != null || row?.type != null;
@@ -215,15 +227,21 @@ export function mapRemotePluginRows(rows = []) {
             ? canonicalizePluginUrl(url, { manifest: true })
             : url,
         name: String(row?.name || "").trim(),
-        enabled: row?.enabled !== false,
+        enabled: readRemoteBoolean(row?.enabled),
         repoType,
         repoTypeDeclared: hasExplicitType,
-        sortOrder: Number(row?.sort_order || 0) || 0,
+        sortOrder: Number(row?.sort_order ?? row?.sortOrder ?? row?.position ?? sourceIndex),
+        sourceIndex,
         raw: row
       };
     })
     .filter(Boolean)
-    .sort((left, right) => left.sortOrder - right.sortOrder);
+    .map((entry) => ({
+      ...entry,
+      sortOrder: Number.isFinite(entry.sortOrder) ? entry.sortOrder : entry.sourceIndex
+    }))
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.sourceIndex - right.sourceIndex)
+    .map(({ sourceIndex, ...entry }) => entry);
   logPluginSyncDiagnostic("remote rows mapped", {
     inputCount: sourceRows.length,
     outputCount: mappedRows.length,
@@ -521,10 +539,12 @@ export const PluginSyncService = {
         return PluginManager.listRepositories();
       }
 
-      // The Tizen Web Service start API only acknowledges that startup was
-      // queued. Require PluginServiceClient to complete its /health probe
-      // before opening the remote-sync transaction or fetching any manifest.
-      await ensurePluginServiceReady({ force: true });
+      // Cloud row synchronization is independent from the optional plugin
+      // network/runtime service. Android can reconcile repository rows even
+      // when a plugin runtime is unavailable; manifest hydration below will
+      // keep a typed row as a local stub until the service becomes usable.
+      // This is also what lets a confirmed cloud deletion remove a stale TV
+      // repository instead of being blocked by a service-health failure.
 
       // Keep local writes from starting a competing push until the complete
       // remote snapshot has been reconciled, matching Android's

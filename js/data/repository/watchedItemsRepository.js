@@ -6,6 +6,7 @@ import { SimklSyncService } from "./simklSyncService.js";
 import { TraktAuthService, requestJson as traktRequestJson } from "./traktAuthService.js";
 import { watchedItemIdentityValues, watchedItemsShareIdentity } from "./watchedIdentity.js";
 import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
+import { registerSessionTeardownHandler } from "../../core/auth/sessionLifecycle.js";
 
 function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
@@ -289,19 +290,30 @@ function limitWatchedItems(items, limit) {
 
 const watchedItemsSyncTimers = new Map();
 const watchedItemsSyncInFlightByProfile = new Map();
+let watchedItemsSyncGeneration = 0;
 
 function queueWatchedItemsCloudSync(profileId = activeProfileId(), delayMs = 250) {
   const profileKey = String(profileId || "1");
+  const generation = watchedItemsSyncGeneration;
   const existingTimer = watchedItemsSyncTimers.get(profileKey);
   if (existingTimer) {
     clearTimeout(existingTimer);
   }
   const timerId = setTimeout(() => {
+    if (generation !== watchedItemsSyncGeneration) {
+      return;
+    }
     watchedItemsSyncTimers.delete(profileKey);
     const runPush = async () => {
+      if (generation !== watchedItemsSyncGeneration) {
+        return;
+      }
       const inFlight = watchedItemsSyncInFlightByProfile.get(profileKey);
       if (inFlight) {
         await inFlight.catch(() => false);
+      }
+      if (generation !== watchedItemsSyncGeneration) {
+        return;
       }
       const pushPromise = import("../../core/profile/watchedItemsSyncService.js")
         .then(({ WatchedItemsSyncService }) => WatchedItemsSyncService.push(profileId))
@@ -316,6 +328,9 @@ function queueWatchedItemsCloudSync(profileId = activeProfileId(), delayMs = 250
         });
       watchedItemsSyncInFlightByProfile.set(profileKey, pushPromise);
       const didPush = await pushPromise;
+      if (generation !== watchedItemsSyncGeneration) {
+        return;
+      }
       if (!didPush) {
         const retryDelayMs = getSyncBackoffRemainingMs();
         if (retryDelayMs > 0) {
@@ -327,6 +342,22 @@ function queueWatchedItemsCloudSync(profileId = activeProfileId(), delayMs = 250
   }, delayMs);
   watchedItemsSyncTimers.set(profileKey, timerId);
 }
+
+function stopWatchedItemsCloudSync({ waitForInFlight = true } = {}) {
+  const pending = waitForInFlight ? [...watchedItemsSyncInFlightByProfile.values()] : [];
+  watchedItemsSyncGeneration += 1;
+  watchedItemsSyncTimers.forEach((timerId) => clearTimeout(timerId));
+  watchedItemsSyncTimers.clear();
+  watchedItemsSyncInFlightByProfile.clear();
+  if (!waitForInFlight || pending.length === 0) {
+    return Promise.resolve(true);
+  }
+  return Promise.allSettled(pending).then(() => true);
+}
+
+registerSessionTeardownHandler?.(({ waitForInFlight = true } = {}) =>
+  stopWatchedItemsCloudSync({ waitForInFlight })
+);
 
 function matchesWatchedTarget(item = {}, contentId, options = null) {
   const targetContentId = String(contentId || "").trim();

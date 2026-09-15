@@ -4,6 +4,8 @@ import {
   TRAKT_CLIENT_SECRET,
   TRAKT_REDIRECT_URI
 } from "../../config.js";
+import { AuthManager } from "../../core/auth/authManager.js";
+import { trackSessionRequest } from "../../core/auth/sessionLifecycle.js";
 import { TraktAuthStore } from "../local/traktAuthStore.js";
 import { detailWatchedEnrichmentService } from "./detailWatchedEnrichmentService.js";
 
@@ -28,6 +30,39 @@ function normalizeAuthErrorMessage(payload, fallback) {
     return String(payload.error_description || payload.error || payload.message || fallback);
   }
   return fallback;
+}
+
+function createAbortError() {
+  const error = new Error("Trakt request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function sleep(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      reject(createAbortError());
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    timer = setTimeout(
+      () => {
+        signal?.removeEventListener?.("abort", onAbort);
+        resolve();
+      },
+      Math.max(0, Number(ms) || 0)
+    );
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
 }
 
 async function fetchWatchedPages({ token, path, pageLimit, normalize, label }) {
@@ -79,26 +114,41 @@ async function readResponseBody(response) {
   }
 }
 
-export async function requestJson(
+export function requestJson(
   path,
-  { method = "GET", body = null, authorization = null, clientId = TRAKT_CLIENT_ID } = {}
+  {
+    method = "GET",
+    body = null,
+    authorization = null,
+    clientId = TRAKT_CLIENT_ID,
+    signal = null
+  } = {}
 ) {
-  const headers = {
-    "Content-Type": "application/json",
-    "trakt-api-version": API_VERSION,
-    "trakt-api-key": clientId
-  };
-  if (authorization) {
-    headers.Authorization = authorization;
-  }
+  const requestSignal = signal || AuthManager.getSessionSignal?.() || null;
+  return trackSessionRequest(
+    (async () => {
+      throwIfAborted(requestSignal);
+      const headers = {
+        "Content-Type": "application/json",
+        "trakt-api-version": API_VERSION,
+        "trakt-api-key": clientId
+      };
+      if (authorization) {
+        headers.Authorization = authorization;
+      }
 
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    method,
-    headers,
-    body: body == null ? undefined : JSON.stringify(body)
-  });
-  const payload = await readResponseBody(response);
-  return { response, payload };
+      const response = await fetch(`${apiBaseUrl()}${path}`, {
+        method,
+        headers,
+        body: body == null ? undefined : JSON.stringify(body),
+        ...(requestSignal ? { signal: requestSignal } : {})
+      });
+      throwIfAborted(requestSignal);
+      const payload = await readResponseBody(response);
+      throwIfAborted(requestSignal);
+      return { response, payload };
+    })()
+  );
 }
 
 function isTokenExpiredOrExpiring(state) {
@@ -150,18 +200,21 @@ export const TraktAuthService = {
       return current;
     }
 
+    const requestSignal = AuthManager.getSessionSignal?.() || null;
     let { response, payload } = await requestJson("/oauth/device/code", {
       method: "POST",
-      body: { client_id: TRAKT_CLIENT_ID }
+      body: { client_id: TRAKT_CLIENT_ID },
+      signal: requestSignal
     });
 
     if (response.status === 429) {
       const retryAfterSeconds = Number(response.headers.get("Retry-After") || 0);
       if (retryAfterSeconds >= 1 && retryAfterSeconds <= 10) {
-        await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
+        await sleep(retryAfterSeconds * 1000, requestSignal);
         ({ response, payload } = await requestJson("/oauth/device/code", {
           method: "POST",
-          body: { client_id: TRAKT_CLIENT_ID }
+          body: { client_id: TRAKT_CLIENT_ID },
+          signal: requestSignal
         }));
       }
     }

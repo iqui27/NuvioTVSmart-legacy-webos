@@ -1661,9 +1661,9 @@ export const PluginManager = {
         return state;
       }
       // Match Android's empty-snapshot guard: an empty successful response is
-      // not evidence that the local profile should be cleared. PluginSyncService
-      // may opt in only after an independent authenticated overview confirms
-      // that this existing profile has zero remote plugin rows.
+      // not evidence that the local profile should be cleared. The sync
+      // service may opt in only after an independent authenticated overview
+      // confirms that this existing profile has zero remote plugin rows.
       const canApplyVerifiedEmptySnapshot =
         authoritativeSnapshot && allowVerifiedEmptySnapshot === true;
       if (!incoming.length && !canApplyVerifiedEmptySnapshot) {
@@ -1689,10 +1689,9 @@ export const PluginManager = {
         // old cloud row does not declare repo_type. Do the same for known local
         // repositories: a missing type is not evidence that they should be
         // classified again. A stale UNKNOWN row is different: it has no usable
-        // local cache, so retry classification now that the pull has already
-        // gated on PluginService readiness. This repairs rows that were saved
-        // opaque after a transient service/network failure without reinterpreting
-        // an explicit future repository type.
+        // local cache, so retry classification while reconciling the fresh
+        // row. Manifest hydration is best-effort and may leave an opaque/stub
+        // row until the optional runtime becomes available.
         const typeHint = remoteRepositoryTypeHint(remote);
         const shouldReclassifyUnknown =
           existingByRemoteIdentity &&

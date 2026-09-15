@@ -49,7 +49,12 @@ LocalStore.remove("rotatedDpadMapping");
 })();
 
 const GUEST_QR_BYPASS_KEY = "skipAuthQrGate";
-const SIGNED_OUT_ALLOWED_ROUTES = new Set(["trakt"]);
+const SIGNED_OUT_ALLOWED_ROUTES = new Set([
+  "trakt",
+  "authQrSignIn",
+  "authSignIn",
+  "serverConnection"
+]);
 let hasSelectedProfileThisSession = false;
 let appShellRendered = false;
 let updateCheckStarted = false;
@@ -640,6 +645,12 @@ async function bootstrapApp() {
     if (state === AuthState.AUTHENTICATED) {
       loginTrace("authenticated subscriber begin", { currentRoute: Router.getCurrent() || "" });
       markBootStage("Loading profiles");
+      // Android marks the first-launch auth surface as completed as soon as
+      // an already-restored full account is available, so a later sign-out
+      // does not incorrectly reopen onboarding on the next screen.
+      if (!LocalStore.get("hasSeenAuthQrOnFirstLaunch")) {
+        LocalStore.set("hasSeenAuthQrOnFirstLaunch", true);
+      }
       LocalStore.remove(GUEST_QR_BYPASS_KEY);
       StartupSyncService.start({ runInitialPull: false });
       loginTrace("authenticated subscriber sync scheduled");

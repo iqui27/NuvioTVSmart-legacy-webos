@@ -1229,6 +1229,9 @@ export const PlayerController = {
     }
     try {
       avplay.play?.();
+      // AVPlay can report a startup error and still complete preparation. A
+      // successful play call means that transient code must not remain fatal.
+      this.lastPlaybackErrorCode = 0;
       this.isPlaying = true;
       this.syncWebOsPlaybackKeepAwake();
       this.reapplyAvPlayPlaybackRate();

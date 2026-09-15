@@ -3,7 +3,12 @@ const runtimeEnv = globalThis.__NUVIO_ENV__ || {};
 export const SUPABASE_URL = String(runtimeEnv.NUVIO_SUPABASE_URL || "").trim();
 export const SUPABASE_ANON_KEY = String(runtimeEnv.NUVIO_SUPABASE_ANON_KEY || "").trim();
 export const SUPABASE_FALLBACK_URL = String(runtimeEnv.NUVIO_SUPABASE_FALLBACK_URL || "").trim();
-export const TV_LOGIN_WEB_BASE_URL = String(runtimeEnv.TV_LOGIN_WEB_BASE_URL || "").trim();
+export const TV_LOGIN_WEB_BASE_URL = String(
+  runtimeEnv.TV_LOGIN_WEB_BASE_URL || "https://nuvio.tv/tv-login"
+).trim();
+export const DEVICE_LOGIN_WEB_BASE_URL = String(
+  runtimeEnv.DEVICE_LOGIN_WEB_BASE_URL || "https://nuvio.tv/link"
+).trim();
 export const YOUTUBE_PROXY_URL = String(
   runtimeEnv.YOUTUBE_PROXY_URL || "youtube-proxy.html"
 ).trim();

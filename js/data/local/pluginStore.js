@@ -8,6 +8,7 @@ import {
   normalizePluginState
 } from "../../core/player/pluginModels.js";
 import { TizenCapabilities } from "../../platform/tizen/tizenCapabilities.js";
+import { registerSessionTeardownHandler } from "../../core/auth/sessionLifecycle.js";
 
 const PLUGIN_STATE_KEY = "pluginState";
 const LEGACY_SOURCES_KEY = "pluginSources";
@@ -18,10 +19,21 @@ const pluginSyncTimers = new Map();
 const pluginSyncInFlight = new Map();
 const pluginStateRevisions = new Map();
 const pluginRemoteSyncDepth = new Map();
+let pluginSyncGeneration = 0;
 
 function readProfiles() {
   const profiles = LocalStore.get("profiles", []);
   return Array.isArray(profiles) ? profiles : [];
+}
+
+function readBooleanFlag(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+  return false;
 }
 
 export function getEffectivePluginProfileId(profileId = ProfileManager.getActiveProfileId()) {
@@ -31,7 +43,10 @@ export function getEffectivePluginProfileId(profileId = ProfileManager.getActive
   const profile = readProfiles().find(
     (entry) => String(entry?.id || entry?.profileIndex || "") === normalized
   );
-  return profile?.usesPrimaryPlugins && normalized !== "1" ? "1" : normalized;
+  const usesPrimaryPlugins = readBooleanFlag(
+    profile?.usesPrimaryPlugins ?? profile?.uses_primary_plugins
+  );
+  return usesPrimaryPlugins && normalized !== "1" ? "1" : normalized;
 }
 
 function normalizedPluginProfileId(profileId = ProfileManager.getActiveProfileId()) {
@@ -122,7 +137,10 @@ function writeState(profileId, state) {
   return normalized;
 }
 
-async function runPluginCloudSync(profileId) {
+async function runPluginCloudSync(profileId, generation = pluginSyncGeneration) {
+  if (generation !== pluginSyncGeneration) {
+    return false;
+  }
   const normalizedProfileId = normalizedPluginProfileId(profileId);
   if (!areTizenPluginsSupported()) {
     cancelPluginCloudSync(normalizedProfileId);
@@ -134,9 +152,15 @@ async function runPluginCloudSync(profileId) {
   }
 
   while (true) {
+    if (generation !== pluginSyncGeneration) {
+      return false;
+    }
     const activePush = pluginSyncInFlight.get(normalizedProfileId);
     if (!activePush) break;
     await activePush.catch(() => false);
+    if (generation !== pluginSyncGeneration) {
+      return false;
+    }
     if (isRemoteSyncActive(normalizedProfileId)) {
       queuePluginCloudSync(normalizedProfileId, PLUGIN_SYNC_DEBOUNCE_MS);
       return false;
@@ -160,6 +184,9 @@ async function runPluginCloudSync(profileId) {
     });
   pluginSyncInFlight.set(normalizedProfileId, pushPromise);
   const didPush = await pushPromise;
+  if (generation !== pluginSyncGeneration) {
+    return false;
+  }
   if (!didPush) {
     const retryDelayMs = getSyncBackoffRemainingMs();
     if (retryDelayMs > 0) {
@@ -179,15 +206,36 @@ function queuePluginCloudSync(profileId, delayMs = PLUGIN_SYNC_DEBOUNCE_MS) {
   if (previousTimer) {
     clearTimeout(previousTimer);
   }
+  const generation = pluginSyncGeneration;
   const timer = setTimeout(
     () => {
+      if (generation !== pluginSyncGeneration) {
+        return;
+      }
       pluginSyncTimers.delete(normalizedProfileId);
-      void runPluginCloudSync(normalizedProfileId);
+      void runPluginCloudSync(normalizedProfileId, generation);
     },
     Math.max(0, Number(delayMs) || 0)
   );
   pluginSyncTimers.set(normalizedProfileId, timer);
 }
+
+function stopPluginCloudSync({ waitForInFlight = true } = {}) {
+  const pending = waitForInFlight ? [...pluginSyncInFlight.values()] : [];
+  pluginSyncGeneration += 1;
+  pluginSyncTimers.forEach((timerId) => clearTimeout(timerId));
+  pluginSyncTimers.clear();
+  pluginSyncInFlight.clear();
+  pluginRemoteSyncDepth.clear();
+  if (!waitForInFlight || pending.length === 0) {
+    return Promise.resolve(true);
+  }
+  return Promise.allSettled(pending).then(() => true);
+}
+
+registerSessionTeardownHandler?.(({ waitForInFlight = true } = {}) =>
+  stopPluginCloudSync({ waitForInFlight })
+);
 
 export const PluginStore = {
   get(profileId = ProfileManager.getActiveProfileId()) {
@@ -209,7 +257,10 @@ export const PluginStore = {
     const profile = readProfiles().find(
       (entry) => String(entry?.id || entry?.profileIndex || "") === normalized
     );
-    return normalized === "1" || profile?.usesPrimaryPlugins !== true;
+    const usesPrimaryPlugins = readBooleanFlag(
+      profile?.usesPrimaryPlugins ?? profile?.uses_primary_plugins
+    );
+    return normalized === "1" || !usesPrimaryPlugins;
   },
 
   markDirty(profileId = ProfileManager.getActiveProfileId()) {
@@ -255,7 +306,7 @@ export const PluginStore = {
       return false;
     }
     cancelPluginCloudSync(normalizedProfileId);
-    return runPluginCloudSync(normalizedProfileId);
+    return runPluginCloudSync(normalizedProfileId, pluginSyncGeneration);
   },
 
   clearDirty(profileId = ProfileManager.getActiveProfileId(), expectedRevision = null) {

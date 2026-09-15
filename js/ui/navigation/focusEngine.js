@@ -230,7 +230,11 @@ export const FocusEngine = {
   },
 
   getPointerFocusable(event) {
-    const target = event?.target?.closest?.(".focusable");
+    const target =
+      event?.target?.closest?.(".focusable") ||
+      event?.target?.closest?.(
+        "button, [role='button'], a[href], input, textarea, select, [data-action], [data-action-id]"
+      );
     if (!target || !(target instanceof HTMLElement) || !document.contains(target)) {
       return null;
     }
@@ -266,7 +270,7 @@ export const FocusEngine = {
     }
 
     const focusRoot = screenContainer || document;
-    focusRoot.querySelectorAll?.(".focusable.focused")?.forEach((node) => {
+    focusRoot.querySelectorAll?.(".focused")?.forEach((node) => {
       if (node !== target) {
         node.classList.remove("focused");
       }
@@ -315,26 +319,44 @@ export const FocusEngine = {
     this.focusPointerTarget(target, event);
   },
 
-  async handlePointerClick(event) {
+  handlePointerClick(event) {
     if (!Platform.isWebOS()) {
       return;
     }
     const target = this.getPointerFocusable(event);
+    const currentScreen = Router.getCurrentScreen();
     if (!target) {
+      const handled = currentScreen?.onPointerSurfaceActivate?.(event?.target, event);
+      if (handled && typeof handled.then === "function") {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+        handled.catch((error) => console.warn("Screen pointer surface handler failed", error));
+      } else if (handled) {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+      }
       return;
     }
     if (hasActiveModal() && !target.closest?.(".nuvio-dialog-backdrop")) {
       return;
     }
     this.focusPointerTarget(target, event);
-    const currentScreen = Router.getCurrentScreen();
     if (hasActiveModal()) {
       return;
     }
     if (typeof currentScreen?.onPointerActivate !== "function") {
       return;
     }
-    const handled = await currentScreen.onPointerActivate(target, event);
+    const handled = currentScreen.onPointerActivate(target, event);
+    if (handled && typeof handled.then === "function") {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      event?.stopImmediatePropagation?.();
+      handled.catch((error) => console.warn("Screen pointer activation failed", error));
+      return;
+    }
     if (handled) {
       event?.preventDefault?.();
       event?.stopPropagation?.();

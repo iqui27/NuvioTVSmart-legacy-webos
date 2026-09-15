@@ -855,6 +855,7 @@ export const DiscoverScreen = {
     ScreenUtils.indexFocusables(this.container);
     this.buildNavigationModel();
     this.bindCardEvents();
+    this.agendarAtualizacaoDeImagens();
 
     if (this.isSidebarRootRoute() && this.focusZone === "sidebar") {
       this.focusSidebarNode();
@@ -1826,6 +1827,7 @@ export const DiscoverScreen = {
     // no primeiro evento de rolagem seguinte.
     this.agendarAtualizacaoDeImagens();
     this.bindPointerEvents();
+    this.agendarAtualizacaoDeImagens();
     if (this.pendingRestoreFocus) {
       const scrollMode = this.preserveViewportOnNextRender ? "none" : "center";
       this.pendingRestoreFocus = false;
@@ -1859,6 +1861,7 @@ export const DiscoverScreen = {
           node.dataset.itemId || this.lastFocusedDiscoverItemId || ""
         );
         this.savedScrollTop = this.container?.querySelector(".discover-main")?.scrollTop || 0;
+        this.agendarAtualizacaoDeImagens();
       });
       node.addEventListener("mouseenter", () => {
         this.lastFocusedKey = node.dataset.focusKey || this.lastFocusedKey;

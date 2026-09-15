@@ -17,6 +17,7 @@ import { watchedItemsRepository } from "./watchedItemsRepository.js";
 import { watchedItemIdentityValues, watchedItemsShareIdentity } from "./watchedIdentity.js";
 import { mapWithConcurrency } from "../../core/network/mapWithConcurrency.js";
 import { getSyncBackoffRemainingMs } from "../../core/sync/syncBackoffPolicy.js";
+import { registerSessionTeardownHandler } from "../../core/auth/sessionLifecycle.js";
 import {
   WATCH_PROGRESS_COMPLETED_THRESHOLD,
   WATCH_PROGRESS_STARTED_THRESHOLD,
@@ -56,8 +57,10 @@ function activeProfileId() {
 
 const watchProgressSyncTimers = new Map();
 const watchProgressSyncInFlightByProfile = new Map();
+let watchProgressSyncGeneration = 0;
 let traktProgressSnapshotCache = null;
 let traktProgressSnapshotInFlight = null;
+let traktProgressSnapshotGeneration = 0;
 const remoteProgressLoadState = new Map();
 const TRAKT_PROGRESS_SNAPSHOT_TTL_MS = 30000;
 
@@ -78,16 +81,26 @@ function queueWatchProgressCloudSync(
   delayMs = getWatchProgressSyncDebounceMs()
 ) {
   const profileKey = String(profileId || "1");
+  const generation = watchProgressSyncGeneration;
   const existingTimer = watchProgressSyncTimers.get(profileKey);
   if (existingTimer) {
     clearTimeout(existingTimer);
   }
   const timerId = setTimeout(() => {
+    if (generation !== watchProgressSyncGeneration) {
+      return;
+    }
     watchProgressSyncTimers.delete(profileKey);
     const runPush = async () => {
+      if (generation !== watchProgressSyncGeneration) {
+        return;
+      }
       const inFlight = watchProgressSyncInFlightByProfile.get(profileKey);
       if (inFlight) {
         await inFlight.catch(() => false);
+      }
+      if (generation !== watchProgressSyncGeneration) {
+        return;
       }
       const pushPromise = import("../../core/profile/watchProgressSyncService.js")
         .then(({ WatchProgressSyncService }) => WatchProgressSyncService.push(profileId))
@@ -102,6 +115,9 @@ function queueWatchProgressCloudSync(
         });
       watchProgressSyncInFlightByProfile.set(profileKey, pushPromise);
       const didPush = await pushPromise;
+      if (generation !== watchProgressSyncGeneration) {
+        return;
+      }
       if (!didPush) {
         const retryDelayMs = getSyncBackoffRemainingMs();
         if (retryDelayMs > 0) {
@@ -113,6 +129,26 @@ function queueWatchProgressCloudSync(
   }, delayMs);
   watchProgressSyncTimers.set(profileKey, timerId);
 }
+
+function stopWatchProgressCloudSync({ waitForInFlight = true } = {}) {
+  const pending = waitForInFlight ? [...watchProgressSyncInFlightByProfile.values()] : [];
+  watchProgressSyncGeneration += 1;
+  watchProgressSyncTimers.forEach((timerId) => clearTimeout(timerId));
+  watchProgressSyncTimers.clear();
+  watchProgressSyncInFlightByProfile.clear();
+  traktProgressSnapshotCache = null;
+  traktProgressSnapshotInFlight = null;
+  traktProgressSnapshotGeneration = watchProgressSyncGeneration;
+  remoteProgressLoadState.clear();
+  if (!waitForInFlight || pending.length === 0) {
+    return Promise.resolve(true);
+  }
+  return Promise.allSettled(pending).then(() => true);
+}
+
+registerSessionTeardownHandler?.(({ waitForInFlight = true } = {}) =>
+  stopWatchProgressCloudSync({ waitForInFlight })
+);
 
 function invalidateContinueWatchingDisplaySnapshot() {
   const sourceKey = `${activeProfileId()}:${selectedContinueWatchingSource()}`;
@@ -521,11 +557,17 @@ async function fetchTraktProgressSnapshot() {
     setRemoteProgressLoadState(WatchProgressSource.TRAKT, profileId, "loaded");
     return traktProgressSnapshotCache.snapshot;
   }
-  if (traktProgressSnapshotInFlight) {
+  if (
+    traktProgressSnapshotInFlight &&
+    traktProgressSnapshotGeneration === watchProgressSyncGeneration
+  ) {
     return traktProgressSnapshotInFlight;
   }
 
-  traktProgressSnapshotInFlight = (async () => {
+  const generation = watchProgressSyncGeneration;
+  traktProgressSnapshotGeneration = generation;
+  let snapshotPromise = null;
+  snapshotPromise = (async () => {
     const [history, playbackState, watchedShows] = await Promise.all([
       withTimeout(
         TraktAuthService.fetchWatchHistory({ limit: 300 }),
@@ -563,6 +605,9 @@ async function fetchTraktProgressSnapshot() {
       playbackItems: playbackState.map(toProgressItemFromPlayback).filter(Boolean),
       watchedShowSeedItems
     };
+    if (generation !== watchProgressSyncGeneration) {
+      return { historyItems: [], playbackItems: [], watchedShowSeedItems: [] };
+    }
     traktProgressSnapshotCache = {
       profileId,
       fetchedAt: Date.now(),
@@ -579,10 +624,13 @@ async function fetchTraktProgressSnapshot() {
       throw error;
     })
     .finally(() => {
-      traktProgressSnapshotInFlight = null;
+      if (traktProgressSnapshotInFlight === snapshotPromise) {
+        traktProgressSnapshotInFlight = null;
+      }
     });
 
-  return traktProgressSnapshotInFlight;
+  traktProgressSnapshotInFlight = snapshotPromise;
+  return snapshotPromise;
 }
 
 async function fetchSimklProgressSnapshot() {

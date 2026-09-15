@@ -1,9 +1,57 @@
 import { AuthState } from "./authState.js";
-import { clearAccountLocalData } from "./accountLocalDataReset.js";
+import { clearAccountLocalData, hasAccountLocalData } from "./accountLocalDataReset.js";
 import { SessionStore } from "../storage/sessionStore.js";
-import { SUPABASE_ANON_KEY } from "../../config.js";
 import { fetchSupabaseAuth } from "./supabaseAuthFetch.js";
 import { PluginCodeStore } from "../../data/local/pluginCodeStore.js";
+import { ServerConfigurationStore } from "../../data/local/serverConfigurationStore.js";
+import {
+  notifySessionTeardownHandlers,
+  waitForPendingSessionRequests
+} from "./sessionLifecycle.js";
+
+function createAbortController() {
+  return typeof AbortController === "function" ? new AbortController() : null;
+}
+
+function publishableKey() {
+  return String(ServerConfigurationStore.getActive()?.publishableKey || "").trim();
+}
+
+function parseResponseError(response, fallback = "Request failed") {
+  return response
+    .text()
+    .catch(() => "")
+    .then((body) => {
+      const raw = String(body || "").trim();
+      if (!raw) {
+        return response.status ? `HTTP ${response.status}` : fallback;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        const message = [
+          parsed?.msg,
+          parsed?.message,
+          parsed?.error_description,
+          parsed?.error,
+          parsed?.hint
+        ].find((value) => typeof value === "string" && value.trim());
+        if (message) {
+          return response.status ? `HTTP ${response.status}: ${message.trim()}` : message.trim();
+        }
+      } catch (_) {
+        // Keep the server's plain-text response below.
+      }
+      return response.status ? `HTTP ${response.status}: ${raw}` : raw;
+    });
+}
+
+function isMissingDeviceLoginFunction(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("could not find the function") &&
+    message.includes("start_device_login_session")
+  );
+}
 
 function isJwtLike(token) {
   const value = String(token || "").trim();
@@ -60,6 +108,9 @@ class AuthManagerClass {
   constructor() {
     this.state = AuthState.LOADING;
     this.listeners = [];
+    this.sessionTeardownListeners = new Set();
+    this.sessionAbortController = createAbortController();
+    this.sessionGeneration = 0;
     this.cachedEffectiveUserId = null;
     this.cachedEffectiveUserSourceUserId = null;
     this.refreshPromise = null;
@@ -78,8 +129,39 @@ class AuthManagerClass {
   }
 
   setState(newState) {
+    if (newState === AuthState.AUTHENTICATED && this.sessionAbortController?.signal?.aborted) {
+      this.sessionAbortController = createAbortController();
+    }
     this.state = newState;
     this.listeners.forEach((l) => l(newState));
+  }
+
+  getSessionSignal() {
+    return this.sessionAbortController?.signal || null;
+  }
+
+  registerSessionTeardownListener(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    this.sessionTeardownListeners.add(listener);
+    return () => this.sessionTeardownListeners.delete(listener);
+  }
+
+  async notifySessionTeardown(options = {}) {
+    const listeners = [...this.sessionTeardownListeners];
+    if (!listeners.length) {
+      return true;
+    }
+    const results = await Promise.allSettled(
+      listeners.map((listener) => Promise.resolve().then(() => listener(options)))
+    );
+    results.forEach((result) => {
+      if (result.status === "rejected") {
+        console.warn("Session teardown listener failed", result.reason);
+      }
+    });
+    return results.every((result) => result.status === "fulfilled" && result.value !== false);
   }
 
   // ------------------------------------
@@ -131,18 +213,29 @@ class AuthManagerClass {
   // EMAIL LOGIN
   // ------------------------------------
   async signInWithEmail(email, password) {
+    const generation = this.sessionGeneration;
+    const key = publishableKey();
     const res = await fetchSupabaseAuth("/auth/v1/token?grant_type=password", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: SUPABASE_ANON_KEY
+        apikey: key
       },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password }),
+      signal: this.getSessionSignal()
     });
 
-    if (!res.ok) throw new Error("Login failed");
+    if (!res.ok) {
+      throw new Error(await parseResponseError(res, "Login failed"));
+    }
 
     const data = await res.json();
+    if (generation !== this.sessionGeneration) {
+      throw new Error("Login was cancelled because the server changed");
+    }
+    if (!data?.access_token || !data?.refresh_token) {
+      throw new Error("Login response did not include a valid session");
+    }
 
     SessionStore.accessToken = data.access_token;
     SessionStore.refreshToken = data.refresh_token;
@@ -152,19 +245,134 @@ class AuthManagerClass {
   }
 
   async signOut() {
-    const wasSignedOut = this.state === AuthState.SIGNED_OUT;
-    SessionStore.clear();
-    try {
-      clearAccountLocalData();
-    } catch (error) {
-      console.warn("Account-local data reset failed during sign out", error);
+    return this._teardownAccountSession({ serverSwitch: false, verify: false });
+  }
+
+  clearAnonymousSession() {
+    if (!SessionStore.isAnonymousSession) {
+      return false;
     }
-    await PluginCodeStore.clearAll();
+    this.sessionGeneration += 1;
+    if (this.sessionAbortController && !this.sessionAbortController.signal.aborted) {
+      try {
+        this.sessionAbortController.abort();
+      } catch (_) {
+        // Abort is best effort on older TV runtimes.
+      }
+    }
+    try {
+      SessionStore.clear();
+    } catch (error) {
+      console.warn("Anonymous session reset failed", error);
+      return false;
+    }
     this.cachedEffectiveUserId = null;
     this.cachedEffectiveUserSourceUserId = null;
+    this.sessionAbortController = createAbortController();
+    return true;
+  }
+
+  async prepareForServerSwitch() {
+    return this._teardownAccountSession({ serverSwitch: true, verify: true });
+  }
+
+  async _teardownAccountSession({ serverSwitch = false, verify = false } = {}) {
+    const wasSignedOut = this.state === AuthState.SIGNED_OUT;
+    const hadAccountSession =
+      !SessionStore.isAnonymousSession &&
+      (this.state === AuthState.AUTHENTICATED ||
+        Boolean(SessionStore.accessToken || SessionStore.refreshToken));
+    const shouldClearAccountData = !serverSwitch || hadAccountSession;
+    this.sessionGeneration += 1;
+
+    if (this.sessionAbortController && !this.sessionAbortController.signal.aborted) {
+      try {
+        this.sessionAbortController.abort();
+      } catch (_) {
+        // Abort is best effort on older TV runtimes.
+      }
+    }
+
+    let sessionStorageCleared = true;
+    try {
+      SessionStore.clear();
+    } catch (error) {
+      sessionStorageCleared = false;
+      console.warn("Session storage reset failed", error);
+    }
+
+    this.cachedEffectiveUserId = null;
+    this.cachedEffectiveUserSourceUserId = null;
+    this.lastRefreshFailureKind = null;
+
+    const teardownListenersSucceeded = await this.notifySessionTeardown({
+      serverSwitch,
+      hadAccountSession
+    });
+    const teardownHandlersSucceeded = await notifySessionTeardownHandlers({
+      serverSwitch,
+      hadAccountSession,
+      waitForInFlight: true
+    });
+    const sessionRequestsDrained = await waitForPendingSessionRequests();
+
+    // Notify the UI only after teardown listeners have captured and drained
+    // their in-flight work. The app-level signed-out listener also calls
+    // StartupSyncService.stop(), so changing state earlier would discard the
+    // promises we need to await here.
     if (!wasSignedOut) {
       this.setState(AuthState.SIGNED_OUT);
     }
+
+    let accountDataCleared = true;
+    if (shouldClearAccountData) {
+      try {
+        clearAccountLocalData();
+      } catch (error) {
+        accountDataCleared = false;
+        console.warn("Account-local data reset failed during session teardown", error);
+      }
+    }
+
+    let pluginDataCleared = true;
+    if (shouldClearAccountData) {
+      try {
+        pluginDataCleared = (await PluginCodeStore.clearAll()) !== false;
+      } catch (error) {
+        pluginDataCleared = false;
+        console.warn("Plugin code reset failed during session teardown", error);
+      }
+    }
+
+    // A completed teardown starts a fresh request generation. Requests begun
+    // before the switch remain cancelled, while the next auth/QR attempt can
+    // use a live signal without waiting for a page reload.
+    this.sessionAbortController = createAbortController();
+
+    if (!verify) {
+      return true;
+    }
+    let accountDataVerified = true;
+    if (shouldClearAccountData) {
+      try {
+        accountDataVerified = !hasAccountLocalData();
+      } catch (error) {
+        accountDataVerified = false;
+        console.warn("Unable to verify account-local cleanup", error);
+      }
+    }
+    return Boolean(
+      sessionStorageCleared &&
+      teardownListenersSucceeded &&
+      teardownHandlersSucceeded &&
+      sessionRequestsDrained &&
+      accountDataCleared &&
+      pluginDataCleared &&
+      accountDataVerified &&
+      !SessionStore.accessToken &&
+      !SessionStore.refreshToken &&
+      (!shouldClearAccountData || !SessionStore.isAnonymousSession)
+    );
   }
 
   async refreshSessionIfNeeded({ force = false } = {}) {
@@ -185,13 +393,16 @@ class AuthManagerClass {
 
     this.refreshPromise = (async () => {
       try {
+        const generation = this.sessionGeneration;
+        const key = publishableKey();
         const res = await fetchSupabaseAuth("/auth/v1/token?grant_type=refresh_token", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: SUPABASE_ANON_KEY
+            apikey: key
           },
-          body: JSON.stringify({ refresh_token: refreshToken })
+          body: JSON.stringify({ refresh_token: refreshToken }),
+          signal: this.getSessionSignal()
         });
         if (!res.ok) {
           const responseBody = await res.text();
@@ -205,6 +416,10 @@ class AuthManagerClass {
           return Boolean(accessToken);
         }
         const data = await res.json();
+        if (generation !== this.sessionGeneration) {
+          this.lastRefreshFailureKind = "failed";
+          return false;
+        }
         if (!data?.access_token) {
           this.lastRefreshFailureKind = "transient";
           return Boolean(accessToken);
@@ -236,24 +451,120 @@ class AuthManagerClass {
   // ------------------------------------
 
   async startTvLoginSession(deviceNonce, deviceName, redirectBaseUrl) {
-    const res = await fetchSupabaseAuth("/rest/v1/rpc/start_tv_login_session", {
+    const request = (includeDeviceName) =>
+      fetchSupabaseAuth("/rest/v1/rpc/start_tv_login_session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: publishableKey(),
+          Authorization: `Bearer ${SessionStore.accessToken || publishableKey()}`
+        },
+        body: JSON.stringify({
+          p_device_nonce: deviceNonce,
+          p_redirect_base_url: redirectBaseUrl,
+          ...(includeDeviceName && deviceName && { p_device_name: deviceName })
+        }),
+        signal: this.getSessionSignal()
+      });
+
+    let res = await request(Boolean(deviceName));
+    if (!res.ok) {
+      const error = new Error(await parseResponseError(res));
+      const message = String(error.message || "").toLowerCase();
+      if (
+        deviceName &&
+        message.includes("start_tv_login_session") &&
+        message.includes("could not find the function") &&
+        message.includes("p_device_name")
+      ) {
+        res = await request(false);
+      } else {
+        throw error;
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(await parseResponseError(res));
+    }
+
+    const data = await res.json();
+    return data?.[0] || null;
+  }
+
+  async startDeviceLoginSession(
+    deviceNonce,
+    deviceName,
+    deviceType = "tv",
+    redirectBaseUrl,
+    legacyRedirectBaseUrl
+  ) {
+    const key = publishableKey();
+    const res = await fetchSupabaseAuth("/rest/v1/rpc/start_device_login_session", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SessionStore.accessToken}`
+        apikey: key,
+        Authorization: `Bearer ${SessionStore.accessToken || key}`
       },
       body: JSON.stringify({
         p_device_nonce: deviceNonce,
         p_redirect_base_url: redirectBaseUrl,
+        p_device_type: deviceType,
         ...(deviceName && { p_device_name: deviceName })
-      })
+      }),
+      signal: this.getSessionSignal()
     });
 
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) {
+      const error = new Error(await parseResponseError(res));
+      if (!isMissingDeviceLoginFunction(error)) {
+        throw error;
+      }
+
+      const legacy = await this.startTvLoginSession(
+        deviceNonce,
+        deviceName,
+        legacyRedirectBaseUrl || redirectBaseUrl
+      );
+      if (!legacy) {
+        throw new Error("Empty response from start_tv_login_session");
+      }
+      return {
+        deviceCode: String(legacy.device_code || legacy.deviceCode || legacy.code || ""),
+        userCode: String(legacy.user_code || legacy.userCode || legacy.code || ""),
+        verificationUri: String(
+          legacyRedirectBaseUrl ||
+            legacy.verification_uri ||
+            legacy.verificationUri ||
+            legacy.web_url ||
+            ""
+        ),
+        verificationUriComplete: String(
+          legacy.verification_uri_complete ||
+            legacy.verificationUriComplete ||
+            legacy.qr_content ||
+            legacy.web_url ||
+            ""
+        ),
+        expiresAt: legacy.expires_at || legacy.expiresAt || null,
+        pollIntervalSeconds: Number(
+          legacy.poll_interval_seconds || legacy.pollIntervalSeconds || 3
+        ),
+        legacy: true
+      };
+    }
 
     const data = await res.json();
-    return data[0];
+    const row = data?.[0] || {};
+    return {
+      deviceCode: String(row.device_code || ""),
+      userCode: String(row.user_code || ""),
+      verificationUri: String(row.verification_uri || ""),
+      verificationUriComplete: String(row.verification_uri_complete || ""),
+      expiresAt: row.expires_at || null,
+      pollIntervalSeconds: Number(row.poll_interval_seconds || 3),
+      legacy: false
+    };
   }
 
   async pollTvLoginSession(code, deviceNonce) {
@@ -261,19 +572,20 @@ class AuthManagerClass {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SessionStore.accessToken}`
+        apikey: publishableKey(),
+        Authorization: `Bearer ${SessionStore.accessToken || publishableKey()}`
       },
       body: JSON.stringify({
         p_code: code,
         p_device_nonce: deviceNonce
-      })
+      }),
+      signal: this.getSessionSignal()
     });
 
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await parseResponseError(res));
 
     const data = await res.json();
-    return data[0];
+    return data?.[0] || null;
   }
 
   async exchangeTvLoginSession(code, deviceNonce) {
@@ -281,23 +593,31 @@ class AuthManagerClass {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SessionStore.accessToken}`
+        apikey: publishableKey(),
+        Authorization: `Bearer ${SessionStore.accessToken || publishableKey()}`
       },
       body: JSON.stringify({
         code,
         device_nonce: deviceNonce
-      })
+      }),
+      signal: this.getSessionSignal()
     });
 
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await parseResponseError(res));
 
     const data = await res.json();
 
-    SessionStore.accessToken = data.accessToken;
-    SessionStore.refreshToken = data.refreshToken;
+    const accessToken = data?.accessToken || data?.access_token;
+    const refreshToken = data?.refreshToken || data?.refresh_token;
+    if (!accessToken || !refreshToken) {
+      throw new Error("QR exchange missing session tokens");
+    }
+    SessionStore.accessToken = accessToken;
+    SessionStore.refreshToken = refreshToken;
+    SessionStore.isAnonymousSession = false;
 
     this.setState(AuthState.AUTHENTICATED);
+    return data;
   }
 
   // ------------------------------------
@@ -306,37 +626,45 @@ class AuthManagerClass {
 
   async getEffectiveUserId() {
     if (this.cachedEffectiveUserId) return this.cachedEffectiveUserId;
+    const generation = this.sessionGeneration;
 
     if (!SessionStore.accessToken) {
       const refreshed = await this.refreshSessionIfNeeded();
-      if (!refreshed || !SessionStore.accessToken) {
+      if (generation !== this.sessionGeneration || !refreshed || !SessionStore.accessToken) {
         await this.signOut();
         throw new Error("Missing valid session token");
       }
     }
 
+    const key = publishableKey();
     const authHeaders = {
       "Content-Type": "application/json",
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SessionStore.accessToken}`
+      apikey: key,
+      Authorization: `Bearer ${SessionStore.accessToken || key}`
     };
 
     let res = await fetchSupabaseAuth("/rest/v1/rpc/get_sync_owner", {
       method: "POST",
-      headers: authHeaders
+      headers: authHeaders,
+      signal: this.getSessionSignal()
     });
 
     if (res.status === 401) {
       const refreshed = await this.refreshSessionIfNeeded({ force: true });
-      if (refreshed) {
+      if (generation === this.sessionGeneration && refreshed) {
         res = await fetchSupabaseAuth("/rest/v1/rpc/get_sync_owner", {
           method: "POST",
           headers: {
             ...authHeaders,
             Authorization: `Bearer ${SessionStore.accessToken}`
-          }
+          },
+          signal: this.getSessionSignal()
         });
       }
+    }
+
+    if (generation !== this.sessionGeneration) {
+      throw new Error("Session changed while resolving sync owner");
     }
 
     if (!res.ok) {

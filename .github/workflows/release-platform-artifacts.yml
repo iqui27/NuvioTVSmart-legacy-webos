@@ -279,7 +279,21 @@ jobs:
         run: gh release upload "$env:TAG_NAME" "$env:INSTALLER_NAME" --repo "$env:SOURCE_REPO" --clobber
 
   build-mac-installer-release:
-    runs-on: macos-latest
+    # Build each architecture natively so Electron and bundled .node modules
+    # are produced for the same CPU architecture.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+            asset_arch: x64
+            binary_arch: x86_64
+          - runner: macos-latest
+            arch: arm64
+            asset_arch: arm64
+            binary_arch: arm64
+    runs-on: ${{ matrix.runner }}
     needs:
       - resolve-release-payload
       - build-webos-release
@@ -302,20 +316,43 @@ jobs:
       - name: Install installer dependencies
         run: npm ci
 
-      - name: Build macOS installer
-        run: npm run dist:mac
+      - name: Build macOS installer (${{ matrix.asset_arch }})
+        run: npm run dist:mac -- --${{ matrix.arch }}
 
-      - name: Package macOS app
+      - name: Verify and package macOS installer (${{ matrix.asset_arch }})
         id: installer
         env:
           TAG_NAME: ${{ needs.resolve-release-payload.outputs.tag }}
+          EXPECTED_ARCH: ${{ matrix.binary_arch }}
+          ASSET_ARCH: ${{ matrix.asset_arch }}
         run: |
           APP_PATH="$(find dist -type d -name '*.app' -print | head -n 1)"
           if [ -z "$APP_PATH" ]; then
             echo "Expected macOS .app was not created" >&2
             exit 1
           fi
-          TARGET_FILE="NuvioTVSmart-Installer-macOS-${TAG_NAME}.zip"
+
+          MAIN_BINARY="$(find "$APP_PATH/Contents/MacOS" -type f -print | head -n 1)"
+          if [ -z "$MAIN_BINARY" ]; then
+            echo "Expected macOS executable was not created" >&2
+            exit 1
+          fi
+
+          MAIN_ARCHES="$(lipo -archs "$MAIN_BINARY")"
+          if [[ " $MAIN_ARCHES " != *" $EXPECTED_ARCH "*" ]]; then
+            echo "Unexpected macOS executable architecture: $MAIN_ARCHES (expected $EXPECTED_ARCH)" >&2
+            exit 1
+          fi
+
+          while IFS= read -r -d '' NATIVE_MODULE; do
+            MODULE_ARCHES="$(lipo -archs "$NATIVE_MODULE" 2>/dev/null || true)"
+            if [[ " $MODULE_ARCHES " != *" $EXPECTED_ARCH "*" ]]; then
+              echo "Native module is incompatible with $EXPECTED_ARCH: $NATIVE_MODULE ($MODULE_ARCHES)" >&2
+              exit 1
+            fi
+          done < <(find "$APP_PATH" -type f -name '*.node' -print0)
+
+          TARGET_FILE="NuvioTVSmart-Installer-macOS-${ASSET_ARCH}-${TAG_NAME}.zip"
           ditto -c -k --keepParent "$APP_PATH" "$TARGET_FILE"
           echo "installer_name=$TARGET_FILE" >> "$GITHUB_OUTPUT"
 

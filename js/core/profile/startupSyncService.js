@@ -22,7 +22,6 @@ import { ThemeManager } from "../../ui/theme/themeManager.js";
 import { MemberAccessRepository } from "../../data/remote/supabase/memberAccessRepository.js";
 import { I18n } from "../../i18n/index.js";
 import { hasProfileSettingsCloudSyncPending } from "../../data/local/profileScopedStore.js";
-import { Platform } from "../../platform/index.js";
 import {
   getSyncBackoffRemainingMs,
   isSyncBackoffActive,
@@ -32,16 +31,39 @@ import {
 const FOREGROUND_ACTIVITY_PULL_DELAY_MS = 2500;
 const FOREGROUND_ACTIVITY_PULL_MIN_INTERVAL_MS = 2 * 60 * 1000;
 const PERIODIC_SURFACE_PULL_INTERVAL_MS = 15 * 60 * 1000;
-const ADDON_PUSH_DEBOUNCE_MS = 1000;
+const ADDON_PUSH_DEBOUNCE_MS = 500;
 const MAX_PULL_ATTEMPTS = 3;
 const FORCE_RESYNC_MIN_INTERVAL_MS = 30000;
 const FULL_STARTUP_PULL_TTL_MS = 6 * 60 * 60 * 1000;
 const STARTUP_SYNC_STATE_KEY = "startupSyncState";
 const syncPullCompletedListeners = new Set();
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function createAbortError() {
+  const error = new Error("Startup sync aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function sleep(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    let timerId = 0;
+    const onAbort = () => {
+      if (timerId) clearTimeout(timerId);
+      signal?.removeEventListener?.("abort", onAbort);
+      reject(createAbortError());
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    timerId = setTimeout(
+      () => {
+        signal?.removeEventListener?.("abort", onAbort);
+        resolve();
+      },
+      Math.max(0, Number(ms) || 0)
+    );
+    signal?.addEventListener?.("abort", onAbort, { once: true });
   });
 }
 
@@ -190,6 +212,7 @@ export const StartupSyncService = {
   watchStateInFlightGeneration: 0,
   libraryInFlightPromise: null,
   libraryInFlightGeneration: 0,
+  addonPushPromise: null,
   profileScopedSyncEnabled: false,
   addonPushTimer: null,
   backoffRetryTimer: null,
@@ -317,7 +340,16 @@ export const StartupSyncService = {
     }, PERIODIC_SURFACE_PULL_INTERVAL_MS);
   },
 
-  stop() {
+  stop({ waitForInFlight = false } = {}) {
+    const pendingPromises = waitForInFlight
+      ? [
+          this.inFlightPromise,
+          this.foregroundPullPromise,
+          this.watchStateInFlightPromise,
+          this.libraryInFlightPromise,
+          this.addonPushPromise
+        ].filter((promise) => promise && typeof promise.then === "function")
+      : [];
     this.started = false;
     this.runGeneration += 1;
     this.profileScopedSyncEnabled = false;
@@ -350,11 +382,16 @@ export const StartupSyncService = {
       this.backoffRetryTimer = null;
     }
     this.backoffRetryNotifyPullCompleted = false;
+    this.addonPushPromise = null;
     if (this.unsubscribeAddonChanges) {
       this.unsubscribeAddonChanges();
       this.unsubscribeAddonChanges = null;
     }
     resetSyncBackoff();
+    if (!waitForInFlight || pendingPromises.length === 0) {
+      return Promise.resolve(true);
+    }
+    return Promise.allSettled(pendingPromises).then(() => true);
   },
 
   enableProfileScopedSync() {
@@ -558,7 +595,7 @@ export const StartupSyncService = {
             break;
           }
           if (attempt < MAX_PULL_ATTEMPTS) {
-            await sleep(3000);
+            await sleep(3000, AuthManager.getSessionSignal?.());
           }
         }
         this.lastPullCompleted = completed;
@@ -681,17 +718,6 @@ export const StartupSyncService = {
       return false;
     }
 
-    // Tizen's PluginService must be ready before plugin reconciliation because
-    // its service transport can otherwise leave a queued transaction in an
-    // ambiguous state. On webOS the service is optional for account sync: a
-    // missing service must not prevent watched items and watch progress from
-    // refreshing the Home Continue Watching row.
-    if (Platform.isTizen()) {
-      await PluginSyncService.pull(activeProfileId);
-    } else {
-      await runSurface("plugins", () => PluginSyncService.pull(activeProfileId));
-    }
-
     // `LibrarySyncService.pull` devolve a lista de URLs, nao um booleano, e
     // aplica a ordem com `{ silent: true }` — nao da para saber pelo retorno
     // nem pelos eventos do repositorio se algo mudou. A lista inteira sao
@@ -699,6 +725,9 @@ export const StartupSyncService = {
     // barato que qualquer alternativa.
     const addonUrlsBefore = String(addonRepository.getInstalledAddonUrls() || []);
     const surfaceResults = await Promise.all([
+      // Android pulls plugins and addons as independent surfaces. Keep a
+      // plugin-service/readiness failure from suppressing the addon snapshot.
+      runSurface("plugins", () => PluginSyncService.pull(activeProfileId)),
       runSurface("collections", () => CollectionSyncService.pull(activeProfileId)),
       runSurface("home catalog settings", () =>
         HomeCatalogSettingsSyncService.pull(activeProfileId)
@@ -706,19 +735,22 @@ export const StartupSyncService = {
       runSurface("addons", () => LibrarySyncService.pull()),
       runSurface("saved library", () => SavedLibrarySyncService.pull(activeProfileId))
     ]);
-    // Indices em `surfaceResults`: 0 collections, 1 home catalog settings,
-    // 2 addons, 3 saved library. (`plugins` saiu deste array em 1.0.7: virou o
-    // await acima, fora do runSurface.)
+    // Indices em `surfaceResults`: 0 plugins, 1 collections, 2 home catalog
+    // settings, 3 addons, 4 saved library. (`plugins` saiu deste array em 1.0.7
+    // e voltou em 1.1.2, quando o upstream decidiu que uma falha de prontidao do
+    // servico de plugin nao pode suprimir o snapshot de addons.)
     //
-    // So 0 e 1 entram no sinal. `savedLibrary` a Home so consulta item a item,
+    // So 1 e 2 entram no sinal. `plugins` (indice 0) a Home nao le em lugar
+    // nenhum -- quem le e a tela de ajustes e o runtime do player.
+    // `savedLibrary` a Home so consulta item a item,
     // por `isSaved`, para o estado do card expandido; nao e disso que as
     // fileiras sao feitas. Devolve ARRAY e nao booleano, entao contava como
     // "mudou" em todo boot, e era justamente o que impedia o refresh de ser
     // dispensado. `addons` (indice 2) tambem devolve array e e tratada pela
     // comparacao de URLs logo abaixo.
-    [0, 1].forEach((index) => {
+    [1, 2].forEach((index) => {
       const changed = surfaceChangedHomeInputs(surfaceResults[index]);
-      logSurfaceChange(index === 0 ? "collections" : "home catalog settings", changed);
+      logSurfaceChange(index === 1 ? "collections" : "home catalog settings", changed);
       this.markHomeInputsChanged(changed);
     });
     const addonsChanged = String(addonRepository.getInstalledAddonUrls() || []) !== addonUrlsBefore;
@@ -830,11 +862,13 @@ export const StartupSyncService = {
         if (!this.isCurrentProfile(profileId, profileKey)) {
           return false;
         }
-        const [addonsResult, savedLibraryResult] = await Promise.all([
-          runSurface("periodic addons", () => LibrarySyncService.pull()),
-          runSurface("periodic saved library", () => SavedLibrarySyncService.pull(profileId))
-        ]);
-        if (!addonsResult.ok || !savedLibraryResult.ok) {
+        // Android's foreground/periodic activity cycle refreshes the Nuvio
+        // library, but addon/plugin repositories are refreshed by the full
+        // startup pull or by their explicit/manual sync path.
+        const savedLibraryResult = await runSurface("periodic saved library", () =>
+          SavedLibrarySyncService.pull(profileId)
+        );
+        if (!savedLibraryResult.ok) {
           return false;
         }
         if (isSyncBackoffActive()) {
@@ -910,19 +944,38 @@ export const StartupSyncService = {
       Number(delayMs) || 0,
       cooldownMs > 0 ? cooldownMs + 50 : 0
     );
-    this.addonPushTimer = setTimeout(async () => {
+    this.addonPushTimer = setTimeout(() => {
       this.addonPushTimer = null;
-      if (!AuthManager.isAuthenticated) {
-        return;
-      }
-      if (isSyncBackoffActive()) {
-        this.scheduleAddonPush();
-        return;
-      }
-      const didPush = await LibrarySyncService.push();
-      if (!didPush && isSyncBackoffActive()) {
-        this.scheduleAddonPush();
-      }
+      let pushPromise = null;
+      pushPromise = Promise.resolve()
+        .then(async () => {
+          if (!AuthManager.isAuthenticated) {
+            return false;
+          }
+          if (isSyncBackoffActive()) {
+            this.scheduleAddonPush();
+            return false;
+          }
+          const didPush = await LibrarySyncService.push();
+          if (!didPush && isSyncBackoffActive()) {
+            this.scheduleAddonPush();
+          }
+          return didPush;
+        })
+        .catch((error) => {
+          console.warn("Addon push failed", error);
+          return false;
+        })
+        .finally(() => {
+          if (this.addonPushPromise === pushPromise) {
+            this.addonPushPromise = null;
+          }
+        });
+      this.addonPushPromise = pushPromise;
     }, effectiveDelayMs);
   }
 };
+
+AuthManager.registerSessionTeardownListener?.(() =>
+  StartupSyncService.stop({ waitForInFlight: true })
+);

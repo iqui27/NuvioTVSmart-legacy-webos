@@ -1,5 +1,6 @@
-import { SUPABASE_FALLBACK_URL, SUPABASE_URL } from "../../config.js";
+import { ServerConfigurationStore } from "../../data/local/serverConfigurationStore.js";
 import { recordSyncFailure } from "../sync/syncBackoffPolicy.js";
+import { trackSessionRequest } from "./sessionLifecycle.js";
 
 const RETRYABLE_AUTH_STATUSES = new Set([
   408, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 530
@@ -45,9 +46,10 @@ async function isRetryableResponse(response) {
   }
 }
 
-export async function fetchSupabaseAuth(endpoint, init = {}) {
-  const primaryBaseUrl = normalizeBaseUrl(SUPABASE_URL);
-  const fallbackBaseUrl = normalizeBaseUrl(SUPABASE_FALLBACK_URL);
+async function fetchSupabaseAuthInternal(endpoint, init = {}) {
+  const configuration = ServerConfigurationStore.getActive();
+  const primaryBaseUrl = normalizeBaseUrl(configuration.backendUrl);
+  const fallbackBaseUrl = normalizeBaseUrl(configuration.fallbackBackendUrl);
   const canFallback =
     Boolean(fallbackBaseUrl) && fallbackBaseUrl.toLowerCase() !== primaryBaseUrl.toLowerCase();
   const primaryUrl = authUrl(primaryBaseUrl, endpoint);
@@ -82,4 +84,8 @@ export async function fetchSupabaseAuth(endpoint, init = {}) {
     recordSyncFailure({ status: fallbackResponse.status });
   }
   return fallbackResponse;
+}
+
+export function fetchSupabaseAuth(endpoint, init = {}) {
+  return trackSessionRequest(fetchSupabaseAuthInternal(endpoint, init));
 }

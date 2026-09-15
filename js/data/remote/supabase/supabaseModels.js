@@ -1,3 +1,14 @@
+function readBooleanFlag(...values) {
+  const value = values.find((candidate) => candidate !== undefined && candidate !== null);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+  return false;
+}
+
 export function mapSupabaseProfile(row = {}) {
   return {
     id: row.id || "",
@@ -8,8 +19,8 @@ export function mapSupabaseProfile(row = {}) {
     profileBackgroundId:
       String(row.profile_background_id || row.profileBackgroundId || "").trim() || null,
     profileBackgroundUrl: row.profile_background_url || row.profileBackgroundUrl || null,
-    usesPrimaryAddons: Boolean(row.uses_primary_addons || row.usesPrimaryAddons),
-    usesPrimaryPlugins: Boolean(row.uses_primary_plugins || row.usesPrimaryPlugins),
-    isPrimary: Boolean(row.is_primary)
+    usesPrimaryAddons: readBooleanFlag(row.uses_primary_addons, row.usesPrimaryAddons),
+    usesPrimaryPlugins: readBooleanFlag(row.uses_primary_plugins, row.usesPrimaryPlugins),
+    isPrimary: readBooleanFlag(row.is_primary, row.isPrimary)
   };
 }

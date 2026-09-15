@@ -1,5 +1,7 @@
 /* global __NUVIO_APP_VERSION__ */
 import { SIMKL_API_URL, SIMKL_APP_NAME, SIMKL_CLIENT_ID } from "../../config.js";
+import { AuthManager } from "../../core/auth/authManager.js";
+import { trackSessionRequest } from "../../core/auth/sessionLifecycle.js";
 import { SimklAuthStore } from "../local/simklAuthStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 
@@ -23,16 +25,46 @@ function apiBaseUrl() {
   return String(SIMKL_API_URL || DEFAULT_API_URL).replace(/\/+$/, "");
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function createAbortError() {
+  const error = new Error("Simkl request aborted");
+  error.name = "AbortError";
+  return error;
 }
 
-async function rateLimitedFetch(url, options, method) {
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function sleep(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      reject(createAbortError());
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    timer = setTimeout(
+      () => {
+        signal?.removeEventListener?.("abort", onAbort);
+        resolve();
+      },
+      Math.max(0, Number(ms) || 0)
+    );
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+async function rateLimitedFetch(url, options, method, signal = null) {
   const isGet = String(method || "GET").toUpperCase() === "GET";
   const scheduledAt = isGet ? nextGetAt : nextWriteAt;
-  if (scheduledAt > Date.now()) await sleep(scheduledAt - Date.now());
+  throwIfAborted(signal);
+  if (scheduledAt > Date.now()) await sleep(scheduledAt - Date.now(), signal);
   try {
-    return await fetch(url, options);
+    return await fetch(url, { ...options, ...(signal ? { signal } : {}) });
   } finally {
     const nextAt = Date.now() + (isGet ? GET_INTERVAL_MS : WRITE_INTERVAL_MS);
     if (isGet) nextGetAt = Math.max(nextGetAt, nextAt);
@@ -67,10 +99,13 @@ async function executeSimklRequest(
     authenticated = true,
     retry = true,
     authorizationToken = null,
-    authProfileId = null
+    authProfileId = null,
+    signal = null
   } = {}
 ) {
   if (!SIMKL_CLIENT_ID) throw new Error("Missing SIMKL_CLIENT_ID");
+  const requestSignal = signal || AuthManager.getSessionSignal?.() || null;
+  throwIfAborted(requestSignal);
   const url = new URL(`${apiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`);
   url.searchParams.set("client_id", SIMKL_CLIENT_ID);
   url.searchParams.set("app-name", SIMKL_APP_NAME || "nuvio");
@@ -92,11 +127,13 @@ async function executeSimklRequest(
           headers,
           body: body == null ? undefined : JSON.stringify(body)
         },
-        method
+        method,
+        requestSignal
       );
     } catch (error) {
+      if (requestSignal?.aborted || error?.name === "AbortError") throw error;
       if (attempt + 1 >= attempts) throw error;
-      await sleep(Math.min(60000, 1000 * 2 ** attempt));
+      await sleep(Math.min(60000, 1000 * 2 ** attempt), requestSignal);
       continue;
     }
     const payload = await readPayload(response);
@@ -121,7 +158,8 @@ async function executeSimklRequest(
     }
     const retryAfter = Math.max(0, Number(response.headers.get("Retry-After") || 0) || 0) * 1000;
     await sleep(
-      Math.min(60000, Math.max(retryAfter, syncWriteLocked ? 3000 : 1000 * 2 ** attempt))
+      Math.min(60000, Math.max(retryAfter, syncWriteLocked ? 3000 : 1000 * 2 ** attempt)),
+      requestSignal
     );
   }
   throw new Error("Simkl request failed");
@@ -129,10 +167,13 @@ async function executeSimklRequest(
 
 export function simklRequest(path, options = {}) {
   const authProfileId = String(options.profileId || activeProfileId());
+  const signal = options.signal || AuthManager.getSessionSignal?.() || null;
   const authorizationToken =
     options.authenticated === false ? null : SimklAuthStore.get(authProfileId).accessToken;
-  const task = requestQueue.then(() =>
-    executeSimklRequest(path, { ...options, authProfileId, authorizationToken })
+  const task = trackSessionRequest(
+    requestQueue.then(() =>
+      executeSimklRequest(path, { ...options, authProfileId, authorizationToken, signal })
+    )
   );
   requestQueue = task.catch(() => false);
   return task;

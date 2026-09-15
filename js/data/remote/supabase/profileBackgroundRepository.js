@@ -77,13 +77,20 @@ async function loadAndPublish(item) {
           true
         );
         if (blob) {
+          if (generation !== cacheGeneration) {
+            return null;
+          }
           await MemberCatalogStorage.saveAsset(
             "profile-background",
             item.id,
             item.assetVersion,
-            blob
+            blob,
+            { shouldSave: () => generation === cacheGeneration }
           );
         }
+      }
+      if (generation !== cacheGeneration) {
+        return null;
       }
       const imageUrl = await createStorageAssetUrl(blob);
       if (!imageUrl) {

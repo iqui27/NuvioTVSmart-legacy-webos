@@ -2969,4 +2969,18 @@
     <string name="settings.plugins.removeRepository">Hiq repository-n</string>
     <string name="home.continueStatusWatchedPercent">Shikuar {{percent}}%</string>
     <string name="player_post_play_play_manually">Luaj manualisht</string>
+<string name="server_options_title">Server options</string>
+<string name="server_options_custom_active">Connected to a self-hosted server</string>
+<string name="server_options_official_active">Using the official Nuvio server</string>
+<string name="auth_email_email_label">Email</string>
+<string name="auth_email_password_label">Password</string>
+<string name="auth_email_required">Enter your email and password.</string>
+<string name="auth_email_invalid_credentials">The email or password is incorrect.</string>
+<string name="auth_email_network_error">Could not reach the server. Check your connection and try again.</string>
+<string name="auth_email_sign_in_failed">Sign in failed: %1$s</string>
+<string name="auth_qr_configure_server">Configure a server to generate a QR code</string>
+<string name="auth_qr_not_configured">Choose Server options to connect this TV before generating a QR code.</string>
+    <string name="custom_server_capability_email">Email and password</string>
+    <string name="custom_server_capability_tv_login">TV/QR login</string>
+    <string name="auth_qr_manual_instruction">Or go to %1$s and enter</string>
 </resources>

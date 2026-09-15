@@ -1,6 +1,7 @@
 import { SessionStore } from "../storage/sessionStore.js";
 import { AuthManager } from "../auth/authManager.js";
 import { fetchViaWebOsSupabaseProxy } from "../../platform/webos/webosSupabaseProxy.js";
+import { withRequestTimeout } from "./requestTimeout.js";
 
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 60_000;
 const BACKEND_RETRY_MAX_DELAY_MS = 30_000;
@@ -66,15 +67,41 @@ function recordBackendCooldown(response) {
   backendCooldownUntilMs = Math.max(backendCooldownUntilMs, Date.now() + delayMs);
 }
 
-async function waitForBackendCooldown() {
-  while (backendCooldownUntilMs > Date.now()) {
-    await new Promise((resolve) => setTimeout(resolve, backendCooldownUntilMs - Date.now()));
+function createAbortError() {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function waitWithAbort(delayMs, signal) {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortError());
   }
+  return new Promise((resolve, reject) => {
+    let timeoutId = 0;
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = 0;
+      }
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+    const onResolve = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(createAbortError());
+    };
+    timeoutId = setTimeout(onResolve, Math.max(0, Number(delayMs) || 0));
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
 }
 
 async function fetchWithBackendRetry(url, fetchInit, method) {
   const safeRetry = isSafeBackendRetryRequest(url, method);
-  await waitForBackendCooldown();
+  await waitWithAbort(Math.max(0, backendCooldownUntilMs - Date.now()), fetchInit.signal);
   let response =
     (await fetchViaWebOsSupabaseProxy(url, fetchInit)) || (await fetch(url, fetchInit));
   recordBackendCooldown(response);
@@ -87,9 +114,9 @@ async function fetchWithBackendRetry(url, fetchInit, method) {
       (headerDelay ?? fallbackDelay) + Math.floor(Math.random() * (BACKEND_RETRY_JITTER_MS + 1))
     );
     if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await waitWithAbort(delayMs, fetchInit.signal);
     }
-    await waitForBackendCooldown();
+    await waitWithAbort(Math.max(0, backendCooldownUntilMs - Date.now()), fetchInit.signal);
     response = (await fetchViaWebOsSupabaseProxy(url, fetchInit)) || (await fetch(url, fetchInit));
     recordBackendCooldown(response);
   }
@@ -119,53 +146,38 @@ function resolveTimeoutMs(value) {
   return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0;
 }
 
-function createRequestTimeoutError(timeoutMs) {
-  const error = new Error(`Request timed out after ${timeoutMs}ms`);
-  error.code = "REQUEST_TIMEOUT";
-  error.name = "TimeoutError";
-  return error;
-}
-
-async function withRequestTimeout(task, timeoutMs, callerSignal) {
-  if (!timeoutMs) {
-    return task(callerSignal);
+function combineAbortSignals(...signals) {
+  const validSignals = signals.filter((signal) => signal && typeof signal === "object");
+  if (validSignals.length <= 1 || typeof AbortController !== "function") {
+    return {
+      signal: validSignals[0] || null,
+      cleanup() {}
+    };
   }
 
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const requestSignal = controller?.signal || callerSignal;
-  let removeAbortListener = null;
-  if (controller && callerSignal) {
-    const forwardAbort = () => controller.abort();
-    if (callerSignal.aborted) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
       controller.abort();
-    } else if (typeof callerSignal.addEventListener === "function") {
-      callerSignal.addEventListener("abort", forwardAbort, { once: true });
-      removeAbortListener = () => callerSignal.removeEventListener("abort", forwardAbort);
     }
-  }
-
-  let timeoutId = 0;
-  let didTimeout = false;
-  try {
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => {
-        didTimeout = true;
-        controller?.abort();
-        reject(createRequestTimeoutError(timeoutMs));
-      }, timeoutMs);
-    });
-    return await Promise.race([Promise.resolve().then(() => task(requestSignal)), timeoutPromise]);
-  } catch (error) {
-    if (didTimeout) {
-      throw createRequestTimeoutError(timeoutMs);
+  };
+  const listeners = [];
+  validSignals.forEach((signal) => {
+    if (signal.aborted) {
+      abort();
+      return;
     }
-    throw error;
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
+    if (typeof signal.addEventListener === "function") {
+      signal.addEventListener("abort", abort, { once: true });
+      listeners.push(signal);
     }
-    removeAbortListener?.();
-  }
+  });
+  return {
+    signal: controller.signal,
+    cleanup() {
+      listeners.forEach((signal) => signal.removeEventListener?.("abort", abort));
+    }
+  };
 }
 
 export async function httpRequest(url, options = {}) {
@@ -202,98 +214,106 @@ export async function httpRequest(url, options = {}) {
   } = options;
 
   const timeoutMs = resolveTimeoutMs(requestedTimeoutMs);
-  return withRequestTimeout(
-    async (requestSignal) => {
-      const fetchInit = {
-        ...fetchOptions,
-        method,
-        credentials: fetchOptions.credentials || "omit",
-        headers,
-        ...(requestSignal ? { signal: requestSignal } : {})
-      };
+  const combinedSignals = combineAbortSignals(
+    callerSignal,
+    includeSessionAuth ? AuthManager.getSessionSignal?.() : null
+  );
+  try {
+    return await withRequestTimeout(
+      async (requestSignal) => {
+        const fetchInit = {
+          ...fetchOptions,
+          method,
+          credentials: fetchOptions.credentials || "omit",
+          headers,
+          ...(requestSignal ? { signal: requestSignal } : {})
+        };
 
-      let response = await fetchWithBackendRetry(url, fetchInit, method);
+        let response = await fetchWithBackendRetry(url, fetchInit, method);
 
-      if (response.status === 401 && includeSessionAuth && SessionStore.refreshToken) {
-        const refreshed = await AuthManager.refreshSessionIfNeeded({ force: true });
-        refreshFailedTransiently = AuthManager.wasLastSessionRefreshTransientFailure?.() === true;
-        if (refreshed && SessionStore.accessToken) {
-          const retryInit = {
-            ...fetchInit,
-            method,
-            headers: {
-              ...headers,
-              Authorization: `Bearer ${SessionStore.accessToken}`
-            }
-          };
-          response = await fetchWithBackendRetry(url, retryInit, method);
+        if (response.status === 401 && includeSessionAuth && SessionStore.refreshToken) {
+          const refreshed = await AuthManager.refreshSessionIfNeeded({ force: true });
+          refreshFailedTransiently = AuthManager.wasLastSessionRefreshTransientFailure?.() === true;
+          if (refreshed && SessionStore.accessToken) {
+            const retryInit = {
+              ...fetchInit,
+              method,
+              headers: {
+                ...headers,
+                Authorization: `Bearer ${SessionStore.accessToken}`
+              }
+            };
+            response = await fetchWithBackendRetry(url, retryInit, method);
+          }
         }
-      }
 
-      if (!response.ok) {
-        if (
-          response.status === 401 &&
-          includeSessionAuth &&
-          (SessionStore.accessToken || SessionStore.refreshToken) &&
-          !refreshFailedTransiently
-        ) {
-          await AuthManager.signOut();
+        if (!response.ok) {
+          if (
+            response.status === 401 &&
+            includeSessionAuth &&
+            (SessionStore.accessToken || SessionStore.refreshToken) &&
+            !refreshFailedTransiently
+          ) {
+            await AuthManager.signOut();
+          }
+          const text = await response.text();
+          const error = new Error(text);
+          error.status = response.status;
+          const retryAfter = response.headers?.get?.("retry-after");
+          if (retryAfter) {
+            const seconds = Number(retryAfter);
+            const retryDate = Date.parse(retryAfter);
+            if (Number.isFinite(seconds) && seconds > 0) {
+              error.retryAfterMs = seconds * 1000;
+            } else if (Number.isFinite(retryDate) && retryDate > Date.now()) {
+              error.retryAfterMs = retryDate - Date.now();
+            }
+          }
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && typeof parsed === "object") {
+              if (typeof parsed.code === "string") {
+                error.code = parsed.code;
+              }
+              if (typeof parsed.message === "string") {
+                error.detail = parsed.message;
+              }
+            }
+          } catch (_parseError) {
+            // Keep raw response text in error.message when payload is not JSON.
+          }
+          throw error;
+        }
+
+        if (response.status === 204) {
+          return null;
+        }
+        const responseType = String(requestedResponseType || "json")
+          .trim()
+          .toLowerCase();
+        if (responseType === "response") {
+          return response;
+        }
+        if (responseType === "blob") {
+          return response.blob();
+        }
+        if (responseType === "arraybuffer" || responseType === "array_buffer") {
+          return response.arrayBuffer();
+        }
+        if (responseType === "text") {
+          return response.text();
         }
         const text = await response.text();
-        const error = new Error(text);
-        error.status = response.status;
-        const retryAfter = response.headers?.get?.("retry-after");
-        if (retryAfter) {
-          const seconds = Number(retryAfter);
-          const retryDate = Date.parse(retryAfter);
-          if (Number.isFinite(seconds) && seconds > 0) {
-            error.retryAfterMs = seconds * 1000;
-          } else if (Number.isFinite(retryDate) && retryDate > Date.now()) {
-            error.retryAfterMs = retryDate - Date.now();
-          }
+        const normalized = typeof text === "string" ? text.trim() : "";
+        if (!normalized) {
+          return null;
         }
-        try {
-          const parsed = JSON.parse(text);
-          if (parsed && typeof parsed === "object") {
-            if (typeof parsed.code === "string") {
-              error.code = parsed.code;
-            }
-            if (typeof parsed.message === "string") {
-              error.detail = parsed.message;
-            }
-          }
-        } catch (_parseError) {
-          // Keep raw response text in error.message when payload is not JSON.
-        }
-        throw error;
-      }
-
-      if (response.status === 204) {
-        return null;
-      }
-      const responseType = String(requestedResponseType || "json")
-        .trim()
-        .toLowerCase();
-      if (responseType === "response") {
-        return response;
-      }
-      if (responseType === "blob") {
-        return response.blob();
-      }
-      if (responseType === "arraybuffer" || responseType === "array_buffer") {
-        return response.arrayBuffer();
-      }
-      if (responseType === "text") {
-        return response.text();
-      }
-      const text = await response.text();
-      const normalized = typeof text === "string" ? text.trim() : "";
-      if (!normalized) {
-        return null;
-      }
-      return JSON.parse(normalized);
-    },
-    timeoutMs,
-    callerSignal
-  );
+        return JSON.parse(normalized);
+      },
+      timeoutMs,
+      combinedSignals.signal
+    );
+  } finally {
+    combinedSignals.cleanup();
+  }
 }

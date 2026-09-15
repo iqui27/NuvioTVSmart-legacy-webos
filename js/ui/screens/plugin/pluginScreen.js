@@ -226,7 +226,7 @@ export const PluginScreen = {
       await this.closeQrOverlay();
     });
 
-    const enterClass = this.pluginRouteEnterPending ? " nuvio-route-slide-enter" : "";
+    const enterClass = this.pluginRouteEnterPending ? " nuvio-route-fade-enter" : "";
     this.container.innerHTML = `
       <div class="addons-shell addons-route-shell">
         <div class="addons-route-content${enterClass}">

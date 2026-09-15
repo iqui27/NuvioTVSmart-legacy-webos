@@ -3193,12 +3193,29 @@ export const SettingsScreen = {
     const signedIn = model.authState === "authenticated";
     const loading = model.authState === "loading";
     this.actionMap.set("account:signin", () => Router.navigate("authQrSignIn"));
-    this.actionMap.set("account:signout", async () => {
-      await AuthManager.signOut();
-      this.accountSyncOverview = null;
-      this.accountSyncOverviewPromise = null;
-      this.accountSyncOverviewLoaded = false;
-      await this.render();
+    this.actionMap.set("account:signout", () => {
+      this.openOptionDialog({
+        title: t("account_sign_out_confirm_title", {}, "Sign out?"),
+        message: t(
+          "account_sign_out_confirm_subtitle",
+          {},
+          "You will need to sign in again to sync library, watch progress, addons, and plugins on this device."
+        ),
+        options: [
+          { id: "cancel", labelKey: "action_cancel", label: "Cancel" },
+          { id: "confirm", labelKey: "account_sign_out", label: "Sign Out" }
+        ],
+        selectedId: "cancel",
+        returnFocusKey: "account:signout",
+        dialogClassName: "settings-account-signout-dialog",
+        onSelect: async (option) => {
+          if (option.id !== "confirm") return;
+          await AuthManager.signOut();
+          this.accountSyncOverview = null;
+          this.accountSyncOverviewPromise = null;
+          this.accountSyncOverviewLoaded = false;
+        }
+      });
     });
 
     return `

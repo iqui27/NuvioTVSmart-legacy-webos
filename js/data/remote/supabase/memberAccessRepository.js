@@ -4,6 +4,7 @@ import { LocalStore } from "../../../core/storage/localStore.js";
 import { SupabaseApi } from "./supabaseApi.js";
 import { AvatarRepository } from "./avatarRepository.js";
 import { ProfileBackgroundRepository } from "./profileBackgroundRepository.js";
+import { MemberCatalogStorage } from "../../local/memberCatalogStorage.js";
 
 const CACHE_KEY = "memberAccessCache";
 const STALE_AFTER_MS = 15 * 60 * 1000;
@@ -22,6 +23,7 @@ const COSMETIC_ENTITLEMENTS = new Set([
 let currentAccess = NONE_ACCESS;
 let currentFetchedAt = 0;
 let refreshPromise = null;
+let accessGeneration = 0;
 const listeners = new Set();
 
 function normalizeAccess(payload) {
@@ -107,33 +109,57 @@ async function refreshRemote() {
   if (refreshPromise) {
     return refreshPromise;
   }
-  refreshPromise = (async () => {
+  const generation = accessGeneration;
+  let requestPromise;
+  requestPromise = (async () => {
     try {
       if (!AuthManager.isAuthenticated) {
         return setCurrent(NONE_ACCESS, 0, false);
       }
       const response = await SupabaseApi.rpc("get_my_member_access", {}, true);
+      if (generation !== accessGeneration || !AuthManager.isAuthenticated) {
+        return currentAccess;
+      }
       return setCurrent(normalizeAccess(response));
     } catch (error) {
       console.warn("Unable to load member access", error);
       return currentAccess;
     } finally {
-      refreshPromise = null;
+      if (refreshPromise === requestPromise) {
+        refreshPromise = null;
+      }
     }
   })();
+  refreshPromise = requestPromise;
   return refreshPromise;
 }
 
 AuthManager.subscribe((state) => {
   if (state === AuthState.SIGNED_OUT) {
+    accessGeneration += 1;
     currentAccess = NONE_ACCESS;
     currentFetchedAt = 0;
     refreshPromise = null;
     LocalStore.remove(CACHE_KEY);
     AvatarRepository.invalidateCache();
     ProfileBackgroundRepository.invalidateCache();
+    void MemberCatalogStorage.clearAll();
     notify(currentAccess);
   }
+});
+
+AuthManager.registerSessionTeardownListener?.(({ serverSwitch = false } = {}) => {
+  if (!serverSwitch) return;
+  const pendingRefresh = refreshPromise;
+  accessGeneration += 1;
+  currentAccess = NONE_ACCESS;
+  currentFetchedAt = 0;
+  LocalStore.remove(CACHE_KEY);
+  AvatarRepository.invalidateCache();
+  ProfileBackgroundRepository.invalidateCache();
+  notify(currentAccess);
+  refreshPromise = null;
+  return Promise.allSettled([pendingRefresh, MemberCatalogStorage.clearAll()]).then(() => true);
 });
 
 export function hasMemberEntitlement(access, entitlement) {
@@ -193,6 +219,7 @@ export const MemberAccessRepository = {
   },
 
   clear() {
+    accessGeneration += 1;
     currentAccess = NONE_ACCESS;
     currentFetchedAt = 0;
     refreshPromise = null;

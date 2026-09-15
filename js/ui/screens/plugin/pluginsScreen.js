@@ -55,12 +55,13 @@ function button({
   icon = "",
   disabled = false,
   destructive = false,
+  variant = "surface",
   focusableWhileBusy = false,
   loading = false
 }) {
   const nativeDisabled = disabled && !focusableWhileBusy;
   return `
-    <button class="plugins-action plugins-focusable focusable${destructive ? " is-destructive" : ""}${disabled ? " is-disabled" : ""}"
+    <button class="plugins-action plugins-focusable focusable${variant === "primary" ? " is-primary" : ""}${destructive ? " is-destructive" : ""}${disabled ? " is-disabled" : ""}"
             data-focus-key="${escapeHtml(focusKey)}"
             data-action="${escapeHtml(action)}"
             aria-disabled="${disabled ? "true" : "false"}"
@@ -376,7 +377,8 @@ export const PluginsScreen = {
           : [];
         const diagnosticsExpanded = this.diagnosticsProviderId === provider.id;
         return `
-          <div class="plugins-provider-row">
+          <article class="plugins-provider-card">
+            <div class="plugins-provider-row">
             <div class="plugins-provider-copy">
               <div class="plugins-provider-title-row">
                 <strong>${escapeHtml(provider.name)}</strong>
@@ -431,7 +433,7 @@ export const PluginsScreen = {
             </div>`
                 : `<span class="plugins-provider-badge">${escapeHtml(t("plugin_metadata_only", {}, "Metadata only"))}</span>`
             }
-          </div>
+            </div>
           ${
             testResult
               ? `<div class="plugins-test-result">
@@ -486,6 +488,7 @@ export const PluginsScreen = {
           </div>`
               : ""
           }
+          </article>
         `;
       })
       .join("");
@@ -517,7 +520,7 @@ export const PluginsScreen = {
       )
       .join("");
     return `
-      <section class="plugins-settings-card plugins-provider-section">
+      <section class="plugins-provider-section">
         <div class="plugins-section-heading">
           <div>
             <h2>${escapeHtml(t("plugin_providers_section", { count: providers.length }, `Providers (${providers.length})`))}</h2>
@@ -636,16 +639,11 @@ export const PluginsScreen = {
   render() {
     this.model = PluginManager.getSummary();
     const model = this.model;
-    const enterClass = this.routeEnterPending ? " nuvio-route-slide-enter" : "";
+    const enterClass = this.routeEnterPending ? " nuvio-route-fade-enter" : "";
     const repositories = Array.isArray(model.repositories) ? model.repositories : [];
     this.container.innerHTML = `
       <div class="plugins-route-shell">
         <div class="plugins-route-content${enterClass}">
-          <header class="plugins-content-header">
-            <div>
-              <h1 class="plugins-title">${escapeHtml(t("plugin_title", {}, "Plugins"))}</h1>
-            </div>
-          </header>
           <main class="plugins-main">
             <div class="plugins-panel">
               ${runtimeNotice(model)}
@@ -683,6 +681,7 @@ export const PluginsScreen = {
                     action: "add-repository",
                     label: t("plugin_add_btn", {}, "Add"),
                     icon: "add",
+                    variant: "primary",
                     disabled: this.busy,
                     loading: this.busyAction === "add-repository"
                   })}
@@ -719,7 +718,7 @@ export const PluginsScreen = {
                 <h2>${escapeHtml(t("plugin_repositories_section", { count: repositories.length }, `Repositories (${repositories.length})`))}</h2>
               </section>
 
-              ${repositories.length ? `<section class="plugins-repository-list">${repositories.map((repository) => this.repositoryCard(repository, model)).join("")}</section>` : `<section class="plugins-settings-card plugins-empty-card"><p>${escapeHtml(t("plugin_no_repos", {}, "No repositories added yet. Add a repository to get started."))}</p></section>`}
+              ${repositories.length ? `<section class="plugins-repository-list">${repositories.map((repository) => this.repositoryCard(repository, model)).join("")}</section>` : `<section class="plugins-empty-card"><p>${escapeHtml(t("plugin_no_repos", {}, "No repositories added yet. Add a repository to get started."))}</section>`}
 
               ${this.providerSection(model)}
             </div>
@@ -942,6 +941,10 @@ export const PluginsScreen = {
       this.render();
       return;
     }
+    // Match Android's add flow: leave the native text input before the
+    // asynchronous repository work starts, otherwise Tizen keeps routing D-pad
+    // arrows to the still-focused input instead of the page focus graph.
+    this.focusKey = "add:submit";
     const operationToken = this.beginBusyAction("add-repository");
     this.setStatus(t("plugin_adding", {}, "Adding repository…"));
     this.render();
