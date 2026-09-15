@@ -37,7 +37,6 @@ const PADRAO_TMDB = /^(https?:\/\/image\.tmdb\.org\/t\/p\/)([A-Za-z0-9]+)(\/.+)$
  * TMDB. Conferindo a cobertura contra a largura REALMENTE desenhada no plano de
  * 720, que e o que decide se a imagem fica borrada:
  *
- *   poster de catalogo  desenha ~147px   w185  = 1,26x   (w342 seria 2,33x)
  *   poster paisagem     desenha ~293px   w500  = 1,71x
  *   logo do hero        desenha ~293px   w342  = 1,17x
  *   backdrop do hero    desenha ~853px   w780  = 0,91x
@@ -46,14 +45,27 @@ const PADRAO_TMDB = /^(https?:\/\/image\.tmdb\.org\/t\/p\/)([A-Za-z0-9]+)(\/.+)$
  * esticado e desfocado atras do texto, e w1280 num plano de 720 sao 2,7 milhoes
  * de pixels decodificados para uma imagem que ninguem olha de perto.
  *
- * NAO usa w300: e tamanho de backdrop no TMDB, nao de poster, e pedir um
- * tamanho fora da lista do endpoint devolve 404.
+ * NAO USA w300: e tamanho de backdrop no TMDB, nao de poster, e pedir um
+ * tamanho fora da lista do endpoint devolve 404. E por isso que nao existe
+ * degrau intermediario para o poster -- de w342 so se desce para w185.
+ *
+ * O DEGRAU DO POSTER DE CATALOGO (w342 -> w185) EXISTIU E FOI REVERTIDO.
+ * Medido na TV do Mane155 (webOS 3.4.3): a tela de perfil ate os posteres caiu
+ * de 15 s para 10 s com ele, mas ele respondeu "a qualidade fica um pouco
+ * borrada". Os dois fatos convivem porque nao sao a mesma imagem: o caminho do
+ * primeiro paint e o backdrop do hero e a arte da tela estatica -- um unico
+ * decode de 8,3 megapixels que virou 0,92 --, enquanto o poster de catalogo
+ * hidrata DEPOIS, fora do numero que ele mediu. Ou seja, o degrau do poster
+ * provavelmente nao pagou nada dos 5 s e era o unico que dava para VER.
+ * Desceu de 2,33x para 1,26x de cobertura, e 1,26x num painel Full HD
+ * escalando a partir de um plano de 720 e pouco.
+ * Se o proximo relato disser que os 10 s viraram 15 de novo, o degrau volta e
+ * a conclusao acima e que estava errada.
  */
 const DEGRAU_PLANO_REDUZIDO = {
   w1280: "w780",
   w780: "w500",
-  w500: "w342",
-  w342: "w185"
+  w500: "w342"
 };
 
 // Abaixo disto o plano e pequeno o bastante para valer o degrau. 2/3 = 0,667.
