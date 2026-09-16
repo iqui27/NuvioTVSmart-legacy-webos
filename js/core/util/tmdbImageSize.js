@@ -49,23 +49,34 @@ const PADRAO_TMDB = /^(https?:\/\/image\.tmdb\.org\/t\/p\/)([A-Za-z0-9]+)(\/.+)$
  * tamanho fora da lista do endpoint devolve 404. E por isso que nao existe
  * degrau intermediario para o poster -- de w342 so se desce para w185.
  *
- * O DEGRAU DO POSTER DE CATALOGO (w342 -> w185) EXISTIU E FOI REVERTIDO.
- * Medido na TV do Mane155 (webOS 3.4.3): a tela de perfil ate os posteres caiu
- * de 15 s para 10 s com ele, mas ele respondeu "a qualidade fica um pouco
- * borrada". Os dois fatos convivem porque nao sao a mesma imagem: o caminho do
- * primeiro paint e o backdrop do hero e a arte da tela estatica -- um unico
- * decode de 8,3 megapixels que virou 0,92 --, enquanto o poster de catalogo
- * hidrata DEPOIS, fora do numero que ele mediu. Ou seja, o degrau do poster
- * provavelmente nao pagou nada dos 5 s e era o unico que dava para VER.
- * Desceu de 2,33x para 1,26x de cobertura, e 1,26x num painel Full HD
- * escalando a partir de um plano de 720 e pouco.
- * Se o proximo relato disser que os 10 s viraram 15 de novo, o degrau volta e
- * a conclusao acima e que estava errada.
+ * O DEGRAU DO POSTER DE CATALOGO saiu e VOLTOU, e o relato de ida e volta e o
+ * motivo de ele estar aqui de novo. Medido na TV do Mane155 (webOS 3.4.3),
+ * tela de perfil ate os posteres na tela:
+ *
+ *   exp.32  sem nenhum degrau            15 s
+ *   exp.33  com o degrau do poster       10 s
+ *   exp.34  sem o degrau do poster       15 s   <- e a qualidade NAO melhorou
+ *
+ * Eu tinha argumentado que o poster nao podia estar pagando os 5 s, porque ele
+ * hidrata depois que a rolagem assenta e nao estaria no caminho do primeiro
+ * paint. O numero do exp.34 desmente: tirar o degrau devolveu os 5 s inteiros.
+ * A explicacao que sobra e que o "perfil ate os posteres" que ele cronometra
+ * INCLUI a primeira leva de posteres, e nao termina no primeiro paint.
+ *
+ * E o exp.34 tambem nao pagou o que prometia: com o degrau removido ele
+ * respondeu "a qualidade continua igual". Ou seja, custou 5 s e nao devolveu
+ * nitidez nenhuma que ele conseguisse ver.
+ *
+ * O borrado que ele relatou no exp.33 tinha outra origem, e ele mesmo apontou
+ * no mesmo relato: "parece 720p, pixelado, enquanto o nativo em 1080p fica
+ * otimo". Isso e a FOLHA DE 720 e o viewport de 1280 desta variante inteira,
+ * nao o tamanho do poster.
  */
 const DEGRAU_PLANO_REDUZIDO = {
   w1280: "w780",
   w780: "w500",
-  w500: "w342"
+  w500: "w342",
+  w342: "w185"
 };
 
 // Abaixo disto o plano e pequeno o bastante para valer o degrau. 2/3 = 0,667.

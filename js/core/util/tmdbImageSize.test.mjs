@@ -45,9 +45,9 @@ test("transform de ultimo recurso conta igual a folha de 720", () => {
   });
 });
 
-test("w342 NAO desce: o degrau do poster de catalogo foi revertido por borrar", () => {
+test("w342 desce para w185: o degrau voltou, o exp.34 mostrou que ele pagava 5 s", () => {
   comPlano({ vp: 1280, tela: 1280, sufixo: "-720", escala: 1, fatorCss: 2 / 3 }, () => {
-    assert.equal(tmdbImageAtSize(POSTER, "w342"), "https://image.tmdb.org/t/p/w342/abc.jpg");
+    assert.equal(tmdbImageAtSize(POSTER, "w342"), "https://image.tmdb.org/t/p/w185/abc.jpg");
   });
 });
 
@@ -58,11 +58,11 @@ test("tamanho fora da escada passa intacto", () => {
 });
 
 test("o degrau nao faz a regra de nao-aumentar subir um tamanho", () => {
-  // O addon mandou w185; pedir w500 num plano de 720 vira w342, maior que o que
-  // veio -- e a guarda de nao-aumentar mantem a URL original.
+  // O addon mandou w185; pedir w342 num plano de 720 vira w185, que e igual --
+  // e a guarda de nao-aumentar mantem a URL original.
   comPlano({ vp: 1280, tela: 1280, sufixo: "-720", escala: 1, fatorCss: 2 / 3 }, () => {
     const pequena = "https://image.tmdb.org/t/p/w185/abc.jpg";
-    assert.equal(tmdbImageAtSize(pequena, "w500"), pequena);
+    assert.equal(tmdbImageAtSize(pequena, "w342"), pequena);
   });
 });
 
