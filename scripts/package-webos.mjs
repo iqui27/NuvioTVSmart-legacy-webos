@@ -38,6 +38,13 @@ const LEGACY_SCALE = 2 / 3;
 const LEGACY_SCALED_SHEETS = ["css/base.css", "css/components.css"];
 // Acima disto o app usa a folha de 1920. 1366 e 1280 caem na de 720; 1920 fica de fora.
 const LEGACY_SCALE_MAX_WIDTH = 1600;
+// PLANO GRAFICO DO PACOTE: "1080" (padrao) ou "720", via NUVIO_UI_PLANE.
+// NUVIO_FORCE_UI_PLANE=720 continua aceito, que e o nome antigo desta chave.
+// So tem efeito na variante de Chromium < 49; nos outros alvos e inerte.
+const PLANO_UI =
+  process.env.NUVIO_UI_PLANE === "720" || process.env.NUVIO_FORCE_UI_PLANE === "720"
+    ? "720"
+    : "1080";
 
 function scaledSheetName(href) {
   return href.replace(/\.css$/, `${LEGACY_SCALED_SUFFIX}.css`);
@@ -258,7 +265,7 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
       var vp = window.innerWidth || 1920;
       var tela = (window.screen && window.screen.width) || vp;
       var sufixo = vp <= ${LEGACY_SCALE_MAX_WIDTH} ? "${LEGACY_SCALED_SUFFIX}" : "";
-      var forcado = ${process.env.NUVIO_FORCE_UI_PLANE === "720" ? "true" : "false"};
+      var forcado = ${PLANO_UI === "720" ? "true" : "false"};
       if (forcado) {
         sufixo = "${LEGACY_SCALED_SUFFIX}";
       }
@@ -428,7 +435,21 @@ async function stageApp() {
   // honram o campo. Na C9 (UHD) medi que ele e ignorado e innerWidth fica 1920, o
   // que e inofensivo: la a superficie tambem e 1920 e nao ha descasamento. Quando
   // nem o appinfo nem o viewport resolvem, o index.html ainda compensa em runtime.
-  if (compatibilityPolicy.webOsChromiumVersion < 49) {
+  // REGRESSAO MEDIDA, e e por isso que isto virou opcao em vez de regra.
+  //
+  // Declarar 720 aqui conserta a TV do lijovklm (43LH595T-TD, superficie
+  // 1280x720, compositor que CORTA) e ESTRAGA a do Mane155 (55UH617V, UHD de
+  // 2016), que desenhava 1920 sem problema nenhum ate isto entrar. Ele testou o
+  // exp.21 -- que nao tinha nem este campo nem a folha de 720 -- sem reclamar de
+  // resolucao, pulou os builds 22 a 31 e no exp.34 relatou "parece 720p,
+  // pixelado, enquanto o nativo em 1080p fica otimo". Nao e o poster: e a tela
+  // inteira desenhada a 1280 e ampliada pelo painel.
+  //
+  // Nao da para decidir em runtime: o viewport de layout e fixado pelo appinfo
+  // ANTES de qualquer JS, e foi justamente por isso que o exp.26/27 falharam
+  // tentando escolher pelo innerWidth. Entao a escolha e do PACOTE, e sai um
+  // .ipk por plano. O plano 720 continua existindo exatamente como foi medido.
+  if (compatibilityPolicy.webOsChromiumVersion < 49 && PLANO_UI === "720") {
     appInfo.resolution = "1280x720";
   }
   validateWebOsAppInfo(appInfo);
