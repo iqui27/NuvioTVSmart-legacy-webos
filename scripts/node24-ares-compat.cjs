@@ -11,6 +11,7 @@ if (typeof util.isDate !== "function") {
 
 const originalLoad = Module._load;
 const rimrafWrappers = new WeakMap();
+const mkdirpWrappers = new WeakMap();
 
 function createLegacyRimraf(rimrafModule) {
   if (rimrafWrappers.has(rimrafModule)) {
@@ -39,6 +40,41 @@ function createLegacyRimraf(rimrafModule) {
   return legacyRimraf;
 }
 
+function createLegacyMkdirp(mkdirpModule) {
+  if (mkdirpWrappers.has(mkdirpModule)) {
+    return mkdirpWrappers.get(mkdirpModule);
+  }
+
+  const legacyMkdirp = mkdirpModule;
+  const wrappedMkdirp = function wrappedMkdirp(path, options, callback) {
+    return legacyMkdirp(path, options, callback);
+  };
+
+  Object.assign(wrappedMkdirp, legacyMkdirp);
+  wrappedMkdirp.mkdirp = function mkdirp(path, options, callback) {
+    const done = typeof options === "function" ? options : callback;
+    const normalizedOptions = typeof options === "function" ? undefined : options;
+
+    if (typeof done === "function") {
+      return legacyMkdirp.mkdirp(path, normalizedOptions, done);
+    }
+
+    return new Promise((resolve, reject) => {
+      legacyMkdirp.mkdirp(path, normalizedOptions, (error, made) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(made);
+        }
+      });
+    });
+  };
+  wrappedMkdirp.mkdirP = wrappedMkdirp.mkdirp;
+
+  mkdirpWrappers.set(mkdirpModule, wrappedMkdirp);
+  return wrappedMkdirp;
+}
+
 Module._load = function loadWithAresCompat(request, parent, isMain) {
   const loaded = originalLoad.call(this, request, parent, isMain);
   if (
@@ -47,6 +83,9 @@ Module._load = function loadWithAresCompat(request, parent, isMain) {
     typeof loaded?.rimraf === "function"
   ) {
     return createLegacyRimraf(loaded);
+  }
+  if (request === "mkdirp" && typeof loaded === "function" && typeof loaded.mkdirp === "function") {
+    return createLegacyMkdirp(loaded);
   }
   return loaded;
 };

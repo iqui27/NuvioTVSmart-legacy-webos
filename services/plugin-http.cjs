@@ -52,6 +52,10 @@ var DEFAULT_TIMEOUT_MS = 60000;
 var CONNECT_ATTEMPT_TIMEOUT_MS = 30000;
 var PLUGIN_PROTOCOL_VERSION = 1;
 var MAX_ACTIVE_REQUESTS = 10;
+// Keep the active network cap unchanged, but queue the burst generated when
+// one scraper issues several fetches. Android queues eligible scraper work;
+// rejecting overflow here turns otherwise independent providers into failures.
+var MAX_QUEUED_REQUESTS = 128;
 var MAX_REQUESTS_PER_SCRAPER_PER_MINUTE = 60;
 var CIRCUIT_FAILURE_LIMIT = 3;
 var CIRCUIT_OPEN_MS = 30000;
@@ -805,6 +809,8 @@ function memoryUsage() {
 function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
   var activeRequests = {};
   var inFlightRequests = {};
+  var queuedRequests = [];
+  var activeRequestCount = 0;
   var scraperRequestWindows = {};
   var hostCircuits = {};
   var recentDiagnostics = [];
@@ -843,7 +849,8 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
     if (requestId && inFlightRequests[requestId]) {
       return { ok: false, status: 409, error: "Duplicate plugin request id" };
     }
-    if (Object.keys(inFlightRequests).length >= MAX_ACTIVE_REQUESTS) {
+    var shouldQueue = activeRequestCount >= MAX_ACTIVE_REQUESTS || queuedRequests.length > 0;
+    if (shouldQueue && queuedRequests.length >= MAX_QUEUED_REQUESTS) {
       return { ok: false, status: 429, error: "Plugin service concurrency quota exceeded" };
     }
     var scraperId = String((payload && payload.scraperId) || "").slice(0, 128);
@@ -864,8 +871,18 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
     if (host && circuit && circuit.openUntil > now) {
       return { ok: false, status: 503, error: "Plugin provider circuit is temporarily open" };
     }
-    inFlightRequests[requestId] = { request: null, host: host, cancelled: false };
-    return { ok: true, host: host };
+    inFlightRequests[requestId] = {
+      request: null,
+      host: host,
+      cancelled: false,
+      started: false,
+      queued: shouldQueue,
+      finished: false,
+      response: null,
+      requestDetails: null,
+      payload: null
+    };
+    return { ok: true, host: host, queued: shouldQueue };
   }
 
   function recordHostResult(host, error, result) {
@@ -891,6 +908,115 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
     });
     response.end(data);
   }
+
+  function removeQueuedRequest(state) {
+    var index = queuedRequests.indexOf(state);
+    if (index >= 0) queuedRequests.splice(index, 1);
+  }
+
+  function finishQueuedRequest(state, errorText) {
+    if (!state || state.finished) return;
+    state.cancelled = true;
+    state.finished = true;
+    removeQueuedRequest(state);
+    delete inFlightRequests[state.requestId];
+    if (state.response && !state.response.writableEnded && !state.response.destroyed) {
+      send(state.response, 502, {
+        returnValue: false,
+        errorText: errorText || "Plugin request cancelled",
+        requestId: state.requestId
+      });
+    }
+  }
+
+  function pumpQueue() {
+    while (activeRequestCount < MAX_ACTIVE_REQUESTS && queuedRequests.length) {
+      var state = queuedRequests.shift();
+      if (
+        !state ||
+        state.finished ||
+        state.cancelled ||
+        inFlightRequests[state.requestId] !== state
+      ) {
+        continue;
+      }
+      startRequest(state);
+    }
+  }
+
+  function cancelRequest(state) {
+    if (!state || state.finished) return false;
+    state.cancelled = true;
+    if (!state.started) {
+      finishQueuedRequest(state, "Plugin request cancelled");
+      pumpQueue();
+      return true;
+    }
+    if (state.request && typeof state.request.destroy === "function") {
+      state.request.destroy(new Error("Plugin request cancelled"));
+    }
+    return true;
+  }
+
+  function startRequest(state) {
+    if (!state || state.finished || state.cancelled) return;
+    state.started = true;
+    state.queued = false;
+    activeRequestCount += 1;
+    var requestId = state.requestId;
+    var response = state.response;
+    var requestDetails = state.requestDetails;
+    var callback = function (error, result) {
+      if (state.finished) return;
+      state.finished = true;
+      if (requestId) delete activeRequests[requestId];
+      delete inFlightRequests[requestId];
+      activeRequestCount = Math.max(0, activeRequestCount - 1);
+      recordHostResult(state.host, state.cancelled ? null : error, result);
+      recordDiagnostic(
+        "fetch response sent",
+        Object.assign({}, requestDetails, {
+          httpStatus: error ? 502 : 200,
+          providerStatus: Number(result && result.status) || 0,
+          error: error ? traceError(error) : undefined
+        })
+      );
+      if (!response || response.writableEnded || response.destroyed) {
+        pumpQueue();
+        return;
+      }
+      if (error) {
+        send(response, 502, {
+          returnValue: false,
+          errorText: error.message || String(error),
+          requestId: requestId
+        });
+      } else {
+        send(response, 200, Object.assign({ requestId: requestId }, result));
+      }
+      pumpQueue();
+    };
+    callback.registerRequest = function (id, activeRequest) {
+      activeRequests[id] = activeRequest;
+      state.request = activeRequest;
+      if (state.cancelled) activeRequest.destroy(new Error("Plugin request cancelled"));
+    };
+    try {
+      performFetch(
+        Object.assign({}, state.payload, { requestId: requestId }),
+        callback,
+        0,
+        recordDiagnostic
+      );
+    } catch (error) {
+      recordDiagnostic(
+        "fetch route threw",
+        Object.assign({}, requestDetails, { error: traceError(error) })
+      );
+      callback(error);
+    }
+  }
+
   function readBody(request, callback) {
     var chunks = [];
     var length = 0;
@@ -969,6 +1095,7 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
         returnValue: true,
         protocolVersion: PLUGIN_PROTOCOL_VERSION,
         activeRequests: Object.keys(activeRequests).length,
+        queuedRequests: queuedRequests.length,
         memory: memoryUsage(),
         recentEvents: recentDiagnostics.slice(-16)
       });
@@ -988,12 +1115,12 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
           var cancelId = String(payload.requestId || "");
           var state = inFlightRequests[cancelId];
           var active = activeRequests[cancelId];
-          if (state) state.cancelled = true;
-          if (active) active.destroy(new Error("Plugin request cancelled"));
+          var cancelled = cancelRequest(state);
+          if (!cancelled && active) active.destroy(new Error("Plugin request cancelled"));
           send(response, 200, {
             returnValue: true,
             requestId: cancelId,
-            cancelled: Boolean(state || active)
+            cancelled: Boolean(cancelled || active)
           });
           return;
         }
@@ -1019,50 +1146,23 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
           });
           return;
         }
-        var callback = function (error, result) {
-          if (requestId) delete activeRequests[requestId];
-          var state = inFlightRequests[requestId];
-          delete inFlightRequests[requestId];
-          recordHostResult(state && state.host, state && state.cancelled ? null : error, result);
+        var state = inFlightRequests[requestId];
+        state.requestId = requestId;
+        state.response = response;
+        state.requestDetails = requestDetails;
+        state.payload = payload;
+        response.on("close", function () {
+          if (!state.finished && !state.started) finishQueuedRequest(state);
+          else if (!state.finished && state.started) cancelRequest(state);
+        });
+        if (admission.queued) {
           recordDiagnostic(
-            "fetch response sent",
-            Object.assign({}, requestDetails, {
-              httpStatus: error ? 502 : 200,
-              providerStatus: Number(result && result.status) || 0,
-              error: error ? traceError(error) : undefined
-            })
+            "fetch queued",
+            Object.assign({}, requestDetails, { queueSize: queuedRequests.length + 1 })
           );
-          if (error) {
-            send(response, 502, {
-              returnValue: false,
-              errorText: error.message || String(error),
-              requestId: requestId
-            });
-          } else {
-            send(response, 200, Object.assign({ requestId: requestId }, result));
-          }
-        };
-        callback.registerRequest = function (id, activeRequest) {
-          activeRequests[id] = activeRequest;
-          var state = inFlightRequests[id];
-          if (state) {
-            state.request = activeRequest;
-            if (state.cancelled) activeRequest.destroy(new Error("Plugin request cancelled"));
-          }
-        };
-        try {
-          performFetch(
-            Object.assign({}, payload, { requestId: requestId }),
-            callback,
-            0,
-            recordDiagnostic
-          );
-        } catch (error) {
-          recordDiagnostic(
-            "fetch route threw",
-            Object.assign({}, requestDetails, { error: traceError(error) })
-          );
-          callback(error);
+          queuedRequests.push(state);
+        } else {
+          startRequest(state);
         }
       });
       return;

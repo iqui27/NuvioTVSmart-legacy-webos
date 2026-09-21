@@ -42,296 +42,15 @@ const AVPLAY_SEEK_TIMEOUT_MS = 30_000;
 // hls.js' default live sync distance and gives the first rendition enough data
 // to establish a stable clock before playback begins.
 const WEBOS_LIVE_INITIAL_MANIFEST_SIZE = 3;
-// Keep HLS request and retry budgets aligned with Android's OkHttp/Media3
-// playback path. In particular, the playlist child used by Easy Catalogs can
-// take slightly more than 10 seconds before returning its first byte.
-const ANDROID_PLAYBACK_IO_TIMEOUT_MS = 15_000;
-// Android's addon/source resolution can remain pending for about one minute
-// before the media URL is usable. This is the first-byte budget only; the
-// active read budget remains ANDROID_PLAYBACK_IO_TIMEOUT_MS.
-const ANDROID_PLAYBACK_SOURCE_FIRST_BYTE_TIMEOUT_MS = 120_000;
-const ANDROID_PLAYBACK_MAX_RETRY_COUNT = 6;
-const ANDROID_PLAYBACK_TIMEOUT_RETRY_DELAY_MS = 750;
-const ANDROID_PLAYBACK_TIMEOUT_MAX_RETRY_DELAY_MS = 3_000;
-// Android's standard ExoPlayer path uses Media3's stock 50-second forward
-// buffer and explicitly retains only 1.5 seconds behind the playhead. Keep
-// the same effective HLS bounds on every browser runtime; the optional
-// Android custom-buffer setting is not enabled by default.
-const ANDROID_PLAYBACK_MAX_BUFFER_SECONDS = 50;
-const ANDROID_PLAYBACK_BACK_BUFFER_SECONDS = 1.5;
+// Keep the browser HLS buffer finite on TV runtimes. The forward cap limits
+// memory use while the short back buffer avoids retaining already-played media.
+const HLS_MAX_BUFFER_SECONDS = 50;
+const HLS_BACK_BUFFER_SECONDS = 1.5;
 // A short buffer starvation is expected on a slow provider. Only surface the
 // diagnostic when the same playback stall remains continuous for one minute.
 const HLS_BUFFER_STALL_WARNING_DELAY_MS = 60_000;
 const TRANSIENT_HLS_BUFFER_ERROR_DETAILS = new Set(["bufferStalledError", "bufferNudgeOnStall"]);
-
-function createAndroidAlignedHlsLoadPolicy({ allowSlowFirstByte = false } = {}) {
-  return {
-    default: {
-      maxTimeToFirstByteMs: allowSlowFirstByte
-        ? ANDROID_PLAYBACK_SOURCE_FIRST_BYTE_TIMEOUT_MS
-        : ANDROID_PLAYBACK_IO_TIMEOUT_MS,
-      maxLoadTimeMs: ANDROID_PLAYBACK_IO_TIMEOUT_MS,
-      timeoutRetry: {
-        maxNumRetry: ANDROID_PLAYBACK_MAX_RETRY_COUNT,
-        retryDelayMs: ANDROID_PLAYBACK_TIMEOUT_RETRY_DELAY_MS,
-        maxRetryDelayMs: ANDROID_PLAYBACK_TIMEOUT_MAX_RETRY_DELAY_MS,
-        backoff: "exponential"
-      },
-      errorRetry: {
-        maxNumRetry: ANDROID_PLAYBACK_MAX_RETRY_COUNT,
-        retryDelayMs: 1_000,
-        maxRetryDelayMs: 8_000,
-        backoff: "linear"
-      }
-    }
-  };
-}
-
-class AndroidAlignedFetchLoader {
-  constructor(config = {}) {
-    this.fetchSetup = config.fetchSetup || ((_, initParams) => new Request(_.url, initParams));
-    this.controller = new AbortController();
-    this.timeoutId = null;
-    this.destroyed = false;
-    this.response = null;
-    this.context = null;
-    this.config = null;
-    this.callbacks = null;
-    this.stats = {
-      aborted: false,
-      loaded: 0,
-      retry: 0,
-      total: 0,
-      chunkCount: 0,
-      bwEstimate: 0,
-      loading: { start: 0, first: 0, end: 0 },
-      parsing: { start: 0, end: 0 },
-      buffering: { start: 0, end: 0 }
-    };
-  }
-
-  destroy() {
-    this.destroyed = true;
-    this.clearTimeout();
-    this.abortInternal();
-    this.callbacks = null;
-    this.context = null;
-    this.config = null;
-    this.response = null;
-    this.fetchSetup = null;
-    this.controller = null;
-  }
-
-  abortInternal() {
-    if (this.controller && !this.stats.loading.end) {
-      this.stats.aborted = true;
-      try {
-        this.controller.abort();
-      } catch (_) {
-        // Ignore abort failures after the webOS fetch has already completed.
-      }
-    }
-  }
-
-  abort() {
-    if (this.stats.loading.end || this.stats.aborted) {
-      return;
-    }
-    this.clearTimeout();
-    this.stats.aborted = true;
-    try {
-      this.controller?.abort?.();
-    } catch (_) {
-      // Ignore abort failures after the webOS fetch has already completed.
-    }
-    this.callbacks?.onAbort?.(this.stats, this.context, this.response);
-  }
-
-  load(context, config, callbacks) {
-    if (this.stats.loading.start) {
-      throw new Error("Loader can only be used once.");
-    }
-    this.context = context;
-    this.config = config;
-    this.callbacks = callbacks;
-    this.stats.loading.start = this.now();
-    const initParams = {
-      method: "GET",
-      mode: "cors",
-      credentials: "same-origin",
-      signal: this.controller.signal,
-      headers: new Headers(Object.assign({}, context.headers || {}))
-    };
-    if (context.rangeEnd) {
-      initParams.headers.set(
-        "Range",
-        `bytes=${context.rangeStart || 0}-${String(context.rangeEnd - 1)}`
-      );
-    }
-
-    try {
-      const request = this.fetchSetup(context, initParams);
-      this.armTimeout(config.loadPolicy?.maxTimeToFirstByteMs);
-      fetch(request)
-        .then((response) => this.readResponse(response))
-        .then(
-          (data) => this.finish(data),
-          (error) => this.fail(error)
-        );
-    } catch (error) {
-      this.fail(error);
-    }
-  }
-
-  async readResponse(response) {
-    this.response = response;
-    if (!response.ok) {
-      const error = new Error(response.statusText || "fetch, bad network response");
-      error.code = response.status;
-      error.response = response;
-      throw error;
-    }
-
-    const contentLength = Number(response.headers?.get?.("Content-Length") || 0);
-    if (Number.isFinite(contentLength) && contentLength > 0) {
-      this.stats.total = contentLength;
-    }
-
-    const reader = response.body?.getReader?.();
-    if (!reader) {
-      this.markFirstByte();
-      this.armTimeout(this.config?.loadPolicy?.maxLoadTimeMs);
-      return this.context?.responseType === "arraybuffer"
-        ? response.arrayBuffer()
-        : this.context?.responseType === "json"
-          ? response.json()
-          : response.text();
-    }
-
-    const chunks = [];
-    let totalBytes = 0;
-    while (true) {
-      const result = await reader.read();
-      if (result.done) {
-        break;
-      }
-      const chunk = result.value;
-      if (!chunk?.byteLength) {
-        continue;
-      }
-      this.markFirstByte();
-      chunks.push(chunk);
-      totalBytes += chunk.byteLength;
-      this.stats.loaded = totalBytes;
-      this.stats.chunkCount += 1;
-      this.armTimeout(this.config?.loadPolicy?.maxLoadTimeMs);
-    }
-
-    const bytes = new Uint8Array(totalBytes);
-    let offset = 0;
-    chunks.forEach((chunk) => {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    });
-    if (this.context?.responseType === "arraybuffer") {
-      return bytes.buffer;
-    }
-    const text = new TextDecoder().decode(bytes);
-    return this.context?.responseType === "json" ? JSON.parse(text) : text;
-  }
-
-  finish(data) {
-    if (this.destroyed || this.stats.aborted || !this.callbacks || !this.context) {
-      return;
-    }
-    this.clearTimeout();
-    this.stats.loading.end = this.now();
-    if (!this.stats.loading.first) {
-      this.markFirstByte();
-    }
-    if (!this.stats.total) {
-      this.stats.total = this.stats.loaded = data?.byteLength ?? data?.length ?? 0;
-    } else if (!this.stats.loaded) {
-      this.stats.loaded = data?.byteLength ?? data?.length ?? 0;
-    }
-    const elapsedMs = this.stats.loading.end - this.stats.loading.first;
-    this.stats.bwEstimate = elapsedMs > 0 ? (this.stats.loaded * 8000) / elapsedMs : 0;
-    this.callbacks.onSuccess(
-      {
-        url: this.response?.url || this.context.url,
-        data,
-        code: this.response?.status || 200
-      },
-      this.stats,
-      this.context,
-      this.response
-    );
-  }
-
-  fail(error) {
-    if (this.destroyed || this.stats.aborted || !this.callbacks || !this.context) {
-      return;
-    }
-    this.clearTimeout();
-    this.callbacks.onError(
-      {
-        code: Number(error?.code || error?.response?.status || 0),
-        text: String(error?.message || "Fetch failed")
-      },
-      this.context,
-      error?.response || this.response,
-      this.stats
-    );
-  }
-
-  handleTimeout() {
-    if (this.destroyed || this.stats.aborted || this.stats.loading.end || !this.callbacks) {
-      return;
-    }
-    this.stats.aborted = true;
-    try {
-      this.controller?.abort?.();
-    } catch (_) {
-      // Ignore abort failures after notifying hls.js about the timeout.
-    }
-    this.callbacks.onTimeout(this.stats, this.context, this.response);
-  }
-
-  armTimeout(timeoutMs) {
-    this.clearTimeout();
-    if (!Number.isFinite(Number(timeoutMs)) || Number(timeoutMs) <= 0) {
-      return;
-    }
-    this.timeoutId = setTimeout(() => this.handleTimeout(), Number(timeoutMs));
-  }
-
-  clearTimeout() {
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
-  }
-
-  markFirstByte() {
-    if (!this.stats.loading.first) {
-      this.stats.loading.first = this.now();
-    }
-  }
-
-  now() {
-    const performanceNow = globalThis.performance?.now?.();
-    return Number.isFinite(performanceNow) ? performanceNow : Date.now();
-  }
-
-  getCacheAge() {
-    const age = this.response?.headers?.get?.("age");
-    return age ? Number.parseFloat(age) : null;
-  }
-
-  getResponseHeader(name) {
-    return this.response?.headers?.get?.(name) || null;
-  }
-}
+const WEBOS_MEDIA_TYPE_PROBE_TIMEOUT_MS = 2_500;
 
 function logEngineFsDebug(...args) {
   if (globalThis.__NUVIO_DEBUG_ENGINEFS__) {
@@ -3578,6 +3297,9 @@ export const PlayerController = {
   },
 
   isPlaybackEnded() {
+    if (this.isLivePlaybackItemType()) {
+      return false;
+    }
     if (this.isUsingAvPlay()) {
       return Boolean(this.avplayEnded);
     }
@@ -4035,13 +3757,9 @@ export const PlayerController = {
     );
   },
 
-  isTizenHlsVodSource(url, sourceType = null, itemType = this.currentItemType) {
+  isTizenHlsSource(url, sourceType = null) {
     const normalizedSourceType = String(sourceType || this.guessMediaMimeType(url) || "").trim();
-    return (
-      Platform.isTizen() &&
-      this.isLikelyHlsMimeType(normalizedSourceType) &&
-      !this.isLivePlaybackItemType(itemType)
-    );
+    return Platform.isTizen() && this.isLikelyHlsMimeType(normalizedSourceType);
   },
 
   getPlaybackEngineCandidates(url, sourceType = null, itemType = this.currentItemType) {
@@ -4066,9 +3784,10 @@ export const PlayerController = {
 
     if (this.isLikelyHlsMimeType(normalizedSourceType)) {
       const candidates = [];
-      if (isTizenRuntime && !isLivePlayback && canUseHlsJs) {
+      if (isTizenRuntime && canUseHlsJs) {
         // Match Android's single HLS media pipeline when MSE is available.
-        // AVPlay and native HLS remain below it as platform fallbacks.
+        // This also avoids the long AVPlay connection-failure path observed
+        // on affected Samsung TVs. AVPlay and native HLS remain fallbacks.
         pushCandidate(candidates, "hls.js");
       }
       if (isTizenRuntime && canUseAvPlay) {
@@ -4076,6 +3795,12 @@ export const PlayerController = {
       }
       if (preferTvNative && canUseAvPlay) {
         pushCandidate(candidates, avplayEngine);
+      }
+      if (isTizenRuntime && isLivePlayback) {
+        // Keep hls.js in the live fallback ladder even when feature detection
+        // is unavailable; the normal path above has already preferred it when
+        // MSE support was confirmed.
+        pushCandidate(candidates, "hls.js");
       }
       if (!isTizenRuntime) {
         // Android opens HLS through HlsMediaSource, which reports manifest
@@ -4345,29 +4070,68 @@ export const PlayerController = {
     return Object.fromEntries(entries);
   },
 
+  async probeRemoteMediaSourceType(url, requestHeaders = {}) {
+    if (!Platform.isWebOS() || !this.isRemoteDirectHttpSource(url)) {
+      return null;
+    }
+
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timeoutId = controller
+      ? setTimeout(() => controller.abort(), WEBOS_MEDIA_TYPE_PROBE_TIMEOUT_MS)
+      : null;
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        headers: this.normalizePlaybackHeaders(requestHeaders),
+        cache: "no-store",
+        redirect: "follow",
+        ...(controller ? { signal: controller.signal } : {})
+      });
+      if (!response.ok) {
+        return null;
+      }
+      return this.resolveRuntimeSourceType(response.headers?.get?.("content-type"));
+    } catch (_) {
+      return null;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  },
+
+  async resolveRemoteMediaSourceType(url, sourceType = null, requestHeaders = {}, itemType = null) {
+    const normalizedSourceType =
+      this.resolveRuntimeSourceType(sourceType) ||
+      this.resolveRuntimeSourceType(this.guessMediaMimeType(url)) ||
+      null;
+    if (
+      !Platform.isWebOS() ||
+      !this.isLivePlaybackItemType(itemType || this.currentItemType) ||
+      !this.isRemoteDirectHttpSource(url) ||
+      !this.isLikelyHlsMimeType(normalizedSourceType)
+    ) {
+      return normalizedSourceType;
+    }
+
+    const responseSourceType = await this.probeRemoteMediaSourceType(url, requestHeaders);
+    return responseSourceType || normalizedSourceType;
+  },
+
   buildHlsConfig(requestHeaders = {}) {
     const forwardedHeaders = this.normalizePlaybackHeaders(requestHeaders);
     const isWebOs = Platform.isWebOS();
     const isLivePlayback = this.isLivePlaybackItemType();
-    const hlsManifestLoadPolicy = createAndroidAlignedHlsLoadPolicy({
-      allowSlowFirstByte: isWebOs
-    });
-    const hlsMediaLoadPolicy = createAndroidAlignedHlsLoadPolicy();
     return {
       autoStartLoad: false,
       enableWorker: !isWebOs,
       lowLatencyMode: false,
       initialLiveManifestSize: isWebOs && isLivePlayback ? WEBOS_LIVE_INITIAL_MANIFEST_SIZE : 1,
-      backBufferLength: ANDROID_PLAYBACK_BACK_BUFFER_SECONDS,
-      maxBufferLength: ANDROID_PLAYBACK_MAX_BUFFER_SECONDS,
-      maxMaxBufferLength: ANDROID_PLAYBACK_MAX_BUFFER_SECONDS,
+      backBufferLength: HLS_BACK_BUFFER_SECONDS,
+      maxBufferLength: HLS_MAX_BUFFER_SECONDS,
+      maxMaxBufferLength: HLS_MAX_BUFFER_SECONDS,
       maxBufferHole: 0.5,
       startFragPrefetch: false,
-      ...(isWebOs ? { loader: AndroidAlignedFetchLoader } : {}),
-      manifestLoadPolicy: hlsManifestLoadPolicy,
-      playlistLoadPolicy: hlsManifestLoadPolicy,
-      fragLoadPolicy: hlsMediaLoadPolicy,
-      keyLoadPolicy: hlsMediaLoadPolicy,
       xhrSetup: (xhr) => {
         Object.entries(forwardedHeaders).forEach(([headerName, headerValue]) => {
           try {
@@ -4639,12 +4403,18 @@ export const PlayerController = {
       const isWebOs = Platform.isWebOS();
       player.updateSettings?.({
         streaming: {
-          fastSwitchEnabled: !isWebOs,
-          lowLatencyEnabled: false,
-          scheduleWhilePaused: false,
-          bufferToKeep: isWebOs ? 8 : 20,
-          bufferPruningInterval: isWebOs ? 10 : 20,
-          stableBufferTime: isWebOs ? 8 : 12
+          buffer: {
+            fastSwitchEnabled: !isWebOs,
+            bufferToKeep: isWebOs ? 8 : 20,
+            bufferPruningInterval: isWebOs ? 10 : 20,
+            bufferTimeDefault: isWebOs ? 8 : 12
+          },
+          scheduling: {
+            scheduleWhilePaused: false
+          },
+          liveCatchup: {
+            enabled: false
+          }
         }
       });
       player.initialize(this.video, url, true);
@@ -5511,11 +5281,7 @@ export const PlayerController = {
   },
 
   choosePlaybackEngine(url, sourceType, itemType = this.currentItemType) {
-    if (
-      Platform.isTizen() &&
-      this.canUseAvPlay() &&
-      !this.isTizenHlsVodSource(url, sourceType, itemType)
-    ) {
+    if (Platform.isTizen() && this.canUseAvPlay() && !this.isTizenHlsSource(url, sourceType)) {
       return this.getPlatformAvplayEngineName();
     }
     const candidates = this.getPlaybackEngineCandidates(url, sourceType, itemType);
@@ -5571,6 +5337,12 @@ export const PlayerController = {
     }
 
     this.video.addEventListener("ended", () => {
+      if (this.isLivePlaybackItemType() && this.playbackSessionActive) {
+        this.isPlaying = true;
+        this.resume();
+        this.syncWebOsPlaybackKeepAwake();
+        return;
+      }
       this.isPlaying = false;
       this.stopProgressSaving();
       this.cancelProgressSyncAfterSeek();
@@ -5827,11 +5599,23 @@ export const PlayerController = {
     this.lastPlaybackErrorCode = 0;
     this.lastHlsErrorDiagnostic = null;
 
-    const sourceType =
+    let sourceType =
       this.currentPlaybackMediaSourceType ||
       this.resolveRuntimeSourceType(this.guessMediaMimeType(url)) ||
       null;
-    if (!forceEngine && this.isTizenHlsVodSource(url, sourceType, itemType)) {
+    if (!forceEngine) {
+      sourceType = await this.resolveRemoteMediaSourceType(
+        url,
+        sourceType,
+        requestHeaders,
+        itemType
+      );
+      this.currentPlaybackMediaSourceType = sourceType;
+      if (!this.isPlaybackRequestActive(playToken, requestedUrl)) {
+        return;
+      }
+    }
+    if (!forceEngine && this.isTizenHlsSource(url, sourceType)) {
       // Load hls.js before choosing the engine so getPlaybackEngineCandidates()
       // can distinguish a supported MSE path from a platform that needs the
       // existing AVPlay/native-HLS fallback ladder.
