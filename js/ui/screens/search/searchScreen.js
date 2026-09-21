@@ -5,7 +5,12 @@ import { catalogRepository } from "../../../data/repository/catalogRepository.js
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
 import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
+import {
+  SEARCH_HISTORY_MAX_ITEMS,
+  SearchHistoryStore
+} from "../../../data/local/searchHistoryStore.js";
 import { I18n } from "../../../i18n/index.js";
+import { contentTextDirection } from "../../../core/util/contentTextDirection.js";
 import { Platform } from "../../../platform/index.js";
 import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import { MODERN_HOME_CONSTANTS } from "../home/modernHomeLayout.js";
@@ -464,6 +469,7 @@ export const SearchScreen = {
     this.focusZone = "content";
     this.sidebarFocusIndex = 0;
     this.rows = [];
+    this.recentSearches = SearchHistoryStore.list();
     this.lastContentFocus = null;
     this.contentScrollTop = 0;
     this.rowScrollLeftByKey = {};
@@ -853,6 +859,9 @@ export const SearchScreen = {
           </div>
         `;
       }
+      if (!String(this.query || "").trim() && this.recentSearches?.length) {
+        return this.renderRecentSearches();
+      }
       return `
         <div class="search-empty-state">
           ${renderInlineIcon("search", "search-empty-icon")}
@@ -879,8 +888,8 @@ export const SearchScreen = {
         const hasEnoughForSeeAll = seeAllItems.length >= 15;
         return `
       <section class="search-results-row" data-row-key="${escapeHtml(rowKey)}">
-        <h3 class="search-results-title">${row.title}</h3>
-        ${row.subtitle ? `<div class="search-results-subtitle">${row.subtitle}</div>` : ""}
+        <h3 class="search-results-title" dir="${contentTextDirection(row.title)}">${row.title}</h3>
+        ${row.subtitle ? `<div class="search-results-subtitle" dir="${contentTextDirection(row.subtitle)}">${row.subtitle}</div>` : ""}
         <div class="search-results-track">
           ${(row.items || [])
             .map(
@@ -901,7 +910,7 @@ export const SearchScreen = {
                 ${item.poster ? `<img class="search-result-poster" src="${item.poster}" alt="${item.name || "content"}" loading="lazy" decoding="async" />` : `<div class="search-result-poster placeholder"></div>`}
                 ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
               </div>
-              <div class="search-result-name" dir="auto">${item.name || "Untitled"}</div>
+              <div class="search-result-name" dir="${contentTextDirection(item.name || "Untitled")}">${item.name || "Untitled"}</div>
               <div class="search-result-date">${formatReleaseYear(item)}</div>
             </article>
           `
@@ -933,6 +942,53 @@ export const SearchScreen = {
     `;
       })
       .join("");
+  },
+
+  renderRecentSearches() {
+    const recentSearches = Array.isArray(this.recentSearches) ? this.recentSearches : [];
+    if (!recentSearches.length || String(this.query || "").trim()) {
+      return "";
+    }
+    const clearLabel = t("search_recent_clear", {}, "Clear history");
+    const title = t("search_recent_title", {}, "Recent searches");
+    const closeLabel = t("action_close", {}, "Close");
+    return `
+      <section class="search-recent-section" aria-label="${escapeHtml(title)}">
+        <div class="search-recent-header">
+          <h3 class="search-recent-title">${escapeHtml(title)}</h3>
+          <button class="search-recent-clear focusable" type="button" data-action="clearSearchHistory">
+            ${escapeHtml(clearLabel)}
+          </button>
+        </div>
+        <div class="search-recent-list">
+          ${recentSearches
+            .map((query) => {
+              const rowKey = `recent:${query}`;
+              return `
+                <div class="search-recent-item">
+                  <button
+                    class="search-recent-query focusable"
+                    type="button"
+                    data-action="runRecentSearch"
+                    data-query="${escapeHtml(query)}"
+                    data-row-key="${escapeHtml(rowKey)}"
+                    dir="${contentTextDirection(query)}"
+                  >${escapeHtml(query)}</button>
+                  <button
+                    class="search-recent-remove focusable"
+                    type="button"
+                    data-action="removeRecentSearch"
+                    data-query="${escapeHtml(query)}"
+                    data-row-key="${escapeHtml(rowKey)}"
+                    aria-label="${escapeHtml(`${closeLabel} ${query}`)}"
+                  ><span class="material-icons" aria-hidden="true">close</span></button>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      </section>
+    `;
   },
 
   render() {
@@ -1123,11 +1179,16 @@ export const SearchScreen = {
       this.container?.querySelector(".search-voice-btn.focusable"),
       this.container?.querySelector("#searchInput.focusable")
     ].filter(Boolean);
-    const rows = Array.from(
+    const resultRows = Array.from(
       this.container?.querySelectorAll(".search-results-row .search-results-track") || []
     )
       .map((track) => Array.from(track.querySelectorAll(".search-result-card.focusable")))
       .filter((row) => row.length > 0);
+    const recentRows = Array.from(this.container?.querySelectorAll(".search-recent-item") || [])
+      .map((row) => Array.from(row.querySelectorAll(".focusable")))
+      .filter((row) => row.length > 0);
+    const rows = [...resultRows, ...recentRows];
+    const recentClear = this.container?.querySelector(".search-recent-clear.focusable") || null;
 
     header.forEach((node, index) => {
       node.dataset.navZone = "header";
@@ -1146,7 +1207,12 @@ export const SearchScreen = {
       });
     });
 
-    this.navModel = { header, rows };
+    if (recentClear) {
+      recentClear.dataset.navZone = "recent-clear";
+      recentClear.dataset.navCol = "0";
+    }
+
+    this.navModel = { header, rows, recentClear };
     if (!this.lastContentFocus) {
       const fallback = this.getDefaultHeaderFocusTarget() || rows[0]?.[0] || null;
       if (fallback) {
@@ -1279,7 +1345,7 @@ export const SearchScreen = {
         if (this.lastContentFocus.rowKey) {
           const rowNodes = Array.from(
             this.container?.querySelectorAll(
-              `.search-result-card.focusable[data-row-key="${escapeSelectorValue(this.lastContentFocus.rowKey)}"]`
+              `.focusable[data-row-key="${escapeSelectorValue(this.lastContentFocus.rowKey)}"]`
             ) || []
           );
           target = this.resolvePreferredResultsNode(rowNodes, this.lastContentFocus.col);
@@ -1510,7 +1576,7 @@ export const SearchScreen = {
 
   ensureResultsRowVisible(target) {
     const content = this.container?.querySelector(".search-content");
-    const row = target?.closest?.(".search-results-row");
+    const row = target?.closest?.(".search-results-row, .search-recent-item");
     if (!content || !row) {
       return;
     }
@@ -1634,11 +1700,15 @@ export const SearchScreen = {
       }
       if (direction === "down") {
         const firstRow = nav.rows?.[0] || [];
-        const target = this.resolvePreferredResultsNode(firstRow, col);
+        const target =
+          current?.id === "searchInput"
+            ? firstRow[0] || null
+            : this.resolvePreferredResultsNode(firstRow, col);
         if (target && current?.id === "searchInput") {
           // Match Android TV: leaving the query field with DPAD_DOWN must dismiss the
           // platform IME before focus moves to the first result row.
           current.blur?.();
+          this.rememberCurrentSearchIfValid();
         }
         return this.focusNode(current, target) || true;
       }
@@ -1677,6 +1747,9 @@ export const SearchScreen = {
           const target = this.resolvePreferredResultsNode(prevRowNodes, col);
           return this.focusNode(current, target) || true;
         }
+        if (nav.recentClear && row === 0) {
+          return this.focusNode(current, nav.recentClear) || true;
+        }
         const target =
           nav.header?.[Math.min(col, (nav.header?.length || 1) - 1)] || nav.header?.[0] || null;
         return this.focusNode(current, target) || true;
@@ -1684,19 +1757,41 @@ export const SearchScreen = {
       return true;
     }
 
+    if (zone === "recent-clear") {
+      if (direction === "down") {
+        const target = nav.rows?.[0]?.[0] || null;
+        return this.focusNode(current, target) || true;
+      }
+      if (direction === "up") {
+        return this.focusNode(current, nav.header?.[nav.header.length - 1] || null) || true;
+      }
+      return true;
+    }
+
     return false;
   },
 
-  async runSearchFromInput(input, { autoFocusResults = false } = {}) {
+  async runSearchFromInput(input, { autoFocusResults = false, rememberToHistory = false } = {}) {
     const nextQuery = trimLeadingWhitespace(input?.value || "").trim();
     this.query = nextQuery;
     const nextMode = nextQuery.length >= 2 ? "search" : "idle";
     if (nextMode === "idle" && this.mode === "idle" && !(this.rows || []).length) {
+      const queryChanged = this.lastSubmittedQuery !== nextQuery;
       this.lastSubmittedQuery = nextQuery;
       this.captureLiveViewState();
+      if (queryChanged) {
+        if (this.shouldPatchResultsWithoutReplacingInput()) {
+          this.renderResultsOnly();
+        } else {
+          this.requestRender();
+        }
+      }
       return;
     }
     if (this.mode === nextMode && this.lastSubmittedQuery === nextQuery) {
+      if (rememberToHistory) {
+        this.rememberCurrentSearchIfValid();
+      }
       return;
     }
     this.mode = nextMode;
@@ -1705,6 +1800,51 @@ export const SearchScreen = {
     this.loadToken = (this.loadToken || 0) + 1;
     this.captureLiveViewState();
     await this.reloadRows();
+    if (rememberToHistory) {
+      this.rememberCurrentSearchIfValid();
+    }
+  },
+
+  rememberCurrentSearchIfValid() {
+    const query = String(this.query || "").trim();
+    if (
+      query.length < 2 ||
+      !Array.isArray(this.rows) ||
+      !this.rows.some((row) => Array.isArray(row?.items) && row.items.length > 0)
+    ) {
+      return false;
+    }
+    this.recentSearches = SearchHistoryStore.save(query, null, SEARCH_HISTORY_MAX_ITEMS);
+    return true;
+  },
+
+  async runRecentSearchFromNode(node) {
+    const query = String(node?.dataset?.query || "").trim();
+    const input = this.container?.querySelector("#searchInput");
+    if (!query || !input) {
+      return;
+    }
+    input.value = query;
+    this.cancelScheduledInputSearch();
+    await this.runSearchFromInput(input, {
+      autoFocusResults: true,
+      rememberToHistory: true
+    });
+  },
+
+  clearSearchHistory() {
+    this.recentSearches = SearchHistoryStore.clear();
+    this.lastContentFocus = null;
+    this.requestRender();
+  },
+
+  removeRecentSearchFromNode(node) {
+    const query = String(node?.dataset?.query || "").trim();
+    if (!query) {
+      return;
+    }
+    this.recentSearches = SearchHistoryStore.remove(query);
+    this.requestRender();
   },
 
   scheduleSearchFromInput(input) {
@@ -1767,7 +1907,10 @@ export const SearchScreen = {
         // Alguns IMEs de TV recusam blur enquanto estao se acomodando; o pior
         // caso e o comportamento antigo, entao nao vale interromper a busca.
       }
-      await this.runSearchFromInput(input, { autoFocusResults: true });
+      await this.runSearchFromInput(input, {
+        autoFocusResults: true,
+        rememberToHistory: true
+      });
     });
   },
 
@@ -1858,6 +2001,9 @@ export const SearchScreen = {
     if (action === "openDiscover" && this.layoutPrefs?.discoverLocation === "in_search")
       Router.navigate("discover");
     if (action === "openVoice") this.handleVoiceSearch();
+    if (action === "runRecentSearch") void this.runRecentSearchFromNode(node);
+    if (action === "clearSearchHistory") this.clearSearchHistory();
+    if (action === "removeRecentSearch") this.removeRecentSearchFromNode(node);
   },
 
   ensureVoiceRecognition() {
@@ -1890,6 +2036,7 @@ export const SearchScreen = {
       this.loadToken = (this.loadToken || 0) + 1;
       this.renderLoading();
       await this.reloadRows();
+      this.rememberCurrentSearchIfValid();
     };
 
     recognition.onerror = (event) => {
@@ -2106,7 +2253,10 @@ export const SearchScreen = {
       action === "openDiscover" ||
       action === "openVoice" ||
       action === "openDetail" ||
-      action === "openCatalogSeeAll"
+      action === "openCatalogSeeAll" ||
+      action === "runRecentSearch" ||
+      action === "clearSearchHistory" ||
+      action === "removeRecentSearch"
     ) {
       this.activateActionNode(current);
     }

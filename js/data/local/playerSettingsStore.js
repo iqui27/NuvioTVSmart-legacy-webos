@@ -72,7 +72,7 @@ const DEFAULTS = {
   streamAutoPlaySelectedPlugins: [],
   streamAutoPlayRegex: "",
   streamAutoPlayPreferBingeGroupForNextEpisode: true,
-  streamAutoPlayReuseBingeGroup: true,
+  streamAutoPlayReuseBingeGroup: false,
   streamReuseLastLinkEnabled: false,
   streamReuseLastLinkCacheHours: 24,
   streamAutoPlayTimeoutSeconds: 3
@@ -304,7 +304,7 @@ export function normalizePlayerSettings(settings = {}) {
           : []
         )
           .map((entry) => String(entry).toLowerCase())
-          .filter((entry) => ["intro", "recap", "outro"].includes(entry))
+          .filter((entry) => ["intro", "recap", "outro", "movie-credits"].includes(entry))
       )
     ],
     addonSubtitleStartupMode: ["FAST_STARTUP", "PREFERRED_ONLY", "ALL_SUBTITLES"].includes(

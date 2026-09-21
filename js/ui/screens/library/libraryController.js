@@ -226,12 +226,16 @@ function typeLabelForEmptyState(key) {
     .toLowerCase();
 }
 
+function itemTypeKey(item = {}) {
+  return String(item.mediaCategory || item.type || "")
+    .trim()
+    .toLowerCase();
+}
+
 function normalizeTypeTabs(items) {
   const byKey = new Map();
   items.forEach((item) => {
-    const key = String(item.type || "")
-      .trim()
-      .toLowerCase();
+    const key = itemTypeKey(item);
     if (!key || byKey.has(key)) {
       return;
     }
@@ -241,14 +245,7 @@ function normalizeTypeTabs(items) {
     { key: ALL_KEY, label: `${t("library_type_all", {}, "All")} (${items.length})` },
     ...Array.from(byKey.entries()).map(([key, label]) => ({
       key,
-      label: `${label} (${
-        items.filter(
-          (item) =>
-            String(item.type || "")
-              .trim()
-              .toLowerCase() === key
-        ).length
-      })`
+      label: `${label} (${items.filter((item) => itemTypeKey(item) === key).length})`
     }))
   ];
 }
@@ -312,12 +309,7 @@ function buildFacets(allItems, state) {
       : allItems;
   const selectedTypeKey = state.selectedTypeKey;
   const typeFiltered = listFiltered.filter((item) => {
-    return (
-      selectedTypeKey === ALL_KEY ||
-      String(item.type || "")
-        .trim()
-        .toLowerCase() === selectedTypeKey
-    );
+    return selectedTypeKey === ALL_KEY || itemTypeKey(item) === selectedTypeKey;
   });
   const itemsForTypeCounts = listFiltered.filter(
     (item) =>
@@ -339,12 +331,7 @@ function buildFacets(allItems, state) {
 function sortForState(items, state) {
   const selectedTypeKey = state.selectedTypeKey;
   const typeFiltered = items.filter((item) => {
-    return (
-      selectedTypeKey === ALL_KEY ||
-      String(item.type || "")
-        .trim()
-        .toLowerCase() === selectedTypeKey
-    );
+    return selectedTypeKey === ALL_KEY || itemTypeKey(item) === selectedTypeKey;
   });
 
   const listFiltered =

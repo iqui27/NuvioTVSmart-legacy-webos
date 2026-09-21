@@ -62,6 +62,7 @@ import { isFastHorizontalNavigationEnabled } from "../../../platform/sharedKeys.
 import { CW_DISPLAY_SNAPSHOT_KEY, CW_ENRICHMENT_CACHE_KEY } from "../home/homeConstants.js";
 import { I18n } from "../../../i18n/index.js";
 import { BUILD_LABEL } from "../../../config.js";
+import { isContentRtl } from "../../../core/util/contentTextDirection.js";
 import { PluginManager } from "../../../core/player/pluginManager.js";
 import { motorEntendeEs2015 } from "../../../core/player/pluginScraperRuntime.js";
 import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
@@ -1841,31 +1842,6 @@ function getSettingsSectionById(sectionId) {
   return SECTION_META.find((section) => section.id === sectionId) || null;
 }
 
-function isFirstStrongRtlText(value = "") {
-  for (const character of String(value || "")) {
-    const codePoint = character.codePointAt(0) || 0;
-    const isRtl =
-      (codePoint >= 0x0590 && codePoint <= 0x08ff) ||
-      (codePoint >= 0xfb1d && codePoint <= 0xfdff) ||
-      (codePoint >= 0xfe70 && codePoint <= 0xfeff);
-    if (isRtl) {
-      return true;
-    }
-    const isLtr =
-      (codePoint >= 0x0041 && codePoint <= 0x005a) ||
-      (codePoint >= 0x0061 && codePoint <= 0x007a) ||
-      (codePoint >= 0x00c0 && codePoint <= 0x02af) ||
-      (codePoint >= 0x0370 && codePoint <= 0x058f) ||
-      (codePoint >= 0x0900 && codePoint <= 0x1fff) ||
-      (codePoint >= 0x2e80 && codePoint <= 0xd7ff) ||
-      (codePoint >= 0xf900 && codePoint <= 0xfaff);
-    if (isLtr) {
-      return false;
-    }
-  }
-  return false;
-}
-
 function updateSettingsMarqueeTargets(root) {
   root?.querySelectorAll?.(".settings-nav-label").forEach((label) => {
     label._settingsMarqueeAnimation?.cancel?.();
@@ -1876,7 +1852,7 @@ function updateSettingsMarqueeTargets(root) {
     const originalText = label.dataset.marqueeText || String(label.textContent || "");
     label.dataset.marqueeText = originalText;
     label.textContent = originalText;
-    const textIsRtl = isFirstStrongRtlText(originalText);
+    const textIsRtl = isContentRtl(originalText);
     label.setAttribute("dir", textIsRtl ? "rtl" : "ltr");
 
     const item = label.closest(".settings-nav-item");
@@ -5863,7 +5839,7 @@ export const SettingsScreen = {
     togglePlayerSetting("playback:minimalBufferingUi", "minimalBufferingUiEnabled");
     togglePlayerSetting("playback:pauseOverlay", "pauseOverlayEnabled");
     togglePlayerSetting("playback:parentalGuide", "parentalGuideEnabled");
-    ["intro", "recap", "outro"].forEach((type) =>
+    ["intro", "recap", "outro", "movie-credits"].forEach((type) =>
       this.actionMap.set(`playback:autoSkip:${type}`, () => {
         const current = PlayerSettingsStore.get().autoSkipSegmentTypes || [];
         PlayerSettingsStore.set({
@@ -6441,7 +6417,7 @@ export const SettingsScreen = {
           subtitle: t(
             "settings.playback.skipIntro.subtitle",
             {},
-            "Use IntroDB to detect intro, recap and outro segments when available."
+            "Use IntroDB to detect intro, recap, outro and movie-credit segments when available."
           ),
           checked: Boolean(model.player.skipIntroEnabled)
         })}
@@ -6450,7 +6426,7 @@ export const SettingsScreen = {
         ${Platform.isWebOS() ? this.renderToggleRow({ focusKey: "playback:minimalBufferingUi", title: t("playback_minimal_buffering_ui", {}, "Minimal buffering UI"), subtitle: t("playback_minimal_buffering_ui_sub", {}, "Show only the spinner when playback buffers after it has started"), checked: Boolean(model.player.minimalBufferingUiEnabled) }) : ""}
         ${this.renderToggleRow({ focusKey: "playback:pauseOverlay", title: t("playback_pause_overlay"), subtitle: t("playback_pause_overlay_sub"), checked: model.player.pauseOverlayEnabled !== false })}
         ${this.renderToggleRow({ focusKey: "playback:parentalGuide", title: t("playback_parental_guide"), subtitle: t("playback_parental_guide_sub"), checked: model.player.parentalGuideEnabled !== false })}
-        ${["intro", "recap", "outro"].map((type) => this.renderToggleRow({ focusKey: `playback:autoSkip:${type}`, title: t(`auto_skip_${type}`, {}, `Auto-skip ${type}`), subtitle: t(`auto_skip_${type}_sub`, {}, `Skip ${type} segments automatically`), checked: model.player.autoSkipSegmentTypes?.includes(type) })).join("")}
+        ${["intro", "recap", "outro", "movie-credits"].map((type) => this.renderToggleRow({ focusKey: `playback:autoSkip:${type}`, title: t(`auto_skip_${type}`, {}, `Auto-skip ${type}`), subtitle: t(`auto_skip_${type}_sub`, {}, `Skip ${type} segments automatically`), checked: model.player.autoSkipSegmentTypes?.includes(type) })).join("")}
         ${this.renderToggleRow({
           focusKey: "playback:osdClock",
           title: t("playback_osd_clock", {}, "OSD Clock"),

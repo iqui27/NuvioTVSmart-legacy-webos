@@ -18,6 +18,10 @@ export function continueWatchingImageSources(art = {}, options = {}) {
     cardStyle,
     options.useEpisodeThumbnails
   );
+  // The normalized TV item can expose generic artwork in episodeThumbnail as a
+  // fallback. Only series items may use that field as episode artwork; movies
+  // must keep the Android order of backdrop before poster.
+  const useEpisodeArtwork = useEpisodeThumbnails && options.isSeries !== false;
   // Wide cards use a poster-shaped strip on Android, so they share the poster-art
   // resolution path while still honoring the episode-thumbnail preference.
   const preferPosterArtwork = cardStyle !== "card";
@@ -25,19 +29,19 @@ export function continueWatchingImageSources(art = {}, options = {}) {
   const hasAired = options.hasAired !== false;
 
   if (preferPosterArtwork) {
-    if (useEpisodeThumbnails) {
+    if (useEpisodeArtwork) {
       return [isNextUp ? thumbnail : episodeThumbnail, poster, backdrop];
     }
     return [poster, backdrop];
   }
 
   if (isNextUp && !hasAired) {
-    return [backdrop, poster, ...(useEpisodeThumbnails ? [thumbnail] : [])];
+    return [backdrop, poster, ...(useEpisodeArtwork ? [thumbnail] : [])];
   }
-  if (isNextUp && useEpisodeThumbnails) {
+  if (isNextUp && useEpisodeArtwork) {
     return [thumbnail, backdrop, poster];
   }
-  if (useEpisodeThumbnails) {
+  if (useEpisodeArtwork) {
     return [episodeThumbnail, backdrop, poster];
   }
 

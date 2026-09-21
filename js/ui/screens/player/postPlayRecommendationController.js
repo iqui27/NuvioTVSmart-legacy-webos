@@ -29,6 +29,7 @@ import {
   requestJson as traktRequestJson,
   TraktAuthService
 } from "../../../data/repository/traktAuthService.js";
+import { moviePostPlayTriggerSeconds } from "../../../core/player/skipIntervalRules.js";
 
 // These values are the Android TV PostPlayRecommendation constants expressed
 // in the same units used by the browser player.
@@ -140,18 +141,41 @@ function resolvePostPlayContentType(value, fallback = null) {
 
 export function postPlayRecommendationPrefetchProgress(
   contentType = "movie",
-  movieThresholdPercent = POST_PLAY_RECOMMENDATION_DEFAULT_MOVIE_THRESHOLD_PERCENT
+  movieThresholdPercent = POST_PLAY_RECOMMENDATION_DEFAULT_MOVIE_THRESHOLD_PERCENT,
+  durationMs = 0,
+  skipIntervals = [],
+  episodeThresholdMode = "PERCENTAGE",
+  episodeThresholdPercent = 99,
+  episodeThresholdMinutesBeforeEnd = 2
 ) {
-  return normalizeContentType(contentType) === "series"
-    ? POST_PLAY_RECOMMENDATION_PREFETCH_PROGRESS
-    : (normalizePostPlayMovieThreshold(movieThresholdPercent) - 5) / 100;
+  if (normalizeContentType(contentType) === "series") {
+    return POST_PLAY_RECOMMENDATION_PREFETCH_PROGRESS;
+  }
+  const duration = Number(durationMs);
+  const triggerSeconds = moviePostPlayTriggerSeconds({
+    durationSeconds: duration > 0 ? duration / 1000 : 0,
+    movieThresholdPercent,
+    skipIntervals,
+    episodeThresholdMode,
+    episodeThresholdPercent,
+    episodeThresholdMinutesBeforeEnd
+  });
+  const triggerProgress =
+    triggerSeconds != null && duration > 0
+      ? triggerSeconds / (duration / 1000)
+      : normalizePostPlayMovieThreshold(movieThresholdPercent) / 100;
+  return Math.max(0, triggerProgress - 0.05);
 }
 
 export function shouldPrefetchPostPlayRecommendation({
   contentType = "movie",
   positionMs = 0,
   durationMs = 0,
-  movieThresholdPercent = POST_PLAY_RECOMMENDATION_DEFAULT_MOVIE_THRESHOLD_PERCENT
+  movieThresholdPercent = POST_PLAY_RECOMMENDATION_DEFAULT_MOVIE_THRESHOLD_PERCENT,
+  skipIntervals = [],
+  episodeThresholdMode = "PERCENTAGE",
+  episodeThresholdPercent = 99,
+  episodeThresholdMinutesBeforeEnd = 2
 } = {}) {
   if (!isSupportedPostPlayContentType(contentType)) {
     return false;
@@ -164,8 +188,16 @@ export function shouldPrefetchPostPlayRecommendation({
   const progress = Math.max(0, Math.min(1, position / duration));
   const remaining = Math.max(0, duration - position);
   return (
-    progress >= postPlayRecommendationPrefetchProgress(contentType, movieThresholdPercent) ||
-    remaining <= POST_PLAY_RECOMMENDATION_PREFETCH_REMAINING_MS
+    progress >=
+      postPlayRecommendationPrefetchProgress(
+        contentType,
+        movieThresholdPercent,
+        duration,
+        skipIntervals,
+        episodeThresholdMode,
+        episodeThresholdPercent,
+        episodeThresholdMinutesBeforeEnd
+      ) || remaining <= POST_PLAY_RECOMMENDATION_PREFETCH_REMAINING_MS
   );
 }
 
@@ -174,6 +206,10 @@ export function shouldShowPostPlayRecommendation({
   positionMs = 0,
   durationMs = 0,
   movieThresholdPercent = POST_PLAY_RECOMMENDATION_DEFAULT_MOVIE_THRESHOLD_PERCENT,
+  skipIntervals = [],
+  episodeThresholdMode = "PERCENTAGE",
+  episodeThresholdPercent = 99,
+  episodeThresholdMinutesBeforeEnd = 2,
   seriesThresholdReached = false,
   playbackEnded = false
 } = {}) {
@@ -191,7 +227,15 @@ export function shouldShowPostPlayRecommendation({
   if (normalizeContentType(contentType) === "series") {
     return Boolean(seriesThresholdReached);
   }
-  return position / duration >= normalizePostPlayMovieThreshold(movieThresholdPercent) / 100;
+  const triggerSeconds = moviePostPlayTriggerSeconds({
+    durationSeconds: duration / 1000,
+    movieThresholdPercent,
+    skipIntervals,
+    episodeThresholdMode,
+    episodeThresholdPercent,
+    episodeThresholdMinutesBeforeEnd
+  });
+  return triggerSeconds != null && position / 1000 >= triggerSeconds;
 }
 
 export function postPlayRecommendationCountdownSeconds(positionMs = 0, durationMs = 0) {
@@ -908,7 +952,11 @@ export class PostPlayRecommendationController {
       ...snapshot,
       contentType,
       contentId,
-      movieThresholdPercent: normalizePostPlayMovieThreshold(snapshot.movieThresholdPercent)
+      movieThresholdPercent: normalizePostPlayMovieThreshold(snapshot.movieThresholdPercent),
+      skipIntervals: Array.isArray(snapshot.skipIntervals) ? snapshot.skipIntervals : [],
+      episodeThresholdMode: String(snapshot.episodeThresholdMode || "PERCENTAGE").toUpperCase(),
+      episodeThresholdPercent: Number(snapshot.episodeThresholdPercent ?? 99),
+      episodeThresholdMinutesBeforeEnd: Number(snapshot.episodeThresholdMinutesBeforeEnd ?? 2)
     };
     this.evaluate();
     return this.getState();
@@ -954,7 +1002,11 @@ export class PostPlayRecommendationController {
         contentType: snapshot.contentType,
         positionMs,
         durationMs,
-        movieThresholdPercent: snapshot.movieThresholdPercent
+        movieThresholdPercent: snapshot.movieThresholdPercent,
+        skipIntervals: snapshot.skipIntervals,
+        episodeThresholdMode: snapshot.episodeThresholdMode,
+        episodeThresholdPercent: snapshot.episodeThresholdPercent,
+        episodeThresholdMinutesBeforeEnd: snapshot.episodeThresholdMinutesBeforeEnd
       })
     ) {
       this.prefetchAttempted = true;
@@ -969,6 +1021,10 @@ export class PostPlayRecommendationController {
       positionMs,
       durationMs,
       movieThresholdPercent: snapshot.movieThresholdPercent,
+      skipIntervals: snapshot.skipIntervals,
+      episodeThresholdMode: snapshot.episodeThresholdMode,
+      episodeThresholdPercent: snapshot.episodeThresholdPercent,
+      episodeThresholdMinutesBeforeEnd: snapshot.episodeThresholdMinutesBeforeEnd,
       seriesThresholdReached: snapshot.seriesThresholdReached,
       playbackEnded: Boolean(snapshot.playbackEnded)
     });

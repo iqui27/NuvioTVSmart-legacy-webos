@@ -3835,6 +3835,102 @@ button:focus-visible {
   line-height: 1.2;
 }
 
+.search-recent-section {
+  margin: 0 48px 16px;
+  padding-bottom: 28px;
+}
+
+.search-recent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.search-recent-title {
+  margin: 0;
+  font-size: 48px;
+  font-weight: 600;
+  line-height: 1.08;
+  color: var(--text-color);
+}
+
+.search-recent-clear {
+  min-height: 64px;
+  padding: 0 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--card-bg);
+  color: var(--text-color);
+  font-size: 24px;
+}
+
+.search-recent-clear.focused {
+  border-color: var(--secondary-color);
+  background: var(--focus-bg);
+  box-shadow: 0 0 0 2px var(--secondary-color);
+}
+
+.search-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.search-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.search-recent-query {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 72px;
+  padding: 0 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--card-bg);
+  color: var(--text-color);
+  font-size: 28px;
+  text-align: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-recent-query.focused {
+  border-color: var(--secondary-color);
+  background: var(--focus-bg);
+  box-shadow: 0 0 0 2px var(--secondary-color);
+}
+
+.search-recent-remove {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-recent-remove .material-icons {
+  font-size: 28px;
+}
+
+.search-recent-remove.focused {
+  border-color: var(--secondary-color);
+  background: var(--focus-bg);
+  box-shadow: 0 0 0 2px var(--secondary-color);
+}
+
 .search-toast {
   position: fixed;
   top: 26px;
@@ -6307,7 +6403,7 @@ button:focus-visible {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #9e9e9e;
+  background: var(--secondary-color);
 }
 
 .home-screen-shell .home-continue-media-loading {
@@ -13677,6 +13773,13 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   color: rgba(255, 255, 255, 0.68);
 }
 
+.player-meta-secondary {
+  margin-top: 0;
+  font-size: 14px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.68);
+}
+
 .player-controls-bar {
   width: 100%;
   max-width: none;
@@ -15716,6 +15819,24 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   height: min(20.83vw, 400px); /* ATV 200dp -> 400px */
 }
 
+.player-meta {
+  max-width: 100%;
+}
+
+.player-meta-secondary {
+  font-size: var(--player-overlay-label-font); /* ATV bodyMedium 14sp -> 28px */
+  line-height: 1.428571; /* ATV bodyMedium 20sp line-height -> 40px */
+  letter-spacing: 0.5px; /* ATV bodyMedium 0.25sp -> 0.5px */
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.player-stream-source {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .player-title,
 .player-dialog-title,
 .player-sources-title,
@@ -15744,6 +15865,20 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   color: var(--player-atv-text-secondary);
 }
 
+.player-title {
+  font-size: min(2.5vw, 48px); /* ATV headlineMedium 24sp -> 48px */
+  font-weight: 600;
+  line-height: 1.333333;
+  letter-spacing: 0;
+}
+
+.player-subtitle {
+  margin-top: 0;
+  line-height: 1.5; /* ATV titleMedium 16sp/24sp -> 32px/48px */
+  font-weight: 500;
+  letter-spacing: 0.3px; /* ATV titleMedium 0.15sp -> 0.3px */
+}
+
 .player-episode-close-btn,
 .player-episode-season-tab {
   font-size: min(1.46vw, 28px);
@@ -15756,6 +15891,10 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   transition:
     height 120ms ease,
     background-color 120ms ease;
+}
+
+.player-progress-shell {
+  margin-top: min(1.25vw, 24px); /* ATV metadata spacer 12dp -> 24px */
 }
 
 .player-progress-shell.focused .player-progress-track {
@@ -21246,6 +21385,18 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
 
 .no-flex-gap .search-seeall-inner > * + * {
   margin-top: 14px;
+}
+
+.no-flex-gap .search-recent-header > * + * {
+  margin-left: 24px;
+}
+
+.no-flex-gap .search-recent-list > * + * {
+  margin-top: 12px;
+}
+
+.no-flex-gap .search-recent-item > * + * {
+  margin-left: 16px;
 }
 
 .no-flex-gap .discover-content > * + *,

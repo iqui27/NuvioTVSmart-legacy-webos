@@ -113,10 +113,11 @@ function simklId(ids = {}) {
   return idValue(ids, "simkl") || idValue(ids, "simkl_id");
 }
 
-function canonicalContentId(media = {}, mediaType = "shows") {
+export function canonicalContentId(media = {}, mediaType = "shows") {
   const ids = media.ids || {};
   const preference = TraktSettingsStore.get().simklAnimeIdPreference;
-  if (mediaType === "anime") {
+  const hasAnimeIds = ["mal", "kitsu", "anidb"].some((key) => Boolean(idValue(ids, key)));
+  if (hasAnimeIds) {
     if (preference === SimklAnimeIdPreference.MAL) {
       if (idValue(ids, "mal")) return `mal:${idValue(ids, "mal")}`;
       if (idValue(ids, "kitsu")) return `kitsu:${idValue(ids, "kitsu")}`;
@@ -126,6 +127,9 @@ function canonicalContentId(media = {}, mediaType = "shows") {
       if (idValue(ids, "kitsu")) return `kitsu:${idValue(ids, "kitsu")}`;
       if (idValue(ids, "mal")) return `mal:${idValue(ids, "mal")}`;
       if (idValue(ids, "anidb")) return `anidb:${idValue(ids, "anidb")}`;
+    }
+    if (preference === SimklAnimeIdPreference.TVDB && idValue(ids, "tvdb")) {
+      return `tvdb:${idValue(ids, "tvdb")}`;
     }
   }
   if (idValue(ids, "imdb")) return idValue(ids, "imdb");
@@ -320,6 +324,7 @@ function toLibraryEntry(entry, snapshot) {
   return {
     id: contentId,
     type,
+    mediaCategory: entry.mediaType === "anime" ? "anime" : null,
     name: String(media.title || contentId),
     poster: posterUrl(media),
     background: null,
@@ -353,7 +358,7 @@ function toLibraryEntry(entry, snapshot) {
   };
 }
 
-function aliasesForMedia(media = {}, mediaType = "shows") {
+export function aliasesForMedia(media = {}, mediaType = "shows") {
   const aliases = new Set();
   const canonical = canonicalContentId(media, mediaType);
   if (canonical) aliases.add(canonical.toLowerCase());

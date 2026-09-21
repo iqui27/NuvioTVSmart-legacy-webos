@@ -245,6 +245,19 @@ export const StartupSyncService = {
     return !(this.lastPullCompleted && this.lastPulledKey === currentSyncKey());
   },
 
+  // Home must be able to wait for the authoritative cold pull without
+  // treating a failed/backoff cycle as an endless loading state.
+  getCurrentProfilePullPromise() {
+    if (
+      !this.isCurrentProfilePullPending() ||
+      !this.inFlightPromise ||
+      this.inFlightGeneration !== this.runGeneration
+    ) {
+      return null;
+    }
+    return this.inFlightPromise;
+  },
+
   scheduleBackoffRetry({ notifyPullCompleted = false } = {}) {
     if (!this.started || !AuthManager.isAuthenticated) {
       return;

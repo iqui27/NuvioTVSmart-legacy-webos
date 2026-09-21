@@ -212,15 +212,17 @@ export function mapRemotePluginRows(rows = []) {
         !hasExplicitType && /\.cs3(?:$|[?#])/i.test(url)
           ? PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX
           : null;
-      // A missing/null repo_type is an old Android-compatible row, not a
-      // future enum. Let PluginManager inspect its document and classify it;
-      // explicit unknown/future values remain opaque there.
-      const repoType = hasExplicitType
+      // Missing, empty, and future repo_type values must remain auto-detectable,
+      // matching Android's RepositoryType.valueOf() fallback to a null hint.
+      // PluginManager still retains the raw row for diagnostics and sync
+      // bookkeeping, but it must not block a valid Nuvio JS manifest.
+      const normalizedType = hasExplicitType
         ? normalizePluginRepositoryType(
             row?.repo_type ?? row?.repoType ?? row?.type,
             PLUGIN_REPOSITORY_TYPES.UNKNOWN
           )
         : inferredType;
+      const repoType = normalizedType === PLUGIN_REPOSITORY_TYPES.UNKNOWN ? null : normalizedType;
       return {
         url:
           repoType === PLUGIN_REPOSITORY_TYPES.NUVIO_JS
@@ -229,7 +231,7 @@ export function mapRemotePluginRows(rows = []) {
         name: String(row?.name || "").trim(),
         enabled: readRemoteBoolean(row?.enabled),
         repoType,
-        repoTypeDeclared: hasExplicitType,
+        repoTypeDeclared: hasExplicitType && repoType != null,
         sortOrder: Number(row?.sort_order ?? row?.sortOrder ?? row?.position ?? sourceIndex),
         sourceIndex,
         raw: row

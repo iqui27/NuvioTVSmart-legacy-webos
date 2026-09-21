@@ -4,6 +4,7 @@ import {
 } from "../../data/local/tmdbSettingsStore.js";
 import { TMDB_API_KEY } from "../../config.js";
 import { tmdbShowReleaseInfo, tmdbYearPart } from "../util/tmdbReleaseRange.js";
+import { sortCollectionPartsByReleaseDate } from "./tmdbCollectionOrdering.js";
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_SIZES = {
@@ -1084,7 +1085,7 @@ export const TmdbMetadataService = {
       return [];
     }
     const data = await response.json();
-    return (Array.isArray(data?.parts) ? data.parts : [])
+    return sortCollectionPartsByReleaseDate(data?.parts)
       .map((item) => ({
         id: item?.id ? `tmdb:${String(item.id)}` : "",
         type: "movie",

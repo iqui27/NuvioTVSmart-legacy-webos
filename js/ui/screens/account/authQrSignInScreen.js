@@ -208,11 +208,13 @@ export const AuthQrSignInScreen = {
           <label class="qr-input-label" for="auth-email-input">${escapeHtml(I18n.t("auth.email.emailLabel"))}</label>
           <input id="auth-email-input" class="qr-auth-input focusable" data-action="email-input"
                  type="email" autocomplete="username" autocapitalize="none" spellcheck="false"
+                 dir="ltr"
                  placeholder="${escapeHtml(I18n.t("auth.email.placeholder"))}"
                  value="${escapeHtml(this.email)}" />
           <label class="qr-input-label" for="auth-password-input">${escapeHtml(I18n.t("auth.email.passwordLabel"))}</label>
           <input id="auth-password-input" class="qr-auth-input focusable" data-action="password-input"
                  type="password" autocomplete="current-password" autocapitalize="none" spellcheck="false"
+                 dir="ltr"
                  placeholder="${escapeHtml(I18n.t("auth.email.passwordPlaceholder"))}"
                  value="${escapeHtml(this.password)}" />
           <button type="button" id="auth-email-submit" class="qr-action-btn qr-action-btn-primary focusable"

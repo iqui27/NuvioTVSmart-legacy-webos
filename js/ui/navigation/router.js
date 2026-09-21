@@ -168,6 +168,22 @@ function showMountFailurePanel(routeName, error) {
   }
 }
 
+function resolvePendingHistoryReturnParams(pending, state, stackEntry) {
+  const stackParams = getStackEntryParams(stackEntry);
+  const historyParams = state?.params && typeof state.params === "object" ? state.params : {};
+  const pendingParams = pending?.params && typeof pending.params === "object" ? pending.params : {};
+
+  // The pending params come from the live source route (for example the
+  // player's current resume position). Browser history can still contain the
+  // older params captured when that route was originally opened, so preserve
+  // its untouched fields but let the explicit return params win.
+  return {
+    ...(stackParams && typeof stackParams === "object" ? stackParams : {}),
+    ...historyParams,
+    ...pendingParams
+  };
+}
+
 export const Router = {
   current: null,
   currentParams: {},
@@ -289,10 +305,7 @@ export const Router = {
 
     if (sourceMatches && stackMatches && routeMatches) {
       this.stack.splice(targetStackIndex);
-      const targetParams =
-        state?.params && typeof state.params === "object"
-          ? state.params
-          : getStackEntryParams(stackEntry) || pending.params;
+      const targetParams = resolvePendingHistoryReturnParams(pending, state, stackEntry);
       await this.navigate(pending.route, targetParams, {
         fromHistory: true,
         skipStackPush: true,
@@ -306,11 +319,15 @@ export const Router = {
       // first history entry. Keep the requested Android destination instead of
       // allowing the generic no-state path to jump to Home.
       this.stack.splice(targetStackIndex);
-      await this.navigate(pending.route, getStackEntryParams(stackEntry) || pending.params, {
-        skipStackPush: true,
-        replaceHistory: true,
-        isBackNavigation: true
-      });
+      await this.navigate(
+        pending.route,
+        resolvePendingHistoryReturnParams(pending, state, stackEntry),
+        {
+          skipStackPush: true,
+          replaceHistory: true,
+          isBackNavigation: true
+        }
+      );
       return true;
     }
 

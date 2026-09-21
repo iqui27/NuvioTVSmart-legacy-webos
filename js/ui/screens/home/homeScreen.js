@@ -1420,21 +1420,17 @@ function withTimeout(promise, ms, fallbackValue) {
   });
 }
 
-async function resolveTrailerMetaWithTmdbFallback(meta = {}, itemType = "movie") {
-  const fallbackSource = resolveTrailerSource(meta);
-  if (fallbackSource) {
-    return fallbackSource;
-  }
+async function fetchModernHeroTmdbEnrichment(hero = {}, itemType = "movie") {
   const settings = TmdbSettingsStore.get();
-  if (!settings.enabled || !settings.useTrailers || !TMDB_API_KEY) {
-    return fallbackSource;
+  if (!settings.enabled || !settings.modernHomeEnabled || !TMDB_API_KEY || !hero?.id) {
+    return null;
   }
   try {
-    const tmdbId = await withTimeout(TmdbService.ensureTmdbId(meta?.id, itemType), 1800, null);
+    const tmdbId = await withTimeout(TmdbService.ensureTmdbId(hero.id, itemType), 1800, null);
     if (!tmdbId) {
       return null;
     }
-    const enrichment = await withTimeout(
+    return await withTimeout(
       TmdbMetadataService.fetchEnrichment({
         tmdbId,
         contentType: itemType,
@@ -1443,26 +1439,33 @@ async function resolveTrailerMetaWithTmdbFallback(meta = {}, itemType = "movie")
       2200,
       null
     );
-    if (!enrichment) {
+  } catch (_) {
+    return null;
+  }
+}
+
+async function resolveTrailerMetaWithTmdbFallback(meta = {}, itemType = "movie") {
+  const fallbackSource = resolveTrailerSource(meta);
+  const settings = TmdbSettingsStore.get();
+  if (!settings.enabled || !settings.useTrailers || !TMDB_API_KEY) {
+    return fallbackSource;
+  }
+  try {
+    const tmdbId = await withTimeout(TmdbService.ensureTmdbId(meta?.id, itemType), 1800, null);
+    if (!tmdbId) {
       return fallbackSource;
     }
-    const mergedMeta = {
-      ...meta,
-      trailers:
-        Array.isArray(meta?.trailers) && meta.trailers.length
-          ? meta.trailers
-          : Array.isArray(enrichment?.trailers)
-            ? enrichment.trailers
-            : [],
-      trailerYtIds:
-        Array.isArray(meta?.trailerYtIds) && meta.trailerYtIds.length
-          ? meta.trailerYtIds
-          : Array.isArray(enrichment?.trailerYtIds)
-            ? enrichment.trailerYtIds
-            : []
-    };
-    const enrichedFallbackSource = resolveTrailerSource(mergedMeta);
-    return enrichedFallbackSource || fallbackSource;
+    const trailers = await withTimeout(
+      TmdbMetadataService.fetchTrailerCandidates({
+        tmdbId,
+        contentType: itemType,
+        language: settings.language
+      }),
+      2200,
+      []
+    );
+    const tmdbSource = resolveTrailerSource({ trailers });
+    return tmdbSource || fallbackSource;
   } catch (_) {
     return fallbackSource;
   }
@@ -2756,6 +2759,7 @@ function renderContinueWatchingCard(item, index, options = {}) {
     {
       cardStyle,
       useEpisodeThumbnails: options?.useEpisodeThumbnails,
+      isSeries: isSeriesTypeForContinueWatching(normalized.type),
       isNextUp,
       hasAired
     }
@@ -4074,10 +4078,11 @@ export const HomeScreen = {
       state.position += state.velocity * deltaSeconds;
       container[property] = state.position;
 
-      const remaining = Number(state.target || 0) - Number(container[property] || 0);
+      // Reading scroll position after writing it can flush layout. It only
+      // affects settling once velocity is low enough; keep that check first.
       if (
-        Math.abs(remaining) <= state.precision &&
-        Math.abs(state.velocity) <= state.velocityEpsilon
+        Math.abs(state.velocity) <= state.velocityEpsilon &&
+        Math.abs(Number(state.target || 0) - Number(container[property] || 0)) <= state.precision
       ) {
         container[property] = state.target;
         existing[key] = null;
@@ -4919,15 +4924,6 @@ export const HomeScreen = {
     if (!display) {
       return;
     }
-    const previousHeroId = String(heroNode.dataset.itemId || "").trim();
-    const previousHeroType = String(heroNode.dataset.itemType || "")
-      .trim()
-      .toLowerCase();
-    const nextHeroId = String(hero?.id || "").trim();
-    const nextHeroType = String(hero?.type || "movie")
-      .trim()
-      .toLowerCase();
-    const isNewHero = previousHeroId !== nextHeroId || previousHeroType !== nextHeroType;
     heroNode.dataset.itemId = hero?.id || "";
     heroNode.dataset.itemType = hero?.type || "movie";
     heroNode.dataset.itemTitle = hero?.name || "Untitled";
@@ -4946,9 +4942,7 @@ export const HomeScreen = {
       const src = display.backdrop || "";
       if (backdrop instanceof HTMLImageElement) {
         const shouldFreezeBackdrop =
-          Boolean(hero?.heroMetaEnriching) &&
-          !isNewHero &&
-          String(backdrop.getAttribute("src") || "").trim();
+          Boolean(hero?.heroMetaEnriching) && String(backdrop.getAttribute("src") || "").trim();
         if (!shouldFreezeBackdrop) {
           animateHeroBackdropSwap(backdrop, src, display.title || "featured", heroCrossfadeMs, {
             transitionMode: heroTransitionMode
@@ -6787,6 +6781,8 @@ export const HomeScreen = {
       null
     ).catch(() => null);
     let metadataPromise = null;
+    let latestMetadataResult = null;
+    let latestTmdbEnrichment = null;
     const commitFallbackHero = async () => {
       if (!canCommitHero()) {
         return false;
@@ -6804,46 +6800,93 @@ export const HomeScreen = {
       await commitHero(fallbackHero, { merge: mdbImdbRating != null });
       return true;
     };
-    const commitMetadataResult = async (result, { late = false } = {}) => {
-      if (result?.status !== "success" || !result.data || !canCommitHero()) {
+    const commitMetadataResult = async (result, { late = false, tmdbEnrichment = null } = {}) => {
+      const meta = result?.status === "success" && result.data ? result.data : null;
+      if ((!meta && !tmdbEnrichment) || !canCommitHero()) {
         return false;
       }
-      const meta = result.data;
-      const enrichedImdb = resolveImdbRating(meta);
+      const enrichedImdb = meta ? resolveImdbRating(meta) : null;
       const mdbImdbRating = await mdbImdbRatingPromise;
       if (!canCommitHero()) {
         return false;
       }
+      const settings = TmdbSettingsStore.get();
       const sourceHero =
-        late && String(this.heroItem?.id || "") === itemId
+        (late || tmdbEnrichment) && String(this.heroItem?.id || "") === itemId
           ? this.heroItem
           : deferCommit
             ? hero
             : this.heroItem;
-      const enrichedRuntime = parseRuntimeMinutes(meta.runtimeMinutes ?? meta.runtime);
+      const enrichedRuntime = parseRuntimeMinutes(meta?.runtimeMinutes ?? meta?.runtime);
       const runtimePatch = {
         ...(enrichedRuntime > 0 ? { runtimeMinutes: enrichedRuntime } : {}),
-        ...(shouldPreserveHomeRuntimeText(meta.runtime) ? { runtime: meta.runtime } : {})
+        ...(shouldPreserveHomeRuntimeText(meta?.runtime) ? { runtime: meta.runtime } : {})
       };
+      const tmdbRuntime = parseRuntimeMinutes(
+        tmdbEnrichment?.runtimeMinutes ?? tmdbEnrichment?.runtime
+      );
+      const tmdbPatch = tmdbEnrichment
+        ? {
+            ...(settings.useBasicInfo && tmdbEnrichment.localizedTitle
+              ? { name: tmdbEnrichment.localizedTitle }
+              : {}),
+            ...(settings.useBasicInfo && tmdbEnrichment.description
+              ? { description: tmdbEnrichment.description }
+              : {}),
+            ...(settings.useBasicInfo &&
+            Array.isArray(tmdbEnrichment.genres) &&
+            tmdbEnrichment.genres.length
+              ? { genres: tmdbEnrichment.genres }
+              : {}),
+            ...(settings.useArtwork && tmdbEnrichment.backdrop
+              ? { background: tmdbEnrichment.backdrop }
+              : {}),
+            ...(settings.useArtwork && tmdbEnrichment.logo ? { logo: tmdbEnrichment.logo } : {}),
+            ...(settings.useDetails && tmdbRuntime > 0 ? { runtimeMinutes: tmdbRuntime } : {}),
+            ...(settings.useDetails && tmdbEnrichment.ageRating
+              ? { ageRating: tmdbEnrichment.ageRating }
+              : {}),
+            ...(settings.useDetails && tmdbEnrichment.status
+              ? { status: tmdbEnrichment.status }
+              : {}),
+            ...(settings.useReleaseDates && tmdbEnrichment.releaseInfo
+              ? { releaseInfo: tmdbEnrichment.releaseInfo }
+              : {})
+          }
+        : {};
       const mergedHero = {
         ...sourceHero,
-        heroMetaEnriched: true,
+        heroMetaEnriched: Boolean(meta || tmdbEnrichment),
         heroMetaEnriching: false,
         ...(mdbImdbRating != null
           ? { imdbRating: Number(mdbImdbRating) }
           : enrichedImdb != null
             ? { imdbRating: enrichedImdb }
             : {}),
-        ...runtimePatch,
-        ...(meta.released ? { released: meta.released } : {}),
-        ...(meta.releaseInfo ? { releaseInfo: meta.releaseInfo } : {}),
-        ...(Array.isArray(meta.genres) && meta.genres.length ? { genres: meta.genres } : {}),
-        ...(meta.description ? { description: meta.description } : {}),
-        ...(meta.logo ? { logo: meta.logo } : {}),
-        ...(meta.background ? { background: meta.background } : {})
+        ...(meta ? runtimePatch : {}),
+        ...(meta?.released ? { released: meta.released } : {}),
+        ...(meta?.releaseInfo ? { releaseInfo: meta.releaseInfo } : {}),
+        ...(Array.isArray(meta?.genres) && meta.genres.length ? { genres: meta.genres } : {}),
+        ...(meta?.description ? { description: meta.description } : {}),
+        ...(meta?.logo ? { logo: meta.logo } : {}),
+        ...(meta?.background ? { background: meta.background } : {}),
+        ...tmdbPatch
       };
       return commitHero(mergedHero, { merge: true });
     };
+    const tmdbPromise = fetchModernHeroTmdbEnrichment(hero, itemType).catch(() => null);
+    void tmdbPromise
+      .then((enrichment) => {
+        latestTmdbEnrichment = enrichment;
+        if (enrichment) {
+          return commitMetadataResult(latestMetadataResult, {
+            late: true,
+            tmdbEnrichment: enrichment
+          });
+        }
+        return null;
+      })
+      .catch(() => {});
     try {
       // Promise.race does not cancel the repository request. Keep it available
       // so a slow but successful metadata response can still update this hero.
@@ -6855,16 +6898,23 @@ export const HomeScreen = {
       if (!canCommitHero()) {
         return;
       }
+      latestMetadataResult = result;
       if (result?.status !== "success" || !result.data) {
         await commitFallbackHero();
         return;
       }
-      await commitMetadataResult(result);
+      await commitMetadataResult(result, { tmdbEnrichment: latestTmdbEnrichment });
     } catch (error) {
       await commitFallbackHero();
       if (error?.message === "hero-enrich-timeout" && metadataPromise) {
         void metadataPromise
-          .then((result) => commitMetadataResult(result, { late: true }))
+          .then((result) => {
+            latestMetadataResult = result;
+            return commitMetadataResult(result, {
+              late: true,
+              tmdbEnrichment: latestTmdbEnrichment
+            });
+          })
           .catch(() => {});
       }
     }
@@ -7617,31 +7667,27 @@ export const HomeScreen = {
       return null;
     }
     try {
-      const inlineSource = await withTimeout(
-        resolveTrailerMetaWithTmdbFallback(
-          { ...(item || {}), id: itemId, type: itemType },
-          itemType
-        ),
-        2200,
-        null
-      );
+      const itemMeta = { ...(item || {}), id: itemId, type: itemType };
+      const inlineFallbackSource = resolveTrailerSource(itemMeta);
+      const addonMetaPromise = inlineFallbackSource
+        ? Promise.resolve({ status: "error" })
+        : withTimeout(metaRepository.getMetaFromAllAddons(itemType, itemId), 3200, {
+            status: "error",
+            message: "timeout"
+          });
+      const [inlineSource, result] = await Promise.all([
+        withTimeout(resolveTrailerMetaWithTmdbFallback(itemMeta, itemType), 2200, null),
+        addonMetaPromise
+      ]);
       if (inlineSource) {
         return inlineSource;
       }
-
-      const result = await withTimeout(
-        metaRepository.getMetaFromAllAddons(itemType, itemId),
-        3200,
-        { status: "error", message: "timeout" }
-      );
-      const source =
-        result?.status === "success"
-          ? await resolveTrailerMetaWithTmdbFallback(
-              { ...(result?.data || {}), id: itemId, type: itemType },
-              itemType
-            )
-          : null;
-      return source || null;
+      if (inlineFallbackSource) {
+        return inlineFallbackSource;
+      }
+      return result?.status === "success"
+        ? resolveTrailerSource({ ...(result?.data || {}), id: itemId, type: itemType })
+        : null;
     } catch (error) {
       console.warn("Home trailer preview lookup failed", error);
       return null;
@@ -8660,7 +8706,10 @@ export const HomeScreen = {
 
   startModernVerticalFastScroll(direction) {
     const main = this.container?.querySelector(".home-modern-rows-viewport");
-    if (this.layoutMode !== "modern" || !main || !direction) {
+    if (this.layoutMode !== "modern" || !main || !direction || this.isPerformanceConstrained()) {
+      // Constrained TV runtimes cannot sustain a frame-by-frame scrollTop write
+      // over the fully mounted Home DOM. Let the existing throttled focus path
+      // handle repeated D-pad input with immediate focus scrolling instead.
       return false;
     }
     this.cancelModernCameraFollow({ stopAnimations: true });
@@ -9868,6 +9917,9 @@ export const HomeScreen = {
     const startupSyncPendingAtLoad =
       continueWatchingSource === WatchProgressSource.NUVIO_SYNC &&
       StartupSyncService.isCurrentProfilePullPending();
+    const startupSyncPullPromiseAtLoad = startupSyncPendingAtLoad
+      ? StartupSyncService.getCurrentProfilePullPromise()
+      : null;
     const preserveContinueWatching = Boolean(background && this.continueWatchingDisplay?.length);
     const hydratedFromSnapshot = Boolean(
       !background &&
@@ -10220,9 +10272,17 @@ export const HomeScreen = {
           return;
         }
         const sourceLoadState = watchProgressRepository.getContinueWatchingRemoteProgressState();
+        const startupSyncStillPending =
+          continueWatchingSource === WatchProgressSource.NUVIO_SYNC &&
+          StartupSyncService.isCurrentProfilePullPending();
+        const startupSyncPullPromise =
+          continueWatchingSource === WatchProgressSource.NUVIO_SYNC
+            ? startupSyncPullPromiseAtLoad || StartupSyncService.getCurrentProfilePullPromise()
+            : null;
+        const startupSyncCompletedDuringLoad = startupSyncPendingAtLoad && !startupSyncStillPending;
         const startupSyncPending =
           continueWatchingSource === WatchProgressSource.NUVIO_SYNC &&
-          (startupSyncPendingAtLoad || StartupSyncService.isCurrentProfilePullPending());
+          (startupSyncPendingAtLoad || startupSyncStillPending);
         const hasLoadedRemoteProgress = Boolean(
           !progressAllError &&
           !recentProgressError &&
@@ -10251,15 +10311,12 @@ export const HomeScreen = {
           (this.continueWatching?.length || 0) + (this.nextUpProgressCandidates?.length || 0)
         );
         const initialContinueWatchingPending = !this.continueWatchingInitialResolved;
-        const hasInitialContinueWatchingData = Boolean(
-          this.continueWatchingDisplay?.length ||
-          this.continueWatching?.length ||
-          this.nextUpProgressCandidates?.length
-        );
+        // A local Nuvio Sync snapshot is provisional while the cold pull is
+        // active. Do not publish it as the first row, because the pull can
+        // replace it with additional remote entries moments later.
         const shouldWaitForStartupSync = Boolean(
           initialContinueWatchingPending &&
-          startupSyncPending &&
-          !hasInitialContinueWatchingData &&
+          (startupSyncPullPromise || startupSyncCompletedDuringLoad) &&
           !progressAllError &&
           !recentProgressError
         );
@@ -10271,6 +10328,32 @@ export const HomeScreen = {
         );
         const previousHeroIdentity = buildHeroIdentity(this.heroItem);
         const previousLoadingState = Boolean(this.continueWatchingLoading);
+        if (shouldWaitForStartupSync) {
+          const refreshAfterStartupPull = () => {
+            if (token !== this.homeLoadToken || Router.getCurrent() !== "home") {
+              return;
+            }
+            void this.requestHomeBackgroundRefresh({
+              preserveReturnState: true,
+              reason: "startup-sync"
+            }).catch((error) => {
+              console.warn("Home refresh after startup sync completion failed", error);
+            });
+          };
+          if (startupSyncPullPromise) {
+            void Promise.resolve(startupSyncPullPromise).then(
+              refreshAfterStartupPull,
+              refreshAfterStartupPull
+            );
+          } else if (startupSyncCompletedDuringLoad) {
+            refreshAfterStartupPull();
+          }
+          this.continueWatchingLoading = true;
+          if (!previousLoadingState) {
+            this.requestBackgroundRender();
+          }
+          return;
+        }
         if (!suppressContinueWatchingLoading) {
           // Publish the raw in-progress state immediately. Metadata and Next Up are enriched
           // asynchronously below, matching Android's initial render and avoiding a CW skeleton

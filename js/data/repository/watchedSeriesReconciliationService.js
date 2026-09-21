@@ -290,7 +290,10 @@ export const watchedSeriesReconciliationService = {
     // marker inferred from the episodes currently returned by the meta addon,
     // so do not erase it merely because those episode rows are incomplete.
     if (!allWatched && hasSeriesMarker && !hasRemoteSimklSeriesMarker) {
-      await watchedItemsRepository.unmark(normalizedContentId, { rootOnly: true });
+      await watchedItemsRepository.unmark(normalizedContentId, {
+        rootOnly: true,
+        skipTrackingWrite: true
+      });
       detailWatchedEnrichmentService.invalidateCache(normalizedContentId);
       return true;
     }

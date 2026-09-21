@@ -26,6 +26,14 @@ function shouldUseTrakt() {
   );
 }
 
+function isSimklConnected() {
+  return SimklAuthStore.isAuthenticated();
+}
+
+function isTraktConnected() {
+  return TraktAuthService.isAuthenticated();
+}
+
 function traktIds(item = {}) {
   const rawId = String(item.contentId || item.itemId || item.id || "").trim();
   const prefixed = rawId.match(/^(imdb|tmdb|trakt):(.+)$/i);
@@ -456,14 +464,14 @@ class WatchedItemsRepository {
     // Android commits local completion before broadcasting to tracking providers.
     // A provider outage must not discard the completed state or the cloud enqueue.
     if (options.skipTrackingWrite !== true) {
-      if (shouldUseSimkl()) {
+      if (isSimklConnected()) {
         try {
           await SimklSyncService.markWatched(item);
         } catch (error) {
           console.warn("Simkl watched history write failed", error);
         }
       }
-      if (shouldUseTrakt()) {
+      if (isTraktConnected()) {
         try {
           await writeTraktHistory(item, false);
         } catch (error) {
@@ -490,7 +498,7 @@ class WatchedItemsRepository {
     }
     invalidateTraktWatchedCaches();
 
-    if (shouldUseSimkl() && options?.skipTrackingWrite !== true) {
+    if (isSimklConnected() && options?.skipTrackingWrite !== true) {
       const remoteMatches = removedItems.length
         ? []
         : (await SimklSyncService.getWatchedItems().catch(() => [])).filter((item) =>
@@ -517,7 +525,7 @@ class WatchedItemsRepository {
         }
       }
     }
-    if (shouldUseTrakt() && options?.skipTrackingWrite !== true) {
+    if (isTraktConnected() && options?.skipTrackingWrite !== true) {
       const targets = removedItems.length
         ? removedItems
         : [

@@ -157,15 +157,19 @@ class SubtitleRepository {
       }
 
       const subtitles = (result.data?.subtitles || [])
-        .map((subtitle) => ({
-          id:
-            subtitle.id ||
-            `${subtitle.lang || "unk"}-${this.makeDeterministicId(subtitle.url || "")}`,
-          url: subtitle.url,
-          lang: subtitle.lang || "unknown",
-          addonName: addon.displayName,
-          addonLogo: addon.logo
-        }))
+        .map((subtitle) => {
+          const headers = subtitle.headers || subtitle.behaviorHints?.proxyHeaders?.request;
+          return {
+            id:
+              subtitle.id ||
+              `${subtitle.lang || "unk"}-${this.makeDeterministicId(subtitle.url || "")}`,
+            url: subtitle.url,
+            lang: subtitle.lang || "unknown",
+            ...(headers ? { headers } : {}),
+            addonName: addon.displayName,
+            addonLogo: addon.logo
+          };
+        })
         .filter((subtitle) => Boolean(subtitle.url));
 
       subtitles.forEach((subtitle) => {

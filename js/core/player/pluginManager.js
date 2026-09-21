@@ -221,10 +221,12 @@ function normalizePluginSubtitles(value) {
       if (!url || !url.trim()) return null;
       const lang =
         androidResultString(subtitle.language) || androidResultString(subtitle.lang) || "Unknown";
+      const headers = subtitle.headers || subtitle.behaviorHints?.proxyHeaders?.request;
       return {
         id: androidResultString(subtitle.id) || url,
         url,
         lang,
+        ...(headers ? { headers } : {}),
         addonName: androidResultString(subtitle.name) || "Plugin",
         addonLogo: null,
         isStreamProvided: true
@@ -445,9 +447,16 @@ function remoteRepositoryTypeHint(remote = {}) {
   }
   const declaredType = remote?.repoType ?? remote?.repo_type ?? remote?.type;
   const hasExplicitType = remote?.repoTypeDeclared === true || declaredType != null;
-  return hasExplicitType
-    ? normalizePluginRepositoryType(declaredType, PLUGIN_REPOSITORY_TYPES.UNKNOWN)
-    : null;
+  if (!hasExplicitType) return null;
+  const normalizedType = normalizePluginRepositoryType(
+    declaredType,
+    PLUGIN_REPOSITORY_TYPES.UNKNOWN
+  );
+  // Android's RepositoryType.valueOf() returns no usable hint for empty or
+  // future enum values, so reconciliation falls back to auto-detection.
+  // Smart TV must not turn a valid JS manifest into a permanently opaque row
+  // merely because an older/newer client wrote an unrecognised repo_type.
+  return normalizedType === PLUGIN_REPOSITORY_TYPES.UNKNOWN ? null : normalizedType;
 }
 
 async function fetchRepositoryDocument(url, quota) {
@@ -570,17 +579,9 @@ async function classifyRemoteRepository(remote, quota) {
     });
     return result;
   }
-  // A future/unknown explicit enum is not safe to reinterpret from its URL or
-  // document. Preserve it as an opaque row until a client understands it.
-  if (hasExplicitType && explicitType === PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
-    const result = { type: PLUGIN_REPOSITORY_TYPES.UNKNOWN, url };
-    logPluginDiagnostic("repository classified", {
-      stage: "explicit-unknown-type",
-      input: diagnosticRepository(remote),
-      result: { type: result.type, url: diagnosticUrl(result.url) }
-    });
-    return result;
-  }
+  // Android treats an empty/unknown repository enum as an absent hint and
+  // still inspects the document. Keep the raw value for diagnostics, but do
+  // not let it bypass the same auto-detection path on Smart TV.
   if (explicitType !== PLUGIN_REPOSITORY_TYPES.UNKNOWN) {
     if (
       [PLUGIN_REPOSITORY_TYPES.NUVIO_JS, PLUGIN_REPOSITORY_TYPES.EXTERNAL_DEX].includes(

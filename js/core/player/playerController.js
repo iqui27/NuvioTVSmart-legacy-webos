@@ -509,9 +509,14 @@ export const PlayerController = {
   playbackSessionActive: false,
   nativeMediaId: "",
   nativeMediaIdLookupToken: 0,
+  selectedWebOsAudioTrackIndex: -1,
+  selectedWebOsSubtitleTrackIndex: -1,
   selectedWebOsEmbeddedAudioTrackIndex: -1,
   selectedWebOsEmbeddedSubtitleTrackIndex: -1,
+  webOsAudioSelectionExplicit: false,
+  webOsSubtitleSelectionExplicit: false,
   webOsAudioSelectionRequestToken: 0,
+  webOsTrackReapplyMediaId: "",
   webOsSubtitleFontSizeLevel: 1,
   appliedWebOsSubtitleFontSizeKey: "",
   webosDeviceInfoPromise: null,
@@ -1009,9 +1014,19 @@ export const PlayerController = {
     this.webOsPlaybackRateCommandPromise = null;
     this.webOsPlaybackRateReapplyPromise = null;
     this.cancelWebOsAudioTrackSelection();
+    this.webOsTrackReapplyMediaId = "";
+    this.appliedWebOsSubtitleFontSizeKey = "";
+  },
+
+  clearWebOsTrackSelections() {
+    this.cancelWebOsAudioTrackSelection();
+    this.selectedWebOsAudioTrackIndex = -1;
+    this.selectedWebOsSubtitleTrackIndex = -1;
     this.selectedWebOsEmbeddedAudioTrackIndex = -1;
     this.selectedWebOsEmbeddedSubtitleTrackIndex = -1;
-    this.appliedWebOsSubtitleFontSizeKey = "";
+    this.webOsAudioSelectionExplicit = false;
+    this.webOsSubtitleSelectionExplicit = false;
+    this.webOsTrackReapplyMediaId = "";
   },
 
   syncNativeMediaId() {
@@ -1020,6 +1035,144 @@ export const PlayerController = {
       this.nativeMediaId = mediaId;
     }
     return this.nativeMediaId;
+  },
+
+  reapplyWebOsNativeTrackSelections() {
+    if (!Platform.isWebOS() || !this.video || !this.isUsingNativePlayback()) {
+      return false;
+    }
+
+    const mediaId = this.syncNativeMediaId();
+    const mediaKey = mediaId || "local-native-media";
+    if (this.webOsTrackReapplyMediaId === mediaKey) {
+      return false;
+    }
+
+    const audioTracks = this.nativeAudioTrackListToArray();
+    const audioIndex = Number(this.selectedWebOsAudioTrackIndex);
+    const hasAudioSelection =
+      this.webOsAudioSelectionExplicit &&
+      Number.isFinite(audioIndex) &&
+      audioIndex >= 0 &&
+      audioIndex < audioTracks.length;
+    const textTrackList =
+      this.video.textTracks || this.video.webkitTextTracks || this.video.mozTextTracks || null;
+    let textTracks = [];
+    if (textTrackList) {
+      try {
+        textTracks = Array.from(textTrackList).filter(Boolean);
+      } catch (_) {
+        const trackCount = Number(textTrackList.length || 0);
+        for (let trackIndex = 0; trackIndex < trackCount; trackIndex += 1) {
+          const track = textTrackList[trackIndex] || textTrackList.item?.(trackIndex) || null;
+          if (track) {
+            textTracks.push(track);
+          }
+        }
+      }
+    }
+    const subtitleIndex = Number(this.selectedWebOsSubtitleTrackIndex);
+    const hasSubtitleSelection =
+      this.webOsSubtitleSelectionExplicit &&
+      (subtitleIndex < 0 || (Number.isFinite(subtitleIndex) && subtitleIndex < textTracks.length));
+    const audioSelectionNeedsTrackList = this.webOsAudioSelectionExplicit && !hasAudioSelection;
+    const subtitleSelectionNeedsTrackList =
+      this.webOsSubtitleSelectionExplicit && !hasSubtitleSelection;
+
+    if (!hasAudioSelection && !hasSubtitleSelection) {
+      return false;
+    }
+
+    if (hasAudioSelection) {
+      audioTracks.forEach((track, trackIndex) => {
+        const selected = trackIndex === audioIndex;
+        try {
+          if ("enabled" in track) {
+            track.enabled = selected;
+          }
+        } catch (_) {
+          // Best effort.
+        }
+        try {
+          if ("selected" in track) {
+            track.selected = selected;
+          }
+        } catch (_) {
+          // Best effort.
+        }
+      });
+    }
+
+    if (hasSubtitleSelection) {
+      textTracks.forEach((track, trackIndex) => {
+        try {
+          track.mode = subtitleIndex >= 0 && trackIndex === subtitleIndex ? "showing" : "disabled";
+        } catch (_) {
+          // Best effort.
+        }
+      });
+    }
+
+    if (!audioSelectionNeedsTrackList && !subtitleSelectionNeedsTrackList) {
+      this.webOsTrackReapplyMediaId = mediaKey;
+    }
+    const commands = [];
+    if (mediaId && WebOsLunaService.isAvailable()) {
+      if (hasAudioSelection) {
+        commands.push(
+          this.requestWebOsMediaCommand("selectTrack", {
+            type: "audio",
+            mediaId,
+            index: audioIndex
+          })
+        );
+      }
+      if (hasSubtitleSelection) {
+        commands.push(
+          this.requestWebOsMediaCommand("setSubtitleEnable", {
+            mediaId,
+            enable: subtitleIndex >= 0
+          })
+        );
+        if (subtitleIndex >= 0) {
+          this.applyWebOsSubtitleFontSize(mediaId, { force: true });
+          setTimeout(() => {
+            if (
+              mediaId !== this.nativeMediaId ||
+              !this.webOsSubtitleSelectionExplicit ||
+              Number(this.selectedWebOsSubtitleTrackIndex) !== subtitleIndex
+            ) {
+              return;
+            }
+            this.requestWebOsMediaCommand("selectTrack", {
+              type: "text",
+              mediaId,
+              index: subtitleIndex
+            }).catch(() => {
+              // Ignore Luna subtitle track selection failures and keep native toggles.
+            });
+          }, 350);
+        }
+      }
+    }
+
+    if (commands.length) {
+      Promise.all(
+        commands.map((command) =>
+          Promise.resolve(command).then((result) => {
+            if (result?.returnValue === false || result?.errorCode) {
+              throw new Error("webOS track selection reapply failed");
+            }
+            return result;
+          })
+        )
+      ).catch(() => {
+        if (this.webOsTrackReapplyMediaId === mediaKey) {
+          this.webOsTrackReapplyMediaId = "";
+        }
+      });
+    }
+    return true;
   },
 
   waitForNativeMediaId({ maxAttempts = 4, intervalMs = 300 } = {}) {
@@ -2027,6 +2180,8 @@ export const PlayerController = {
       if (typeof applySelection === "function") {
         applySelection();
       }
+      this.selectedWebOsAudioTrackIndex = detail.targetTrackIndex;
+      this.webOsAudioSelectionExplicit = true;
       this.selectedWebOsEmbeddedAudioTrackIndex =
         selectionKind === "embedded" ? detail.selectedTrackIndex : -1;
     };
@@ -5011,6 +5166,8 @@ export const PlayerController = {
       });
     }
 
+    this.selectedWebOsAudioTrackIndex = -1;
+    this.webOsAudioSelectionExplicit = false;
     this.selectedWebOsEmbeddedAudioTrackIndex = -1;
     applySelection();
     return true;
@@ -5026,6 +5183,8 @@ export const PlayerController = {
     const storedSelectedIndex =
       Number.isFinite(selectedIndex) && selectedIndex >= 0 ? selectedIndex : targetIndex;
     if (!Number.isFinite(targetIndex) || targetIndex < 0) {
+      this.selectedWebOsAudioTrackIndex = -1;
+      this.webOsAudioSelectionExplicit = false;
       this.selectedWebOsEmbeddedAudioTrackIndex = -1;
       return false;
     }
@@ -5088,6 +5247,10 @@ export const PlayerController = {
       return false;
     }
 
+    if (Platform.isWebOS() && this.isUsingNativePlayback()) {
+      this.selectedWebOsSubtitleTrackIndex = targetIndex;
+      this.webOsSubtitleSelectionExplicit = true;
+    }
     this.selectedWebOsEmbeddedSubtitleTrackIndex = -1;
 
     const mediaId = this.syncNativeMediaId();
@@ -5267,6 +5430,8 @@ export const PlayerController = {
       }, 350);
     };
 
+    this.selectedWebOsSubtitleTrackIndex = targetIndex;
+    this.webOsSubtitleSelectionExplicit = true;
     this.selectedWebOsEmbeddedSubtitleTrackIndex = targetIndex < 0 ? -1 : storedSelectedIndex;
 
     const mediaId = this.syncNativeMediaId();
@@ -5437,6 +5602,13 @@ export const PlayerController = {
 
     const syncNativeMediaId = (event) => {
       this.syncNativeMediaId();
+      if (
+        event?.type === "loadedmetadata" ||
+        event?.type === "canplay" ||
+        event?.type === "playing"
+      ) {
+        this.reapplyWebOsNativeTrackSelections();
+      }
       if (event?.type === "canplay" || event?.type === "playing") {
         this.reapplyWebOsPlaybackRate().catch(() => {});
       }
@@ -5605,7 +5777,8 @@ export const PlayerController = {
       mediaSourceType = null,
       forceEngine = null,
       streamIdentity = null,
-      cloudSessionToken = null
+      cloudSessionToken = null,
+      preserveTrackSelections = false
     } = {}
   ) {
     if (!this.video) return;
@@ -5619,6 +5792,10 @@ export const PlayerController = {
     await this.flushCurrentProgress({ allowCloudSync: false });
     if (!this.isPlaybackRequestActive(playToken)) {
       return;
+    }
+
+    if (!preserveTrackSelections || !this.playbackSessionActive) {
+      this.clearWebOsTrackSelections();
     }
 
     // Duration can temporarily regress while webOS tears down or restages its
@@ -5998,6 +6175,7 @@ export const PlayerController = {
       ? this.flushCurrentProgress({ forceCloudSync, allowCloudSync })
       : Promise.resolve(false);
     if (!this.playbackSessionActive) {
+      this.clearWebOsTrackSelections();
       this.syncWebOsPlaybackKeepAwake();
       return flushPromise;
     }
@@ -6012,6 +6190,7 @@ export const PlayerController = {
     }
     this.teardownAdaptiveInstances();
     this.teardownAvPlay();
+    this.clearWebOsTrackSelections();
     this.resetNativeMediaState();
     try {
       this.video.removeAttribute("src");
@@ -6233,17 +6412,23 @@ export const PlayerController = {
     }
 
     if (isCompleted) {
-      await watchedItemsRepository.mark({
-        contentId: active.itemId,
-        contentType: active.itemType || "movie",
-        imdbId: active.imdbId || null,
-        tmdbId: active.tmdbId || null,
-        traktId: active.traktId || null,
-        title: active.episodeTitle || active.title || active.itemId,
-        season: active.season,
-        episode: active.episode,
-        watchedAt: Date.now()
-      });
+      // Playback scrobbling owns provider history, matching Android's
+      // broadcastTrackingHistory = false completion path. Keep this local
+      // completion from duplicating the provider history write.
+      await watchedItemsRepository.mark(
+        {
+          contentId: active.itemId,
+          contentType: active.itemType || "movie",
+          imdbId: active.imdbId || null,
+          tmdbId: active.tmdbId || null,
+          traktId: active.traktId || null,
+          title: active.episodeTitle || active.title || active.itemId,
+          season: active.season,
+          episode: active.episode,
+          watchedAt: Date.now()
+        },
+        { skipTrackingWrite: true }
+      );
     }
 
     if (clear || isCompleted) {

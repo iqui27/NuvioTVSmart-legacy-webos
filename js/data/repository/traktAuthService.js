@@ -443,12 +443,19 @@ export const TraktAuthService = {
     const token = await this.getValidAccessToken();
     if (!token) return [];
 
-    const { response, payload } = await requestJson(`/sync/playback?limit=${limit}`, {
-      authorization: `Bearer ${token}`
-    });
-    if (!response.ok || !Array.isArray(payload)) return [];
+    // Trakt requires a media type in the playback path. Fetch both types so
+    // the projection matches Android TV instead of silently receiving an
+    // empty result from the invalid untyped endpoint.
+    const payloads = await Promise.all(
+      ["movies", "episodes"].map(async (type) => {
+        const { response, payload } = await requestJson(`/sync/playback/${type}?limit=${limit}`, {
+          authorization: `Bearer ${token}`
+        });
+        return response.ok && Array.isArray(payload) ? payload : [];
+      })
+    );
 
-    return payload.map(normalizePlaybackItem).filter(Boolean).slice(0, limit);
+    return payloads.flat().map(normalizePlaybackItem).filter(Boolean);
   },
 
   async fetchWatchedShows() {

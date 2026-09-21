@@ -29,6 +29,7 @@ import {
   directDebridPreparationKey
 } from "../../../core/debrid/directDebridStreamPreparer.js";
 import { DebridStreamPresentation } from "../../../core/debrid/directDebridStreamPresentation.js";
+import { contentTextDirection } from "../../../core/util/contentTextDirection.js";
 import { WebOsEngineFsResolver } from "../../../core/p2p/webosEngineFsResolver.js";
 import { TizenStreamingServerResolver } from "../../../core/p2p/tizenStreamingServerResolver.js";
 import { DebridSettingsStore } from "../../../data/local/debridSettingsStore.js";
@@ -1540,14 +1541,17 @@ export const StreamScreen = {
       return;
     }
 
-    // A new visit from Detail must ask every source again. The repository
-    // cache remains available to the player source panel and to an in-flight
-    // return from playback, but it must not make this route display stale
-    // provider results or expired links.
-    void this.loadStreams({ forceRefresh: true });
+    // Match Android's initial stream load: reuse the repository-owned session
+    // when its request key is still valid. Explicit refresh actions remain the
+    // only path that force a new provider search.
+    void this.loadStreams({ forceRefresh: false });
   },
 
   async loadStreams({ preserveResults = false, forceRefresh = false } = {}) {
+    this.streamLoadAbortController?.abort?.();
+    const loadAbortController =
+      typeof AbortController === "function" ? new AbortController() : null;
+    this.streamLoadAbortController = loadAbortController;
     const token = this.loadToken;
     const itemType = normalizeType(this.params?.itemType);
     const videoId = String(this.params?.videoId || this.params?.itemId || "");
@@ -1744,6 +1748,7 @@ export const StreamScreen = {
       season: this.params?.season ?? null,
       episode: this.params?.episode ?? null,
       forceRefresh: Boolean(forceRefresh),
+      signal: loadAbortController?.signal || null,
       onAddon: (addon) => {
         if (token !== this.loadToken) {
           return;
@@ -1844,6 +1849,10 @@ export const StreamScreen = {
       );
       this.requestRender();
       this.scheduleErrorChipCleanup();
+    } finally {
+      if (this.streamLoadAbortController === loadAbortController) {
+        this.streamLoadAbortController = null;
+      }
     }
   },
 
@@ -3014,7 +3023,7 @@ export const StreamScreen = {
     return `
       <button class="${classes}" data-action="setFilter" data-addon="${escapeHtml(name)}" aria-selected="${selected ? "true" : "false"}">
         ${spinner}
-        <span>${escapeHtml(name === "all" ? t("common.all", {}, "All") : name)}</span>
+        <span dir="${contentTextDirection(name === "all" ? t("common.all", {}, "All") : name)}">${escapeHtml(name === "all" ? t("common.all", {}, "All") : name)}</span>
       </button>
     `;
   },
@@ -3062,7 +3071,7 @@ export const StreamScreen = {
       addonIdentity = `
           <div class="stream-route-card-side">
             <div class="stream-route-addon-badge">${addonBadge}</div>
-            <div class="stream-route-addon-name">${escapeHtml(stream.addonName || "Addon")}</div>
+            <div class="stream-route-addon-name" dir="${contentTextDirection(stream.addonName || "Addon")}">${escapeHtml(stream.addonName || "Addon")}</div>
           </div>`;
     }
 
@@ -3078,10 +3087,10 @@ export const StreamScreen = {
                  data-stream-id="${escapeHtml(stream.id)}"
                  data-stream-row="${index}">
           <div class="stream-route-card-copy">
-            <div class="stream-route-card-heading">${escapeHtml(headline)}</div>
+            <div class="stream-route-card-heading" dir="${contentTextDirection(headline)}">${escapeHtml(headline)}</div>
             ${topBadges || ""}
-            ${!badges ? `<div class="stream-route-card-quality">${escapeHtml(quality)}</div>` : ""}
-            ${descriptionLines.map((line, lineIndex) => `<div class="stream-route-card-line${lineIndex > 0 ? " secondary" : ""}">${escapeHtml(line)}</div>`).join("")}
+            ${!badges ? `<div class="stream-route-card-quality" dir="${contentTextDirection(quality)}">${escapeHtml(quality)}</div>` : ""}
+            ${descriptionLines.map((line, lineIndex) => `<div class="stream-route-card-line${lineIndex > 0 ? " secondary" : ""}" dir="${contentTextDirection(line)}">${escapeHtml(line)}</div>`).join("")}
             ${bottomBadges || ""}
           </div>
           ${addonIdentity}
@@ -3257,10 +3266,10 @@ export const StreamScreen = {
         <div class="stream-route-content">
           <section class="stream-route-left">
             <div class="stream-route-left-inner">
-              ${logo ? `<img src="${logo}" class="stream-route-logo" alt="${escapeHtml(title)}" />` : `<h1 class="stream-route-title">${escapeHtml(title)}</h1>`}
-              ${episodeLabel ? `<div class="stream-route-episode-code">${escapeHtml(episodeLabel)}</div>` : ""}
-              ${subtitle ? `<div class="stream-route-subtitle">${escapeHtml(subtitle)}</div>` : ""}
-              ${detailLine ? `<div class="stream-route-detail-line">${escapeHtml(detailLine)}</div>` : !isSeries && subtitle ? `<div class="stream-route-detail-line">${escapeHtml(subtitle)}</div>` : ""}
+              ${logo ? `<img src="${logo}" class="stream-route-logo" alt="${escapeHtml(title)}" />` : `<h1 class="stream-route-title" dir="${contentTextDirection(title)}">${escapeHtml(title)}</h1>`}
+              ${episodeLabel ? `<div class="stream-route-episode-code" dir="${contentTextDirection(episodeLabel)}">${escapeHtml(episodeLabel)}</div>` : ""}
+              ${subtitle ? `<div class="stream-route-subtitle" dir="${contentTextDirection(subtitle)}">${escapeHtml(subtitle)}</div>` : ""}
+              ${detailLine ? `<div class="stream-route-detail-line" dir="${contentTextDirection(detailLine)}">${escapeHtml(detailLine)}</div>` : !isSeries && subtitle ? `<div class="stream-route-detail-line" dir="${contentTextDirection(subtitle)}">${escapeHtml(subtitle)}</div>` : ""}
             </div>
           </section>
           <section class="stream-route-right">
@@ -3801,6 +3810,8 @@ export const StreamScreen = {
   },
 
   cleanup() {
+    this.streamLoadAbortController?.abort?.();
+    this.streamLoadAbortController = null;
     streamRepository.setLocalPluginSearchPaused(true);
     this.cancelAutoPlayCountdown();
     this.cancelAutoPlaySelectionWait();

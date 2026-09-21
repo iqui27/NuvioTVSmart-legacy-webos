@@ -72,7 +72,7 @@ const ENRICHED_LIBRARY_META_CACHE_TTL_MS = 5 * 60 * 1000;
  */
 
 /**
- * @typedef {{ id: string, type: string, name: string, poster: string|null, background: string|null, description: string, releaseInfo: string, imdbRating: number|null, genres: string[], addonBaseUrl: string|null, listKeys: string[], listedAt: number, traktRank: number|null, listMeta: Record<string, LibraryEntryListMeta> }} LibraryEntry
+ * @typedef {{ id: string, type: string, mediaCategory?: string|null, name: string, poster: string|null, background: string|null, description: string, releaseInfo: string, imdbRating: number|null, genres: string[], addonBaseUrl: string|null, listKeys: string[], listedAt: number, traktRank: number|null, listMeta: Record<string, LibraryEntryListMeta> }} LibraryEntry
  */
 
 /**

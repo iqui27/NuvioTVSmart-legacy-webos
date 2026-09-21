@@ -652,11 +652,15 @@ class StreamRepository {
     const sidecarSubtitles = Array.isArray(stream.subtitles)
       ? stream.subtitles
           .filter((entry) => entry && entry.url)
-          .map((entry) => ({
-            id: entry.id || null,
-            url: entry.url,
-            lang: entry.lang || "unknown"
-          }))
+          .map((entry) => {
+            const headers = entry.headers || entry.behaviorHints?.proxyHeaders?.request;
+            return {
+              id: entry.id || null,
+              url: entry.url,
+              lang: entry.lang || "unknown",
+              ...(headers ? { headers } : {})
+            };
+          })
       : [];
 
     return {

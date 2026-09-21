@@ -54,6 +54,8 @@ import {
 } from "../../../config.js";
 import { I18n } from "../../../i18n/index.js";
 import { localizedGenreLabel } from "../../../i18n/genreLabels.js";
+import { contentTextDirection } from "../../../core/util/contentTextDirection.js";
+import { mdbListRatingIcon } from "../../../core/util/mdbListRatingStatus.js";
 import { NuvioDialog } from "../../components/nuvioDialog.js";
 import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 import { resolveMovieStreamIdentity } from "./movieStreamIdentity.js";
@@ -1426,6 +1428,32 @@ function resolveTrailerSource(meta = {}) {
   };
 }
 
+async function resolveTmdbTrailerSource(meta = {}, itemType = "movie") {
+  const fallbackSource = resolveTrailerSource(meta);
+  const settings = TmdbSettingsStore.get();
+  if (!settings.enabled || !settings.useTrailers || !TMDB_API_KEY || !meta?.id) {
+    return fallbackSource;
+  }
+  try {
+    const tmdbId = await withTimeout(TmdbService.ensureTmdbId(meta.id, itemType), 1800, null);
+    if (!tmdbId) {
+      return fallbackSource;
+    }
+    const trailers = await withTimeout(
+      TmdbMetadataService.fetchTrailerCandidates({
+        tmdbId,
+        contentType: itemType,
+        language: settings.language
+      }),
+      2200,
+      []
+    );
+    return resolveTrailerSource({ trailers }) || fallbackSource;
+  } catch (_) {
+    return fallbackSource;
+  }
+}
+
 function resolveTrailerItems(meta = {}) {
   const candidates = [
     ...(Array.isArray(meta?.trailers) ? meta.trailers : []),
@@ -1831,6 +1859,9 @@ export const MetaDetailsScreen = {
     this.commentsEpisodeTarget = null;
     this.selectedCommentIndex = -1;
     this.trailerSource = null;
+    this.trailerSourceResolutionKey = "";
+    this.trailerSourceResolutionPromise = null;
+    this.trailerSourceResolutionResult = null;
     this.isTrailerPlaying = false;
     this.trailerPlaybackMode = null;
     this.trailerVisualReady = false;
@@ -3153,7 +3184,39 @@ export const MetaDetailsScreen = {
     if (!meta) {
       return null;
     }
-    return resolveTrailerSource(meta);
+    const settings = TmdbSettingsStore.get();
+    const fallbackSource = resolveTrailerSource(meta);
+    if (!settings.enabled || !settings.useTrailers || !TMDB_API_KEY) {
+      return fallbackSource;
+    }
+    const itemType = String(meta?.type || this.params?.itemType || "movie");
+    const resolutionKey = [
+      meta?.id,
+      itemType,
+      settings.language,
+      settings.enabled,
+      settings.useTrailers
+    ].join("|");
+    if (this.trailerSourceResolutionKey === resolutionKey) {
+      if (this.trailerSourceResolutionPromise) {
+        return this.trailerSourceResolutionPromise;
+      }
+      if (this.trailerSourceResolutionResult) {
+        return this.trailerSourceResolutionResult;
+      }
+    }
+    const resolutionPromise = resolveTmdbTrailerSource(meta, itemType);
+    this.trailerSourceResolutionKey = resolutionKey;
+    this.trailerSourceResolutionPromise = resolutionPromise;
+    try {
+      const source = await resolutionPromise;
+      this.trailerSourceResolutionResult = source;
+      return source;
+    } finally {
+      if (this.trailerSourceResolutionKey === resolutionKey) {
+        this.trailerSourceResolutionPromise = null;
+      }
+    }
   },
 
   async refreshTrailerSource(meta = this.meta, token = this.detailLoadToken) {
@@ -3439,9 +3502,11 @@ export const MetaDetailsScreen = {
       meta.logo || this.params?.fallbackLogo || "",
       "original"
     );
+    const heroTitle = meta.name || "Untitled";
+    const heroDescription = meta.description || t("detail.noDescription", {}, "No description.");
     const logoOrTitle = heroLogo
       ? `<img src="${heroLogo}" class="series-detail-logo" alt="${escapeHtml(meta.name || "logo")}" decoding="async" fetchpriority="high" />`
-      : `<h1 class="series-detail-title">${escapeHtml(meta.name || "Untitled")}</h1>`;
+      : `<h1 class="series-detail-title" dir="${contentTextDirection(heroTitle)}">${escapeHtml(heroTitle)}</h1>`;
     const externalRatings = this.renderExternalRatingsRow(meta);
     const trailerSource = this.trailerSource || resolveTrailerSource(meta);
     const hasTrailerCandidate = Boolean(trailerSource);
@@ -3479,7 +3544,7 @@ export const MetaDetailsScreen = {
           ${this.renderResumeIndicator()}
           ${creditLine ? `<p class="series-detail-support">${escapeHtml(creditPrefix)}: ${escapeHtml(creditLine)}</p>` : ""}
           ${externalRatings}
-          <p class="series-detail-description">${escapeHtml(meta.description || t("detail.noDescription", {}, "No description."))}</p>
+          <p class="series-detail-description" dir="${contentTextDirection(heroDescription)}">${escapeHtml(heroDescription)}</p>
           ${this.renderHeroMetaRows(meta)}
         </div>
       </section>
@@ -3591,8 +3656,8 @@ export const MetaDetailsScreen = {
       ["imdb", "assets/icons/imdb_logo_2016.svg", ratings.imdb],
       ["tmdb", "assets/icons/mdblist_tmdb.svg", ratings.tmdb],
       ["letterboxd", "assets/icons/mdblist_letterboxd.svg", ratings.letterboxd],
-      ["tomatoes", "assets/icons/mdblist_tomatoes.svg", ratings.tomatoes],
-      ["audience", "assets/icons/mdblist_audience.png", ratings.audience],
+      ["tomatoes", mdbListRatingIcon("tomatoes", ratings.tomatoes, ratings), ratings.tomatoes],
+      ["audience", mdbListRatingIcon("audience", ratings.audience, ratings), ratings.audience],
       ["metacritic", "assets/icons/mdblist_metacritic.png", ratings.metacritic]
     ].filter(([, , value]) => value != null && String(value).trim() !== "");
     if (!items.length) {
@@ -4008,7 +4073,7 @@ export const MetaDetailsScreen = {
               : ""
           }
         </div>
-        <div class="movie-cast-name" dir="auto">${escapeHtml(name)}</div>
+        <div class="movie-cast-name" dir="${contentTextDirection(name)}">${escapeHtml(name)}</div>
         <div class="movie-cast-role">${escapeHtml(person.character || "")}</div>
       </article>
     `;
@@ -4314,8 +4379,8 @@ export const MetaDetailsScreen = {
           ${presentation.isUnavailable ? `<div class="series-episode-unavailable">${escapeHtml(t("episodes_unavailable", {}, "Unavailable").toUpperCase())}</div>` : ""}
           <div class="series-episode-copy">
             <div class="series-episode-badge">${escapeHtml(t("episodes_episode", {}, "Episode").toUpperCase())} ${Number(episode.episode || 0)}</div>
-            <div class="series-episode-title" dir="auto"><span class="series-episode-title-text">${escapeHtml(presentation.title)}</span></div>
-            <div class="series-episode-overview">${escapeHtml(presentation.overview)}</div>
+          <div class="series-episode-title" dir="${contentTextDirection(presentation.title)}"><span class="series-episode-title-text">${escapeHtml(presentation.title)}</span></div>
+            <div class="series-episode-overview" dir="${contentTextDirection(presentation.overview)}">${escapeHtml(presentation.overview)}</div>
             ${presentation.metaParts ? `<div class="series-episode-meta">${presentation.metaParts}</div>` : ""}
           </div>
           ${presentation.progressRatio > 0.02 && presentation.progressRatio < 0.98 ? `<div class="series-episode-progress"><span style="width:${Math.round(presentation.progressRatio * 100)}%"></span></div>` : ""}
@@ -6405,21 +6470,14 @@ export const MetaDetailsScreen = {
       shell.classList.toggle("detail-scrolled", content.scrollTop > 160);
     };
     content.addEventListener("scroll", this.detailScrollHandler, { passive: true });
-    const episodeTrack = this.container?.querySelector(".series-episode-track");
     if (this.episodeTrackScrollNode && this.episodeTrackScrollHandler) {
       this.episodeTrackScrollNode.removeEventListener("scroll", this.episodeTrackScrollHandler);
     }
-    this.episodeTrackScrollNode = episodeTrack instanceof HTMLElement ? episodeTrack : null;
-    if (this.episodeTrackScrollNode) {
-      this.episodeTrackScrollHandler = () => {
-        this.scheduleEpisodeVirtualizationSync();
-      };
-      this.episodeTrackScrollNode.addEventListener("scroll", this.episodeTrackScrollHandler, {
-        passive: true
-      });
-    } else {
-      this.episodeTrackScrollHandler = null;
-    }
+    // Android's LazyRow keeps a stable keyed window driven by focus. The Web
+    // rail already syncs before moving focus; observing every spring-generated
+    // scroll event repeats DOM work on each frame and makes TV navigation stutter.
+    this.episodeTrackScrollNode = null;
+    this.episodeTrackScrollHandler = null;
     if (this.detailFocusHandler) {
       this.container.removeEventListener("focusin", this.detailFocusHandler, true);
     }
@@ -6848,9 +6906,8 @@ export const MetaDetailsScreen = {
       state.position += state.velocity * deltaSeconds;
       container[property] = state.position;
 
-      const remaining = Number(state.target || 0) - Number(container[property] || 0);
       if (
-        Math.abs(remaining) <= state.precision &&
+        Math.abs(Number(state.target || 0) - state.position) <= state.precision &&
         Math.abs(state.velocity) <= state.velocityEpsilon
       ) {
         container[property] = state.target;
@@ -7476,9 +7533,10 @@ export const MetaDetailsScreen = {
     preserveSource = false
   } = {}) {
     const requestedFocusRestore = initiatedByUser ? this.captureDetailFocus() : null;
-    // Android TV starts the already-resolved hero trailer immediately when the
-    // button is pressed. Only resolve here when no prepared source exists.
-    if (!preserveSource && !this.trailerSource) {
+    // Android TV resolves TMDB first and only then falls back to the catalog
+    // trailer. Re-check here as well so a fast user action cannot use the
+    // addon trailer while the background resolution is still in flight.
+    if (!preserveSource) {
       const preferredSource = await this.resolvePreferredTrailerSource(this.meta);
       if (preferredSource) {
         this.trailerSource = preferredSource;
@@ -7720,11 +7778,11 @@ export const MetaDetailsScreen = {
           <article class="series-stream-card focusable"
                    data-action="playEpisodeStream"
                    data-stream-id="${stream.id}">
-            <div class="series-stream-title">${stream.label || "Stream"}</div>
-            <div class="series-stream-desc">${stream.description || ""}</div>
+            <div class="series-stream-title" dir="${contentTextDirection(stream.label || "Stream")}">${stream.label || "Stream"}</div>
+            <div class="series-stream-desc" dir="${contentTextDirection(stream.description || "")}">${stream.description || ""}</div>
             <div class="series-stream-meta">
               ${renderStreamAddonIcon(stream.addonName)}
-              <span>${stream.addonName || "Addon"}${stream.sourceType ? ` - ${stream.sourceType}` : ""}</span>
+              <span dir="${contentTextDirection(`${stream.addonName || "Addon"}${stream.sourceType ? ` - ${stream.sourceType}` : ""}`)}">${stream.addonName || "Addon"}${stream.sourceType ? ` - ${stream.sourceType}` : ""}</span>
             </div>
             <div class="series-stream-tags">
               <span class="series-stream-tag">${detectQuality(stream.label || stream.description || "")}</span>
@@ -7803,11 +7861,11 @@ export const MetaDetailsScreen = {
           <article class="series-stream-card focusable"
                    data-action="playPendingStream"
                    data-stream-id="${stream.id}">
-            <div class="series-stream-title">${stream.label || "Stream"}</div>
-            <div class="series-stream-desc">${stream.description || ""}</div>
+            <div class="series-stream-title" dir="${contentTextDirection(stream.label || "Stream")}">${stream.label || "Stream"}</div>
+            <div class="series-stream-desc" dir="${contentTextDirection(stream.description || "")}">${stream.description || ""}</div>
             <div class="series-stream-meta">
               ${renderStreamAddonIcon(stream.addonName)}
-              <span>${stream.addonName || "Addon"}${stream.sourceType ? ` - ${stream.sourceType}` : ""}</span>
+              <span dir="${contentTextDirection(`${stream.addonName || "Addon"}${stream.sourceType ? ` - ${stream.sourceType}` : ""}`)}">${stream.addonName || "Addon"}${stream.sourceType ? ` - ${stream.sourceType}` : ""}</span>
             </div>
             <div class="series-stream-tags">
               <span class="series-stream-tag">${detectQuality(stream.label || stream.description || "")}</span>

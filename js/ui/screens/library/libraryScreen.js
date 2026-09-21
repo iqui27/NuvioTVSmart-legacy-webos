@@ -13,6 +13,7 @@ import {
   LIBRARY_PRIVACY_OPTIONS,
   LIBRARY_VIEW_MODE
 } from "./libraryController.js";
+import { LibrarySourceMode } from "../../../data/repository/libraryRepository.js";
 import { renderContentFilterPicker } from "../../components/filterPicker.js";
 import {
   PosterOptionsDialogController,
@@ -125,7 +126,7 @@ function groupNodesByRow(nodes = [], tolerance = 28) {
 
 function filterStructureSignature(state = {}) {
   return [
-    state.sourceMode === "trakt" ? "trakt" : "local",
+    state.sourceMode === LibrarySourceMode.LOCAL ? "local" : "remote",
     Array.isArray(state.availableGenres) && state.availableGenres.length ? "genre" : "no-genre",
     Array.isArray(state.availableYears) && state.availableYears.length ? "year" : "no-year",
     "watched"
@@ -480,7 +481,7 @@ export const LibraryScreen = {
       `;
     }
     const primaryPickerMarkup = [
-      state.sourceMode === "trakt"
+      state.sourceMode !== LibrarySourceMode.LOCAL
         ? this.renderPicker(
             "list",
             t("library_filter_list", {}, "List"),

@@ -396,7 +396,8 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
         options: [
           { id: SimklAnimeIdPreference.IMDB, label: "IMDb / TMDB" },
           { id: SimklAnimeIdPreference.MAL, label: "MyAnimeList" },
-          { id: SimklAnimeIdPreference.KITSU, label: "Kitsu" }
+          { id: SimklAnimeIdPreference.KITSU, label: "Kitsu" },
+          { id: SimklAnimeIdPreference.TVDB, label: "TVDB" }
         ],
         selectedId: settings.simklAnimeIdPreference,
         returnFocusKey: "tracking:animeId",
@@ -491,7 +492,7 @@ export const TraktScreen = Object.assign(Object.create(SettingsScreen), {
               <h3 class="settings-trakt-card-title">${escapeHtml(t("tracking_simkl_features_title", {}, "Simkl features"))}</h3>
               <p class="settings-tracking-card-subtitle">${escapeHtml(t("tracking_simkl_features_subtitle", {}, "Simkl-specific settings"))}</p>
               <div class="settings-trakt-options-stack">
-                ${this.renderActionRow({ focusKey: "tracking:animeId", title: t("tracking_simkl_anime_id_title", {}, "Anime ID preference"), subtitle: t("tracking_simkl_anime_id_subtitle", {}, "Controls how anime series are identified"), value: settings.simklAnimeIdPreference === "mal" ? "MyAnimeList" : settings.simklAnimeIdPreference === "kitsu" ? "Kitsu" : "IMDb / TMDB" })}
+                ${this.renderActionRow({ focusKey: "tracking:animeId", title: t("tracking_simkl_anime_id_title", {}, "Anime ID preference"), subtitle: t("tracking_simkl_anime_id_subtitle", {}, "Controls how anime series are identified"), value: settings.simklAnimeIdPreference === "mal" ? "MyAnimeList" : settings.simklAnimeIdPreference === "kitsu" ? "Kitsu" : settings.simklAnimeIdPreference === "tvdb" ? "TVDB" : "IMDb / TMDB" })}
               </div>
             </div>
           `

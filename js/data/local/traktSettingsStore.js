@@ -15,7 +15,8 @@ export const TraktLibrarySourceMode = {
 export const SimklAnimeIdPreference = {
   IMDB: "imdb",
   MAL: "mal",
-  KITSU: "kitsu"
+  KITSU: "kitsu",
+  TVDB: "tvdb"
 };
 
 export const MoreLikeThisSourcePreference = {

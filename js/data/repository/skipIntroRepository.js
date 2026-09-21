@@ -1,4 +1,5 @@
 import { INTRODB_API_URL } from "../../config.js";
+import { TmdbService } from "../../core/tmdb/tmdbService.js";
 import { Platform } from "../../platform/index.js";
 
 const CACHE = new Map();
@@ -8,6 +9,16 @@ function normalizeImdbId(value = "") {
     .trim()
     .split(":")[0];
   return /^tt\d+$/i.test(candidate) ? candidate : "";
+}
+
+function normalizeTmdbId(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const parts = raw.split(":");
+  const candidate = parts[0].toLowerCase() === "tmdb" ? parts.slice(1) : parts;
+  return candidate.find((part) => /^\d+$/.test(String(part || "").trim())) || "";
 }
 
 function normalizeBaseUrl(value = "") {
@@ -32,7 +43,7 @@ function toSkipInterval(segment, type) {
     : Number.isFinite(Number(segment.end_ms))
       ? Number(segment.end_ms) / 1000
       : NaN;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
     return null;
   }
   return {
@@ -41,6 +52,29 @@ function toSkipInterval(segment, type) {
     type,
     provider: "introdb"
   };
+}
+
+export function mapIntroDbSegmentsToSkipIntervals(data = {}, { isMovie = false } = {}) {
+  if (!isMovie) {
+    return [
+      toSkipInterval(data?.intro, "intro"),
+      toSkipInterval(data?.recap, "recap"),
+      toSkipInterval(data?.outro, "outro")
+    ]
+      .filter(Boolean)
+      .sort((left, right) => left.startTime - right.startTime);
+  }
+
+  const credits = toSkipInterval(data?.outro, "movie-credits");
+  const scene = toSkipInterval(data?.post_credits, "post-credits");
+  const safeCredits =
+    credits && scene && scene.startTime < credits.endTime && scene.endTime > credits.startTime
+      ? { ...credits, endTime: scene.startTime }
+      : credits;
+  return [safeCredits, scene]
+    .filter(Boolean)
+    .filter((interval) => interval.endTime > interval.startTime)
+    .sort((left, right) => left.startTime - right.startTime);
 }
 
 async function fetchJson(url, timeoutMs = Platform.isTizen() || Platform.isWebOS() ? 8000 : 3500) {
@@ -87,14 +121,44 @@ export const skipIntroRepository = {
     url.searchParams.set("episode", String(episodeNumber));
 
     const data = await fetchJson(url.toString());
-    const intervals = [
-      toSkipInterval(data?.intro, "intro"),
-      toSkipInterval(data?.recap, "recap"),
-      toSkipInterval(data?.outro, "outro")
-    ]
-      .filter(Boolean)
-      .sort((left, right) => left.startTime - right.startTime);
+    const intervals = mapIntroDbSegmentsToSkipIntervals(data);
 
+    CACHE.set(cacheKey, intervals);
+    return intervals;
+  },
+
+  async getMovieSkipIntervals({ imdbId = "", tmdbId = "", contentId = "", videoId = "" } = {}) {
+    const baseUrl = normalizeBaseUrl(INTRODB_API_URL);
+    if (!baseUrl) {
+      return [];
+    }
+
+    const candidates = [imdbId, videoId, contentId]
+      .map((value) => normalizeImdbId(value))
+      .filter(Boolean);
+    let normalizedImdbId = candidates[0] || "";
+    if (!normalizedImdbId) {
+      const normalizedTmdbId = [tmdbId, contentId, videoId]
+        .map((value) => normalizeTmdbId(value))
+        .find(Boolean);
+      if (normalizedTmdbId) {
+        normalizedImdbId = (await TmdbService.tmdbToImdb(normalizedTmdbId, "movie")) || "";
+      }
+    }
+    if (!normalizedImdbId) {
+      return [];
+    }
+
+    const cacheKey = `movie:${normalizedImdbId}`;
+    if (CACHE.has(cacheKey)) {
+      return CACHE.get(cacheKey);
+    }
+
+    const url = new URL("segments", baseUrl);
+    url.searchParams.set("imdb_id", normalizedImdbId);
+    url.searchParams.set("is_movie", "true");
+    const data = await fetchJson(url.toString());
+    const intervals = mapIntroDbSegmentsToSkipIntervals(data, { isMovie: true });
     CACHE.set(cacheKey, intervals);
     return intervals;
   }

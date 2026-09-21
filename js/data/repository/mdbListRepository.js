@@ -1,6 +1,7 @@
 import { MDBLIST_API_BASE_URL } from "../../config.js";
 import { MdbListSettingsStore } from "../local/mdbListSettingsStore.js";
 import { TmdbService } from "../../core/tmdb/tmdbService.js";
+import { parseMdbListRottenTomatoesPayload } from "../../core/util/mdbListRatingStatus.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const API_BASE_URL = String(MDBLIST_API_BASE_URL || "https://api.mdblist.com/").replace(/\/+$/, "");
@@ -126,14 +127,43 @@ async function fetchProviderRating({ mediaType, provider, apiKey, requestBody })
   }
 }
 
+async function fetchRottenTomatoesRatings({ imdbId, mediaType, apiKey }) {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/imdb/${encodeURIComponent(mediaType)}/${encodeURIComponent(imdbId)}?apikey=${encodeURIComponent(apiKey)}&append_to_response=keyword`
+    );
+    if (!response.ok) {
+      console.warn(`MDBList Rotten Tomatoes metadata request failed (${response.status})`);
+      return null;
+    }
+    return parseMdbListRottenTomatoesPayload(await response.json());
+  } catch (error) {
+    console.warn("MDBList Rotten Tomatoes metadata request failed", error);
+    return null;
+  }
+}
+
 async function fetchRatings({ imdbId, mediaType, apiKey, providers }) {
   const requestBody = {
     ids: [imdbId],
     provider: "imdb"
   };
-  const entries = await runWithConcurrency(providers, 4, (provider) =>
-    fetchProviderRating({ mediaType, provider, apiKey, requestBody })
-  );
+  const rottenTomatoesPromise = providers.some(
+    (provider) => provider.key === "tomatoes" || provider.key === "audience"
+  )
+    ? fetchRottenTomatoesRatings({ imdbId, mediaType, apiKey })
+    : Promise.resolve(null);
+  const entries = await runWithConcurrency(providers, 4, async (provider) => {
+    if (provider.key === "tomatoes" || provider.key === "audience") {
+      const rottenTomatoesRatings = await rottenTomatoesPromise;
+      const metadataRating = rottenTomatoesRatings?.[provider.key];
+      if (metadataRating != null) {
+        return [provider.key, metadataRating];
+      }
+    }
+    return fetchProviderRating({ mediaType, provider, apiKey, requestBody });
+  });
+  const rottenTomatoesRatings = await rottenTomatoesPromise;
   const ratings = Object.fromEntries(entries);
   const normalizedRatings = {
     trakt: ratings.trakt ?? null,
@@ -148,8 +178,15 @@ async function fetchRatings({ imdbId, mediaType, apiKey, providers }) {
   if (!hasAnyRating) {
     return null;
   }
+  const ratingsWithStatus = {
+    ...normalizedRatings,
+    tomatoesCertified:
+      rottenTomatoesRatings?.tomatoes != null && rottenTomatoesRatings.tomatoesCertified === true,
+    audienceCertified:
+      rottenTomatoesRatings?.audience != null && rottenTomatoesRatings.audienceCertified === true
+  };
   return {
-    ratings: normalizedRatings,
+    ratings: ratingsWithStatus,
     hasImdbRating: normalizedRatings.imdb != null
   };
 }
