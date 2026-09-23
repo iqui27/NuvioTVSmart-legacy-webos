@@ -89,6 +89,24 @@ export const WatchedItemsStore = {
     LocalStore.set(WATCHED_ITEMS_KEY, next);
   },
 
+  upsertMany(items, profileId) {
+    const pid = String(profileId || 1);
+    const normalized = (Array.isArray(items) ? items : [])
+      .map((item) => normalizeItem(item, pid))
+      .filter((item) => Boolean(item.contentId));
+    if (!normalized.length) {
+      return;
+    }
+    const keys = new Set(normalized.map(watchedItemKey));
+    const next = dedupeAndSort([
+      ...normalized,
+      ...this.listAll().filter(
+        (entry) => String(entry.profileId || "1") !== pid || !keys.has(watchedItemKey(entry))
+      )
+    ]).slice(0, 5000);
+    LocalStore.set(WATCHED_ITEMS_KEY, next);
+  },
+
   remove(contentId, profileId, options = null) {
     const pid = String(profileId || 1);
     const targetContentId = String(contentId || "");

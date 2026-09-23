@@ -169,6 +169,24 @@ export const WatchProgressStore = {
     persistProgressItems(next);
   },
 
+  upsertMany(progressList, profileId) {
+    const pid = String(profileId || "1");
+    const normalized = (Array.isArray(progressList) ? progressList : [])
+      .map((progress) => normalizeProgress(progress, pid))
+      .filter((progress) => Boolean(progress.contentId));
+    if (!normalized.length) {
+      return;
+    }
+    const keys = new Set(normalized.map(progressKey));
+    const next = dedupeAndSort([
+      ...normalized,
+      ...this.listAll().filter(
+        (entry) => String(entry.profileId || "1") !== pid || !keys.has(progressKey(entry))
+      )
+    ]).slice(0, 5000);
+    persistProgressItems(next);
+  },
+
   findByContentId(contentId, profileId) {
     const wanted = String(contentId || "").trim();
     return this.listForProfile(profileId).find((item) => item.contentId === wanted) || null;

@@ -79,19 +79,20 @@ function normalizeEpisode(video = {}) {
   };
 }
 
-function isReleasedEpisode(episode = {}, today = new Date()) {
-  if (episode.available === false) {
+function isFutureRelease(rawReleaseDate, today = new Date()) {
+  const rawDate = String(rawReleaseDate || "").trim();
+  if (!rawDate) {
     return false;
   }
-  const rawDate = String(episode.released || "").trim();
-  if (!rawDate) {
-    return true;
-  }
   const parsed = Date.parse(rawDate);
-  if (!Number.isFinite(parsed)) {
-    return true;
+  return Number.isFinite(parsed) && parsed > today.getTime();
+}
+
+function isReleasedEpisode(episode = {}, today = new Date()) {
+  if (episode.available === false || isFutureRelease(episode.released, today)) {
+    return false;
   }
-  return parsed <= today.getTime();
+  return true;
 }
 
 function watchedEpisodeKey(season, episode) {
@@ -100,10 +101,30 @@ function watchedEpisodeKey(season, episode) {
 
 export function getReleasedMainEpisodes(meta = {}) {
   const today = new Date();
-  return (Array.isArray(meta?.videos) ? meta.videos : [])
+  const candidates = (Array.isArray(meta?.videos) ? meta.videos : [])
     .map((video) => normalizeEpisode(video))
     .filter(Boolean)
-    .filter((episode) => episode.season > 0 && isReleasedEpisode(episode, today))
+    .filter((episode) => episode.season > 0);
+  const unavailableSeasons = new Set();
+  const episodesBySeason = new Map();
+  candidates.forEach((episode) => {
+    const seasonEpisodes = episodesBySeason.get(episode.season) || [];
+    seasonEpisodes.push(episode);
+    episodesBySeason.set(episode.season, seasonEpisodes);
+  });
+  episodesBySeason.forEach((seasonEpisodes, season) => {
+    const firstEpisode = seasonEpisodes.reduce(
+      (first, episode) => (!first || episode.episode < first.episode ? episode : first),
+      null
+    );
+    if (firstEpisode?.available === false || isFutureRelease(firstEpisode?.released, today)) {
+      unavailableSeasons.add(season);
+    }
+  });
+
+  return candidates
+    .filter((episode) => !unavailableSeasons.has(episode.season))
+    .filter((episode) => isReleasedEpisode(episode, today))
     .sort((left, right) => {
       if (left.season !== right.season) {
         return left.season - right.season;
@@ -179,36 +200,33 @@ async function markReleasedEpisodes(
     return false;
   }
   const identityOptions = buildProviderIdentityOptions(contentType, contentId, meta);
-  for (const episode of episodes) {
-    await watchedItemsRepository.mark(
-      {
-        contentId,
-        ...identityOptions,
-        contentType,
-        title: episode.title || meta?.name || contentId,
-        season: episode.season,
-        episode: episode.episode,
-        videoId: episode.id,
-        watchedAt
-      },
-      { skipTrackingWrite }
-    );
-    await watchProgressRepository.saveProgress({
-      contentId,
-      contentType,
-      imdbId: identityOptions.imdbId,
-      tmdbId: identityOptions.tmdbId,
-      traktId: identityOptions.traktId,
-      videoId: episode.id,
-      season: episode.season,
-      episode: episode.episode,
-      title: meta?.name || null,
-      episodeTitle: episode.title || null,
-      positionMs: 100,
-      durationMs: 100,
-      updatedAt: watchedAt
-    });
-  }
+  const watchedItems = episodes.map((episode) => ({
+    contentId,
+    ...identityOptions,
+    contentType,
+    title: episode.title || meta?.name || contentId,
+    season: episode.season,
+    episode: episode.episode,
+    videoId: episode.id,
+    watchedAt
+  }));
+  const progressItems = episodes.map((episode) => ({
+    contentId,
+    contentType,
+    imdbId: identityOptions.imdbId,
+    tmdbId: identityOptions.tmdbId,
+    traktId: identityOptions.traktId,
+    videoId: episode.id,
+    season: episode.season,
+    episode: episode.episode,
+    title: meta?.name || null,
+    episodeTitle: episode.title || null,
+    positionMs: 100,
+    durationMs: 100,
+    updatedAt: watchedAt
+  }));
+  await watchedItemsRepository.markBatch(watchedItems, { skipTrackingWrite });
+  await watchProgressRepository.saveProgressBatch(progressItems);
   return true;
 }
 
@@ -315,9 +333,20 @@ export const watchedSeriesReconciliationService = {
       title: meta?.name || options.title || normalizedContentId,
       watchedAt
     });
-    if (meta) {
-      await markReleasedEpisodes(normalizedContentId, normalizedType, meta, watchedAt, {
-        skipTrackingWrite: true
+    const markedEpisodes = meta
+      ? await markReleasedEpisodes(normalizedContentId, normalizedType, meta, watchedAt, {
+          skipTrackingWrite: true
+        })
+      : false;
+    if (!markedEpisodes) {
+      await watchProgressRepository.saveProgress({
+        contentId: normalizedContentId,
+        ...buildProviderIdentityOptions(normalizedType, normalizedContentId, meta),
+        contentType: normalizedType,
+        videoId: normalizedContentId,
+        positionMs: 100,
+        durationMs: 100,
+        updatedAt: watchedAt
       });
     }
     detailWatchedEnrichmentService.invalidateCache(normalizedContentId);

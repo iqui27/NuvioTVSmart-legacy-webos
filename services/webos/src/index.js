@@ -322,8 +322,13 @@ function stopKeepAlive(token) {
   return true;
 }
 
-function buildKeepAlivePayload(token, status) {
-  return Object.assign(buildBasePayload(), {
+function buildKeepAlivePayload(token, status, probeRuntime) {
+  var payload = buildBasePayload();
+  if (probeRuntime === false) {
+    payload.returnValue = true;
+    payload.error = null;
+  }
+  return Object.assign(payload, {
     token: token,
     keepAlive: true,
     activeKeepAlives: Object.keys(keepAliveIntervals).length,
@@ -333,7 +338,7 @@ function buildKeepAlivePayload(token, status) {
   });
 }
 
-function registerKeepAliveCommands(commandName, stopCommandName) {
+function registerKeepAliveCommands(commandName, stopCommandName, probeRuntime) {
   // Register the cancel handler through webos-service's Method object. LG
   // documents this as the service-side subscription contract; a plain
   // callback does not receive subscription cancellation and can leave an
@@ -364,7 +369,7 @@ function registerKeepAliveCommands(commandName, stopCommandName) {
           return;
         }
         try {
-          respond(message, buildKeepAlivePayload(token, status));
+          respond(message, buildKeepAlivePayload(token, status, probeRuntime));
         } catch (error) {
           stopKeepAlive(token);
         }
@@ -373,10 +378,18 @@ function registerKeepAliveCommands(commandName, stopCommandName) {
         }
       };
 
-      probeLocalServerWithRecovery(report);
+      var emitReport = function () {
+        if (probeRuntime === false) {
+          report(null);
+          return;
+        }
+        probeLocalServerWithRecovery(report);
+      };
+
+      emitReport();
       if (isSubscription) {
         keepAlive.intervalId = setInterval(function () {
-          probeLocalServerWithRecovery(report);
+          emitReport();
         }, intervalMs);
       }
     });
@@ -416,6 +429,10 @@ function registerEngineFsKeepAliveCommands() {
 
 function registerMediaPlaybackKeepAliveCommands() {
   registerKeepAliveCommands("mediaPlaybackKeepAlive", "mediaPlaybackKeepAliveStop");
+}
+
+function registerPlaybackServiceKeepAliveCommands() {
+  registerKeepAliveCommands("playbackServiceKeepAlive", "playbackServiceKeepAliveStop", false);
 }
 
 function registerTracksCommand() {
@@ -1627,6 +1644,7 @@ registerSafeHttpProxyCommand("supabaseProxy");
 registerSafeHttpProxyCommand("safeHttpProxy");
 registerEngineFsKeepAliveCommands();
 registerMediaPlaybackKeepAliveCommands();
+registerPlaybackServiceKeepAliveCommands();
 registerTracksCommand();
 registerSubtitleTextCommand();
 registerBitmapSubtitleCommand();

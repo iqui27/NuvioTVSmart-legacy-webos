@@ -732,6 +732,40 @@ class WatchProgressRepository {
     }
   }
 
+  async saveProgressBatch(progressList = [], options = {}) {
+    const syncRemote = options === false || options?.syncRemote === false ? false : true;
+    const pid = activeProfileId();
+    const items = (Array.isArray(progressList) ? progressList : [])
+      .filter((progress) => !isCloudProgressItem(progress))
+      .filter((progress) => Boolean(progress?.contentId));
+    if (!items.length) {
+      return;
+    }
+
+    const seriesContentIds = new Set(
+      items
+        .filter((progress) => isSeriesType(progress?.contentType))
+        .map((progress) => String(progress.contentId || "").trim())
+        .filter(Boolean)
+    );
+    seriesContentIds.forEach((contentId) => {
+      ContinueWatchingPreferences.removeDismissedNextUpKeysForContent(contentId, pid);
+    });
+
+    WatchProgressStore.upsertMany(
+      items.map((progress) => ({
+        ...progress,
+        source: String(progress?.source || "").trim() || selectedLocalProgressSource(),
+        updatedAt: progress.updatedAt || Date.now()
+      })),
+      pid
+    );
+    invalidateContinueWatchingDisplaySnapshot();
+    if (syncRemote) {
+      queueWatchProgressCloudSync(pid);
+    }
+  }
+
   async getProgressByContentId(contentId) {
     return (
       WatchProgressStore.listForProfile(activeProfileId()).find((item) =>

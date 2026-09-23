@@ -220,6 +220,8 @@ export const PlayerController = {
   currentPlaybackMediaSourceType: null,
   webOsPlaybackKeepAliveHandle: null,
   webOsPlaybackKeepAliveToken: "",
+  webOsServiceKeepAliveHandle: null,
+  webOsServiceKeepAliveToken: "",
   lastProgressSnapshot: null,
   lastKnownDurationSeconds: 0,
   avplayFallbackAttempts: new Set(),
@@ -693,6 +695,44 @@ export const PlayerController = {
     // cancel handler. Avoid a second stop request that could relaunch an
     // evicted on-demand service during teardown.
     this.webOsPlaybackKeepAliveToken = "";
+  },
+  startWebOsServiceKeepAlive() {
+    if (!Platform.isWebOS() || this.webOsServiceKeepAliveHandle) {
+      return;
+    }
+
+    const token = `webos-playback:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    this.webOsServiceKeepAliveToken = token;
+    try {
+      this.webOsServiceKeepAliveHandle = subscribeWebOsCompanionService({
+        method: "playbackServiceKeepAlive",
+        parameters: {
+          token,
+          intervalMs: 5000
+        },
+        onFailure: (error) => {
+          if (token !== this.webOsServiceKeepAliveToken) {
+            return;
+          }
+          console.warn("webOS playback service keepalive failed", { token, error });
+        }
+      });
+    } catch (error) {
+      this.webOsServiceKeepAliveHandle = null;
+      this.webOsServiceKeepAliveToken = "";
+      console.warn("webOS playback service keepalive could not start", { token, error });
+    }
+  },
+  stopWebOsServiceKeepAlive() {
+    if (this.webOsServiceKeepAliveHandle) {
+      try {
+        this.webOsServiceKeepAliveHandle.cancel?.();
+      } catch (_) {
+        // Ignore local cancellation failures.
+      }
+      this.webOsServiceKeepAliveHandle = null;
+    }
+    this.webOsServiceKeepAliveToken = "";
   },
 
   emitVideoEvent(eventName, detail = null) {
@@ -5133,7 +5173,16 @@ export const PlayerController = {
         mediaId,
         enable: Boolean(enabled)
       })
-        .then(() => true)
+        .then(() => {
+          if (
+            Boolean(enabled) &&
+            mediaId === this.nativeMediaId &&
+            Number(this.selectedWebOsEmbeddedSubtitleTrackIndex) === expectedSelectedIndex
+          ) {
+            this.applyWebOsSubtitleFontSize(mediaId, { force: true });
+          }
+          return true;
+        })
         .catch(() => false);
     };
 
@@ -5567,6 +5616,7 @@ export const PlayerController = {
     }
 
     if (!preserveTrackSelections || !this.playbackSessionActive) {
+      this.stopWebOsServiceKeepAlive();
       this.clearWebOsTrackSelections();
     }
 
@@ -5668,6 +5718,10 @@ export const PlayerController = {
       } else if (Platform.isWebOS()) {
         this.stopWebOsPlaybackKeepAlive();
       }
+    }
+
+    if (Platform.isWebOS() && !this.webOsPlaybackKeepAliveHandle) {
+      this.startWebOsServiceKeepAlive();
     }
 
     try {
@@ -5949,6 +6003,7 @@ export const PlayerController = {
 
   stop({ forceCloudSync = true, allowCloudSync = true, flushProgress = true } = {}) {
     this.stopWebOsPlaybackKeepAlive();
+    this.stopWebOsServiceKeepAlive();
     if (!this.video) return;
 
     this.stopProgressSaving();

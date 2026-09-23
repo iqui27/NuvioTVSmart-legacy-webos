@@ -42,6 +42,16 @@
           "public": true
         },
         {
+          "name": "playbackServiceKeepAlive",
+          "description": "Keep the webOS companion service alive during playback",
+          "public": true
+        },
+        {
+          "name": "playbackServiceKeepAliveStop",
+          "description": "Stop a playback service keep-alive subscription",
+          "public": true
+        },
+        {
           "name": "torrentCreate",
           "description": "Create an EngineFS torrent stream on the local media runtime",
           "public": true

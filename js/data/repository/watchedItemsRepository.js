@@ -69,13 +69,89 @@ function traktHistoryBody(item = {}) {
 }
 
 async function writeTraktHistory(item, remove = false) {
+  return writeTraktHistoryBatch([item], remove);
+}
+
+function historyMediaKey(media = {}) {
+  const ids = Object.entries(media.ids || {}).sort(([left], [right]) =>
+    String(left).localeCompare(String(right))
+  );
+  return ids.length
+    ? JSON.stringify(ids)
+    : `${String(media.title || "").toLowerCase()}::${String(media.year || "")}`;
+}
+
+function mergeTraktShow(target, source) {
+  const merged = { ...target, ...source };
+  const seasons = new Map(
+    (target.seasons || []).map((season) => [
+      Number(season.number),
+      { ...season, episodes: [...(season.episodes || [])] }
+    ])
+  );
+  (source.seasons || []).forEach((season) => {
+    const seasonNumber = Number(season.number);
+    const current = seasons.get(seasonNumber) || { number: seasonNumber, episodes: [] };
+    const episodeNumbers = new Set(
+      (current.episodes || []).map((episode) => Number(episode.number))
+    );
+    current.episodes = [
+      ...(current.episodes || []),
+      ...(season.episodes || []).filter((episode) => {
+        const episodeNumber = Number(episode.number);
+        if (episodeNumbers.has(episodeNumber)) {
+          return false;
+        }
+        episodeNumbers.add(episodeNumber);
+        return true;
+      })
+    ];
+    seasons.set(seasonNumber, current);
+  });
+  if (seasons.size) {
+    merged.seasons = Array.from(seasons.values()).sort((left, right) => left.number - right.number);
+  }
+  return merged;
+}
+
+function mergeTraktHistoryBodies(bodies = []) {
+  const movies = new Map();
+  const shows = new Map();
+  bodies.forEach((body) => {
+    (body?.movies || []).forEach((movie) => {
+      movies.set(historyMediaKey(movie), movie);
+    });
+    (body?.shows || []).forEach((show) => {
+      const key = historyMediaKey(show);
+      shows.set(key, shows.has(key) ? mergeTraktShow(shows.get(key), show) : show);
+    });
+  });
+  return {
+    movies: Array.from(movies.values()),
+    shows: Array.from(shows.values())
+  };
+}
+
+async function writeTraktHistoryBatch(items = [], remove = false) {
+  const bodies = [];
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    try {
+      bodies.push(traktHistoryBody(item));
+    } catch (error) {
+      console.warn("Trakt watched history write failed", error);
+    }
+  });
+  const body = mergeTraktHistoryBodies(bodies);
+  if (!body.movies.length && !body.shows.length) {
+    return;
+  }
   const token = await TraktAuthService.getValidAccessToken();
   if (!token) throw new Error("Trakt is not connected");
   const { response, payload } = await traktRequestJson(
     remove ? "/sync/history/remove" : "/sync/history",
     {
       method: "POST",
-      body: traktHistoryBody(item),
+      body,
       authorization: `Bearer ${token}`
     }
   );
@@ -403,6 +479,31 @@ async function deleteWatchedItemsFromCloud(items = [], profileId = activeProfile
   }
 }
 
+async function writeWatchedItemToProviders(item) {
+  return writeWatchedItemsToProviders([item]);
+}
+
+async function writeWatchedItemsToProviders(items = []) {
+  const validItems = (Array.isArray(items) ? items : []).filter((item) => item?.contentId);
+  if (!validItems.length) {
+    return;
+  }
+  if (isSimklConnected()) {
+    try {
+      await SimklSyncService.markWatchedBatch(validItems);
+    } catch (error) {
+      console.warn("Simkl watched history write failed", error);
+    }
+  }
+  if (isTraktConnected()) {
+    try {
+      await writeTraktHistoryBatch(validItems, false);
+    } catch (error) {
+      console.warn("Trakt watched history write failed", error);
+    }
+  }
+}
+
 class WatchedItemsRepository {
   async getAll(limit = 2000, profileId = activeProfileId()) {
     const local = WatchedItemsStore.listForProfile(profileId);
@@ -464,20 +565,26 @@ class WatchedItemsRepository {
     // Android commits local completion before broadcasting to tracking providers.
     // A provider outage must not discard the completed state or the cloud enqueue.
     if (options.skipTrackingWrite !== true) {
-      if (isSimklConnected()) {
-        try {
-          await SimklSyncService.markWatched(item);
-        } catch (error) {
-          console.warn("Simkl watched history write failed", error);
-        }
-      }
-      if (isTraktConnected()) {
-        try {
-          await writeTraktHistory(item, false);
-        } catch (error) {
-          console.warn("Trakt watched history write failed", error);
-        }
-      }
+      await writeWatchedItemToProviders(item);
+    }
+    queueWatchedItemsCloudSync();
+  }
+
+  async markBatch(items = [], options = {}) {
+    const validItems = (Array.isArray(items) ? items : []).filter((item) => item?.contentId);
+    if (!validItems.length) {
+      return;
+    }
+
+    const profileId = activeProfileId();
+    const normalizedItems = validItems.map((item) => ({
+      ...item,
+      watchedAt: item.watchedAt || Date.now()
+    }));
+    WatchedItemsStore.upsertMany(normalizedItems, profileId);
+    invalidateTraktWatchedCaches();
+    if (options.skipTrackingWrite !== true) {
+      await writeWatchedItemsToProviders(normalizedItems);
     }
     queueWatchedItemsCloudSync();
   }

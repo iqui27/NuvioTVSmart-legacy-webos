@@ -517,6 +517,74 @@ function historyMutationBody(item, fallbackEntry, includeWatchedAt) {
   };
 }
 
+function mutationMediaKey(media = {}) {
+  const ids = Object.entries(media.ids || {}).sort(([left], [right]) =>
+    String(left).localeCompare(String(right))
+  );
+  return ids.length
+    ? JSON.stringify(ids)
+    : `${String(media.title || "").toLowerCase()}::${String(media.year || "")}`;
+}
+
+function mergeSimklShow(target, source) {
+  const merged = { ...target, ...source };
+  const directEpisodes = new Map(
+    (target.episodes || []).map((episode) => [Number(episode.number), episode])
+  );
+  (source.episodes || []).forEach((episode) => {
+    directEpisodes.set(Number(episode.number), episode);
+  });
+  if (directEpisodes.size) {
+    merged.episodes = Array.from(directEpisodes.values()).sort(
+      (left, right) => left.number - right.number
+    );
+  }
+
+  const seasons = new Map(
+    (target.seasons || []).map((season) => [
+      Number(season.number),
+      { ...season, episodes: [...(season.episodes || [])] }
+    ])
+  );
+  (source.seasons || []).forEach((season) => {
+    const seasonNumber = Number(season.number);
+    const current = seasons.get(seasonNumber) || { number: seasonNumber, episodes: [] };
+    const episodes = new Map(
+      (current.episodes || []).map((episode) => [Number(episode.number), episode])
+    );
+    (season.episodes || []).forEach((episode) => {
+      episodes.set(Number(episode.number), episode);
+    });
+    current.episodes = Array.from(episodes.values()).sort(
+      (left, right) => left.number - right.number
+    );
+    seasons.set(seasonNumber, current);
+  });
+  if (seasons.size) {
+    merged.seasons = Array.from(seasons.values()).sort((left, right) => left.number - right.number);
+  }
+  return merged;
+}
+
+function mergeSimklHistoryBodies(bodies = []) {
+  const movies = new Map();
+  const shows = new Map();
+  bodies.forEach((body) => {
+    (body?.movies || []).forEach((movie) => {
+      const key = mutationMediaKey(movie);
+      movies.set(key, movies.has(key) ? { ...movies.get(key), ...movie } : movie);
+    });
+    (body?.shows || []).forEach((show) => {
+      const key = mutationMediaKey(show);
+      shows.set(key, shows.has(key) ? mergeSimklShow(shows.get(key), show) : show);
+    });
+  });
+  return {
+    movies: Array.from(movies.values()),
+    shows: Array.from(shows.values())
+  };
+}
+
 function progressFromPlayback(session, snapshot) {
   const media = session?.movie || session?.anime || session?.show;
   if (!media) return null;
@@ -810,12 +878,25 @@ export const SimklSyncService = {
   },
 
   async markWatched(item) {
+    return this.markWatchedBatch([item]);
+  },
+
+  async markWatchedBatch(items = []) {
+    const candidates = (Array.isArray(items) ? items : []).filter((item) => item?.contentId);
+    if (!candidates.length) {
+      return;
+    }
     const profileId = activeProfileId();
     const snapshot = getSnapshot(profileId);
-    const entry = findEntry(snapshot, item);
+    const body = mergeSimklHistoryBodies(
+      candidates.map((item) => historyMutationBody(item, findEntry(snapshot, item), true))
+    );
+    if (!body.movies.length && !body.shows.length) {
+      return;
+    }
     await simklRequest("/sync/history", {
       method: "POST",
-      body: historyMutationBody(item, entry, true),
+      body,
       profileId
     });
     snapshot.lastCheckedAt = 0;
