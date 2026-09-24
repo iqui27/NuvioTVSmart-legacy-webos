@@ -22,8 +22,8 @@ import { StreamSearchSessionCache } from "./streamSearchSessionCache.js";
 const STREAM_SOURCE_REQUEST_TIMEOUT_MS = 60_000;
 const PLUGIN_STREAM_REQUEST_TIMEOUT_MS = 120_000;
 
-function pluginSearchTimeoutMs() {
-  const configured = Number(PluginManager.getCapabilitySnapshot?.().quota?.globalTimeoutMs || 0);
+function pluginSearchTimeoutMs(mediaType) {
+  const configured = Number(PluginManager.getSearchTimeoutMs?.(mediaType) || 0);
   return configured > 0 ? configured : PLUGIN_STREAM_REQUEST_TIMEOUT_MS;
 }
 
@@ -558,7 +558,7 @@ class StreamRepository {
       pluginTimeoutId = setTimeout(() => {
         abortPluginWork();
         resolve([]);
-      }, pluginSearchTimeoutMs());
+      }, pluginSearchTimeoutMs(type));
     });
     const pluginStreamsPromise = Promise.race([pluginTask, pluginTimeout]);
 
@@ -592,7 +592,8 @@ class StreamRepository {
     // IMDb conversion may still be resolved when plugin discovery is active.
     // Numeric IDs remain a no-network fast path in either case.
     const tmdbId = await TmdbService.ensureTmdbId(tmdbLookupId, type, {
-      requireEnabled: false
+      requireEnabled: false,
+      signal: options?.signal || null
     });
     const pluginRequest = tmdbId
       ? {

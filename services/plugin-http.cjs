@@ -35,7 +35,7 @@ function getZlibModule() {
 }
 
 var MAX_REQUEST_BYTES = 1024 * 1024;
-var MAX_SERVICE_REQUEST_BYTES = MAX_REQUEST_BYTES + 64 * 1024;
+var MAX_SERVICE_REQUEST_BYTES = Math.ceil(MAX_REQUEST_BYTES / 3) * 4 + 64 * 1024;
 var DEFAULT_RESPONSE_BYTES = 1024 * 1024;
 // Keep the service envelope consistent with the modern app policy. Plugin
 // fetches still request the Android 1 MiB cap; this upper bound is for
@@ -50,6 +50,8 @@ var DEFAULT_TIMEOUT_MS = 60000;
 // request/read timeout unchanged. This is the per-address budget used when a
 // DNS route fails before a response is received.
 var CONNECT_ATTEMPT_TIMEOUT_MS = 30000;
+var MAX_FAILED_ROUTES = 256;
+var MAX_IDLE_CONNECTIONS = 5;
 var PLUGIN_PROTOCOL_VERSION = 1;
 var MAX_ACTIVE_REQUESTS = 10;
 // Keep the active network cap unchanged, but queue the burst generated when
@@ -176,9 +178,32 @@ function validatePayload(payload) {
       error: "Only valid HTTP(S) URLs are allowed"
     };
   var requestedMethod = String((payload && payload.method) || "GET").toUpperCase();
-  var method = ["POST", "PUT", "DELETE"].indexOf(requestedMethod) >= 0 ? requestedMethod : "GET";
+  var method =
+    ["POST", "PUT", "PATCH", "DELETE"].indexOf(requestedMethod) >= 0 ? requestedMethod : "GET";
   var body = typeof (payload && payload.body) === "string" ? payload.body : "";
-  if (Buffer.byteLength(body, "utf8") > MAX_REQUEST_BYTES)
+  var hasBinaryBody = payload && Object.prototype.hasOwnProperty.call(payload, "bodyBase64");
+  var encodedBody = hasBinaryBody ? payload.bodyBase64 : "";
+  if (
+    hasBinaryBody &&
+    (typeof encodedBody !== "string" ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encodedBody))
+  )
+    return { ok: false, error: "Invalid binary request body" };
+  var bodyKind = payload && payload.bodyKind;
+  if (bodyKind === undefined || bodyKind === null) {
+    bodyKind = hasBinaryBody ? "base64" : method === "DELETE" || !body ? "none" : "text";
+  }
+  if (["none", "text", "base64"].indexOf(bodyKind) < 0)
+    return { ok: false, error: "Unsupported request body type" };
+  if ((bodyKind === "base64") !== Boolean(hasBinaryBody))
+    return { ok: false, error: "Invalid binary request body" };
+  var requestBody =
+    bodyKind === "base64"
+      ? Buffer.from(encodedBody, "base64")
+      : bodyKind === "text"
+        ? Buffer.from(body, "utf8")
+        : Buffer.alloc(0);
+  if (requestBody.length > MAX_REQUEST_BYTES)
     return { ok: false, error: "Request body exceeds the plugin quota" };
   var headers = normalizeHeaders(payload && payload.headers);
   // Android's OkHttp RequestBody supplies these defaults when a plugin does
@@ -186,14 +211,18 @@ function validatePayload(payload) {
   // charset, because some providers include the value in a signature.
   if (!headerValue(headers, "Content-Type")) {
     if (method === "POST") headers["Content-Type"] = "application/x-www-form-urlencoded";
-    if (method === "PUT") headers["Content-Type"] = "application/json";
+    if (["PUT", "PATCH"].indexOf(method) >= 0 || (method === "DELETE" && bodyKind !== "none")) {
+      headers["Content-Type"] = "application/json";
+    }
   }
   return {
     ok: true,
     url: parsed.toString(),
     method: method,
     headers: headers,
-    body: body,
+    bodyKind: bodyKind,
+    body: requestBody,
+    responseEncoding: payload && payload.responseEncoding === "base64" ? "base64" : "text",
     requestId: String((payload && payload.requestId) || "").slice(0, 128),
     executionId: String((payload && payload.executionId) || "").slice(0, 128),
     profileId: String((payload && payload.profileId) || "").slice(0, 64),
@@ -315,7 +344,93 @@ function responseCharset(contentType) {
   return "utf8";
 }
 
-function performFetch(payload, callback, redirects, trace) {
+function routeDatabaseKey(parsed, address) {
+  return JSON.stringify([
+    String((parsed && parsed.protocol) || "").toLowerCase(),
+    String((parsed && parsed.hostname) || "").toLowerCase(),
+    Number((parsed && parsed.port) || 0) || (parsed && parsed.protocol === "https:" ? 443 : 80),
+    String(address || "")
+  ]);
+}
+
+function orderResolvedAddresses(networkState, parsed, addresses) {
+  var failedRoutes = networkState && networkState.failedRoutes;
+  if (!failedRoutes || !failedRoutes.size) return addresses;
+  var available = [];
+  var postponed = [];
+  addresses.forEach(function (address) {
+    (failedRoutes.has(routeDatabaseKey(parsed, address)) ? postponed : available).push(address);
+  });
+  return available.concat(postponed);
+}
+
+function rememberFailedRoute(networkState, parsed, address) {
+  var failedRoutes = networkState && networkState.failedRoutes;
+  if (!failedRoutes || !address) return;
+  var key = routeDatabaseKey(parsed, address);
+  failedRoutes.delete(key);
+  failedRoutes.set(key, true);
+  while (failedRoutes.size > MAX_FAILED_ROUTES) {
+    failedRoutes.delete(failedRoutes.keys().next().value);
+  }
+}
+
+function rememberConnectedRoute(networkState, parsed, address) {
+  var failedRoutes = networkState && networkState.failedRoutes;
+  if (!failedRoutes || !address) return;
+  failedRoutes.delete(routeDatabaseKey(parsed, address));
+}
+
+function hasActiveAgentSockets(agent) {
+  var sockets = agent && agent.sockets;
+  return Object.keys(sockets || {}).some(function (name) {
+    return Array.isArray(sockets[name]) && sockets[name].length > 0;
+  });
+}
+
+function requestAgent(networkState, transport, parsed, address) {
+  var agents = networkState && networkState.agents;
+  if (!agents || !transport || typeof transport.Agent !== "function") return false;
+  var key = routeDatabaseKey(parsed, address);
+  var agent = agents.get(key);
+  if (agent) {
+    agents.delete(key);
+    agents.set(key, agent);
+    return agent;
+  }
+  if (agents.size >= MAX_IDLE_CONNECTIONS) {
+    var oldestIdleKey = null;
+    agents.forEach(function (candidate, candidateKey) {
+      if (oldestIdleKey === null && !hasActiveAgentSockets(candidate)) {
+        oldestIdleKey = candidateKey;
+      }
+    });
+    if (oldestIdleKey !== null) {
+      var staleAgent = agents.get(oldestIdleKey);
+      agents.delete(oldestIdleKey);
+      if (staleAgent && typeof staleAgent.destroy === "function") staleAgent.destroy();
+    }
+  }
+  if (agents.size >= MAX_IDLE_CONNECTIONS) return false;
+  agent = new transport.Agent({
+    keepAlive: true,
+    maxSockets: MAX_ACTIVE_REQUESTS,
+    maxFreeSockets: 1
+  });
+  agents.set(key, agent);
+  return agent;
+}
+
+function destroyRouteAgents(networkState) {
+  var agents = networkState && networkState.agents;
+  if (!agents) return;
+  agents.forEach(function (agent) {
+    if (agent && typeof agent.destroy === "function") agent.destroy();
+  });
+  agents.clear();
+}
+
+function performFetch(payload, callback, redirects, trace, networkState) {
   var requestTrace = null;
   var finish = once(function (error, result) {
     emitTrace(
@@ -365,6 +480,7 @@ function performFetch(payload, callback, redirects, trace) {
       .filter(function (address, index, list) {
         return address && list.indexOf(address) === index;
       });
+    resolvedAddresses = orderResolvedAddresses(networkState, parsed, resolvedAddresses);
     if (!resolvedAddresses.length) {
       var missingAddressError = new Error("DNS lookup returned no address");
       emitTrace(
@@ -401,10 +517,13 @@ function performFetch(payload, callback, redirects, trace) {
       return;
     }
     var requestHeaders = Object.assign({}, validation.headers);
-    if (["POST", "PUT"].indexOf(validation.method) >= 0) {
-      // The Android body is a known UTF-8 byte array. OkHttp's bridge uses the
-      // caller's Content-Type (or the RequestBody default), sets Content-Length
-      // and removes Transfer-Encoding.
+    var hasRequestBody =
+      ["POST", "PUT", "PATCH"].indexOf(validation.method) >= 0 ||
+      (validation.method === "DELETE" && validation.bodyKind !== "none");
+    if (hasRequestBody) {
+      // Android builds its RequestBody from the exact request bytes. Keep the
+      // caller's Content-Type (or the platform default), set the byte length,
+      // and remove Transfer-Encoding to match that transport.
       var contentType =
         headerValue(validation.headers, "Content-Type") ||
         (validation.method === "POST" ? "application/x-www-form-urlencoded" : "application/json");
@@ -428,11 +547,8 @@ function performFetch(payload, callback, redirects, trace) {
       requestHeaders.Host = parsed.host;
     }
     if (!hasHeader(requestHeaders, "Connection")) requestHeaders.Connection = "Keep-Alive";
-    if (
-      ["POST", "PUT"].indexOf(validation.method) >= 0 &&
-      !hasHeader(requestHeaders, "Content-Length")
-    ) {
-      requestHeaders["Content-Length"] = String(Buffer.byteLength(validation.body, "utf8"));
+    if (hasRequestBody && !hasHeader(requestHeaders, "Content-Length")) {
+      requestHeaders["Content-Length"] = String(validation.body.length);
     }
     function isRetryableAddressError(error) {
       return (
@@ -465,9 +581,13 @@ function performFetch(payload, callback, redirects, trace) {
     }
     function failTransport(error) {
       if (attemptComplete) return;
+      var retryableAddressError = isRetryableAddressError(error);
+      if (!responseStarted && retryableAddressError) {
+        rememberFailedRoute(networkState, parsed, address);
+      }
       var canTryNextAddress =
         !responseStarted &&
-        isRetryableAddressError(error) &&
+        retryableAddressError &&
         resolvedAddresses.length > 1 &&
         requestDeadline > Date.now();
       if (canTryNextAddress) {
@@ -498,7 +618,7 @@ function performFetch(payload, callback, redirects, trace) {
       method: validation.method,
       headers: requestHeaders,
       servername: String(parsed.hostname || "").replace(/^\[|\]$/g, ""),
-      agent: false
+      agent: requestAgent(networkState, transport, parsed, address)
     };
     var requestSent = false;
     try {
@@ -510,6 +630,7 @@ function performFetch(payload, callback, redirects, trace) {
       request = transport.request(requestOptions, function (response) {
         responseStarted = true;
         clearConnectTimer();
+        rememberConnectedRoute(networkState, parsed, address);
         emitTrace(
           trace,
           "fetch response begin",
@@ -593,7 +714,9 @@ function performFetch(payload, callback, redirects, trace) {
             validation.method !== "GET"
           ) {
             redirectedPayload.method = "GET";
+            redirectedPayload.bodyKind = "none";
             redirectedPayload.body = "";
+            delete redirectedPayload.bodyBase64;
             Object.keys(redirectedHeaders).forEach(function (headerName) {
               if (
                 ["content-length", "content-type", "transfer-encoding"].indexOf(
@@ -617,7 +740,7 @@ function performFetch(payload, callback, redirects, trace) {
               redirect: (redirects || 0) + 1
             })
           );
-          performFetch(redirectedPayload, finish, (redirects || 0) + 1, trace);
+          performFetch(redirectedPayload, finish, (redirects || 0) + 1, trace, networkState);
           return;
         }
 
@@ -645,6 +768,7 @@ function performFetch(payload, callback, redirects, trace) {
         var finishTruncated = function () {
           if (truncated) return;
           truncated = true;
+          var responseBytes = Buffer.concat(chunks);
           responseDone(null, {
             returnValue: true,
             // Android keeps the original HTTP response metadata when its body
@@ -653,7 +777,11 @@ function performFetch(payload, callback, redirects, trace) {
             status: response.statusCode,
             statusText: response.statusMessage || "",
             url: validation.url,
-            body: Buffer.concat(chunks).toString(bodyEncoding),
+            body: responseBytes.toString(bodyEncoding),
+            bodyBase64:
+              validation.responseEncoding === "base64"
+                ? responseBytes.toString("base64")
+                : undefined,
             headers: headers,
             truncated: true
           });
@@ -693,13 +821,18 @@ function performFetch(payload, callback, redirects, trace) {
           responseDone(error);
         });
         stream.on("end", function () {
+          var responseBytes = Buffer.concat(chunks);
           responseDone(null, {
             returnValue: true,
             ok: response.statusCode >= 200 && response.statusCode < 300,
             status: response.statusCode,
             statusText: response.statusMessage || "",
             url: validation.url,
-            body: Buffer.concat(chunks).toString(bodyEncoding),
+            body: responseBytes.toString(bodyEncoding),
+            bodyBase64:
+              validation.responseEncoding === "base64"
+                ? responseBytes.toString("base64")
+                : undefined,
             headers: headers,
             truncated: truncated
           });
@@ -710,25 +843,32 @@ function performFetch(payload, callback, redirects, trace) {
         "fetch transport request created",
         Object.assign({}, requestTrace, { address: address })
       );
-      var connectTimeoutMs = Math.min(
-        CONNECT_ATTEMPT_TIMEOUT_MS,
-        Math.max(1, requestDeadline - Date.now())
-      );
-      connectTimer = setTimeout(function () {
-        if (attemptComplete || responseStarted) return;
-        var timeoutError = new Error("Plugin provider connection timed out");
-        timeoutError.code = "ETIMEDOUT";
-        emitTrace(
-          trace,
-          "fetch transport connect timeout",
-          Object.assign({}, requestTrace, {
-            address: address,
-            timeoutMs: connectTimeoutMs
-          })
+      request.on("socket", function (socket) {
+        if (!socket || socket.connecting === false) {
+          clearConnectTimer();
+          return;
+        }
+        var connectTimeoutMs = Math.min(
+          CONNECT_ATTEMPT_TIMEOUT_MS,
+          Math.max(1, requestDeadline - Date.now())
         );
-        failTransport(timeoutError);
-        if (request && typeof request.destroy === "function") request.destroy(timeoutError);
-      }, connectTimeoutMs);
+        connectTimer = setTimeout(function () {
+          if (attemptComplete || responseStarted) return;
+          var timeoutError = new Error("Plugin provider connection timed out");
+          timeoutError.code = "ETIMEDOUT";
+          emitTrace(
+            trace,
+            "fetch transport connect timeout",
+            Object.assign({}, requestTrace, {
+              address: address,
+              timeoutMs: connectTimeoutMs
+            })
+          );
+          failTransport(timeoutError);
+          if (request && typeof request.destroy === "function") request.destroy(timeoutError);
+        }, connectTimeoutMs);
+        if (typeof socket.once === "function") socket.once("connect", clearConnectTimer);
+      });
       request.setTimeout(validation.timeoutMs, function () {
         if (attemptComplete) return;
         var timeoutError = new Error("Plugin provider request timed out");
@@ -755,8 +895,7 @@ function performFetch(payload, callback, redirects, trace) {
       if (validation.requestId && typeof finish.registerRequest === "function") {
         finish.registerRequest(validation.requestId, request);
       }
-      if (["POST", "PUT"].indexOf(validation.method) >= 0 && validation.body)
-        request.write(validation.body);
+      if (hasRequestBody && validation.body.length > 0) request.write(validation.body);
       request.end();
       requestSent = true;
       emitTrace(
@@ -807,6 +946,7 @@ function memoryUsage() {
 }
 
 function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
+  var networkState = { failedRoutes: new Map(), agents: new Map() };
   var activeRequests = {};
   var inFlightRequests = {};
   var queuedRequests = [];
@@ -1006,7 +1146,8 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
         Object.assign({}, state.payload, { requestId: requestId }),
         callback,
         0,
-        recordDiagnostic
+        recordDiagnostic,
+        networkState
       );
     } catch (error) {
       recordDiagnostic(
@@ -1172,6 +1313,9 @@ function createPluginHttpServer({ port = 2711, logger = console, trace } = {}) {
   server.on("error", function (error) {
     if (logger && typeof logger.warn === "function")
       logger.warn("Plugin service error", error.message || error);
+  });
+  server.on("close", function () {
+    destroyRouteAgents(networkState);
   });
   return server;
 }

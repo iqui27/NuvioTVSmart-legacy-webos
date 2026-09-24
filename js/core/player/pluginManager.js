@@ -164,6 +164,18 @@ function platformId() {
   return Platform.getName();
 }
 
+function executableScrapersForMediaType(state, mediaType) {
+  const repositoriesById = new Map((state.repositories || []).map((entry) => [entry.id, entry]));
+  return (state.scrapers || []).filter((scraper) => {
+    const repository = repositoriesById.get(scraper.repositoryId);
+    return (
+      isExecutableScraper(scraper, repository, platformId()) &&
+      scraper.codeAvailable !== false &&
+      pluginSupportsType(scraper.supportedTypes, mediaType)
+    );
+  });
+}
+
 function quotaFor(capabilities = getPluginCapabilitySnapshot()) {
   return capabilities.quota || PLUGIN_QUOTAS.limited;
 }
@@ -1137,6 +1149,25 @@ export const PluginManager = {
     };
   },
 
+  getSearchTimeoutMs(mediaType) {
+    const quota = quotaFor(getPluginCapabilitySnapshot());
+    const state = currentState();
+    const eligibleCount = executableScrapersForMediaType(state, mediaType).length;
+    const maxConcurrent = Math.max(1, Number(quota.maxConcurrent) || 1);
+    const providerTimeoutMs = Math.max(0, Number(quota.providerTimeoutMs) || 0);
+    const queuedCount = runningExecutions + queuedExecutions.length;
+    const totalProviderCount = eligibleCount + queuedCount;
+    const waves = Math.ceil(totalProviderCount / maxConcurrent);
+    const staggerTimeoutMs = Math.max(0, eligibleCount - 1) * 60;
+    const setupTimeoutMs = totalProviderCount > 0 ? providerTimeoutMs : 0;
+    const batchTimeoutMs = setupTimeoutMs + waves * providerTimeoutMs + staggerTimeoutMs;
+
+    // Android drains every enabled provider in concurrency-limited waves.
+    // Reserve one provider window for TV setup and lazy code retrieval, then
+    // budget each wave while keeping the existing floor for smaller searches.
+    return Math.max(Number(quota.globalTimeoutMs) || 0, batchTimeoutMs);
+  },
+
   getRuntimeStatus({ probe = false } = {}) {
     if (!probe) return Promise.resolve(this.getCapabilitySnapshot());
     return this.ensureRuntime()
@@ -1968,14 +1999,7 @@ export const PluginManager = {
       season,
       episode
     };
-    const eligible = state.scrapers.filter((scraper) => {
-      const repository = state.repositories.find((entry) => entry.id === scraper.repositoryId);
-      return (
-        isExecutableScraper(scraper, repository, platformId()) &&
-        scraper.codeAvailable !== false &&
-        pluginSupportsType(scraper.supportedTypes, mediaType)
-      );
-    });
+    const eligible = executableScrapersForMediaType(state, mediaType);
     if (!eligible.length) return [];
     const completedGroups = [];
     const emit = typeof onGroup === "function" ? onGroup : null;

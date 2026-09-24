@@ -259,11 +259,10 @@ function shouldSynthesizeAddonVideoEpisodes(contentType = "") {
   const normalizedType = String(contentType || "")
     .trim()
     .toLowerCase();
-  // Match Android TV: a non-empty videos array is enough to expose an
-  // episodic detail, and missing season/episode fields become S1E<n>.
-  // Keep movie/film/channel metadata non-episodic so live TV without videos
-  // continues through the direct `tv` stream path.
-  return normalizedType !== "" && !["movie", "film", "channel"].includes(normalizedType);
+  // Addon-defined playable types can use unnumbered videos as files in one
+  // virtual season. A `tv` item is a channel unless its videos carry episode
+  // coordinates, so unnumbered EPG entries must stay on the direct TV path.
+  return normalizedType !== "" && !["movie", "film", "channel", "tv"].includes(normalizedType);
 }
 
 function sortEpisodeEntries(episodes = []) {
@@ -281,6 +280,26 @@ function sortEpisodeEntries(episodes = []) {
 }
 
 function normalizeEpisodes(videos = [], contentType = "") {
+  const normalizedType = String(contentType || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedType === "tv") {
+    // Match Mobile's hasEpisodes gate: only videos with an explicit season or
+    // episode coordinate are episodic; unnumbered EPG entries remain channels.
+    return sortEpisodeEntries(
+      videos
+        .filter((video) => video.season != null || video.episode != null)
+        .map((video) => {
+          const episode = toEpisodeEntry(video);
+          // Mobile groups videos without a season under specials (season 0).
+          return video.season == null && video.episode != null
+            ? { ...episode, season: 0 }
+            : episode;
+        })
+        .filter((video) => video.id && video.season >= 0)
+    );
+  }
+
   const normalizedVideos = videos
     .map((video) => toEpisodeEntry(video))
     .filter((video) => video.id && video.season >= 0);
@@ -417,8 +436,8 @@ function isSeriesDetailMeta(meta = {}, episodes = null) {
   const resolvedEpisodes = Array.isArray(episodes)
     ? episodes
     : normalizeEpisodes(meta?.videos || [], normalizedType);
-  // Match Android TV: addon-defined types such as `other` are episodic when
-  // their full meta contains videos, even if the addon omitted episode fields.
+  // Addon-defined types such as `other` can be episodic when their full meta
+  // contains unnumbered playable videos; live `tv` channels stay non-episodic.
   return resolvedEpisodes.length > 0;
 }
 

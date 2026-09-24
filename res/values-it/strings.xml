@@ -346,6 +346,8 @@
     <string name="playback_section_general_desc">Comportamento principale della riproduzione.</string>
     <string name="playback_loading_overlay">Overlay di caricamento</string>
     <string name="playback_loading_overlay_sub">Mostra la schermata di caricamento fino alla comparsa del primo fotogramma video.</string>
+    <string name="playback_minimal_buffering_ui">Interfaccia ridotta durante il buffering</string>
+    <string name="playback_minimal_buffering_ui_sub">Mostra solo l’indicatore di caricamento se il buffering inizia dopo l’avvio della riproduzione.</string>
     <string name="playback_pause_overlay">Overlay in pausa</string>
     <string name="playback_pause_overlay_sub">Mostra l\'overlay dei dettagli dopo 5 secondi di pausa.</string>
     <string name="playback_show_clock_sub">Mostra l\'ora attuale e l\'ora di fine quando i controlli sono visibili.</string>
@@ -1032,6 +1034,7 @@
     <string name="subtitle_style_bottom_offset">Offset Inferiore</string>
     <string name="subtitle_style_defaults">Default</string>
     <string name="subtitle_style_unavailable_native">Non disponibile con sottotitoli nativi</string>
+    <string name="subtitle_style_preserves_ass">Vengono mantenuti gli stili ASS/SSA</string>
     <string name="subtitle_style_on">Attivo</string>
     <string name="subtitle_style_off">Spento</string>
     <string name="panel_failed_load_streams">Errore nel caricamento degli stream</string>
@@ -1050,6 +1053,8 @@
     <string name="skip_ending">Salta Fine</string>
     <string name="skip_recap">Salta Riassunto</string>
     <string name="skip_generic">Salta</string>
+    <string name="skip_movie_credits">Salta i titoli di coda</string>
+    <string name="skip_to_post_credits">Vai alla scena dopo i titoli di coda</string>
     <string name="display_mode_refresh">Frequenza di aggiornamento</string>
     <string name="display_mode_resolution">Risoluzione</string>
     <string name="search_keyboard_hint">Premi Invio sulla tastiera per cercare</string>
@@ -1671,6 +1676,8 @@
     <string name="auto_skip_recap_sub">Salta automaticamente i riassunti degli episodi precedenti.</string>
     <string name="auto_skip_outro">Outro / Sigla finale</string>
     <string name="auto_skip_outro_sub">Salta automaticamente le outro e le sigle finali degli anime.</string>
+    <string name="auto_skip_movie_credits">Titoli di coda dei film</string>
+    <string name="auto_skip_movie_credits_sub">Salta automaticamente i titoli di coda dei film.</string>
     <string name="qr_login_preparing">Preparazione login tramite QR...</string>
     <string name="qr_login_device_auth_failed">Autenticazione dispositivo fallita</string>
     <string name="profile_custom_avatar_web_panel_note">Gli URL degli avatar personalizzati possono essere configurati dal pannello web di Nuvio.</string>

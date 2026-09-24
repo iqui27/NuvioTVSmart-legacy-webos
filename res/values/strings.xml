@@ -545,6 +545,8 @@
     <string name="playback_section_general_desc">Core playback behavior.</string>
     <string name="playback_loading_overlay">Loading Overlay</string>
     <string name="playback_loading_overlay_sub">Show loading screen until first video frame appears.</string>
+    <string name="playback_minimal_buffering_ui">Minimal Buffering UI</string>
+    <string name="playback_minimal_buffering_ui_sub">Show only the spinner when playback buffers after it has started.</string>
     <string name="playback_pause_overlay">Pause Overlay</string>
     <string name="playback_pause_overlay_sub">Show details overlay after 5 seconds while paused.</string>
     <string name="playback_show_clock_sub">Show current time and end time while controls are visible.</string>
@@ -561,6 +563,8 @@
     <string name="auto_skip_recap_sub">Skip recap segments automatically.</string>
     <string name="auto_skip_outro">Outro / Ending</string>
     <string name="auto_skip_outro_sub">Skip outros and anime endings automatically.</string>
+    <string name="auto_skip_movie_credits">Movie Credits</string>
+    <string name="auto_skip_movie_credits_sub">Skip movie credits automatically.</string>
     <string name="playback_auto_frame_rate">Auto Frame Rate &amp; Resolution</string>
     <string name="playback_section_player">Player &amp; Stream Selection</string>
     <string name="playback_section_player_desc">Player preference, auto-play, and source filtering.</string>
@@ -1538,6 +1542,7 @@
     <string name="subtitle_style_bottom_offset">Bottom Offset</string>
     <string name="subtitle_style_defaults">Defaults</string>
     <string name="subtitle_style_unavailable_native">Unavailable with native subtitles</string>
+    <string name="subtitle_style_preserves_ass">ASS/SSA styles are preserved</string>
     <string name="subtitle_style_on">On</string>
     <string name="subtitle_style_off">Off</string>
     <string name="subtitle_style_weight">Weight</string>
@@ -1569,6 +1574,8 @@
     <string name="skip_ending">Skip Ending</string>
     <string name="skip_recap">Skip Recap</string>
     <string name="skip_generic">Skip</string>
+    <string name="skip_movie_credits">Skip Movie Credits</string>
+    <string name="skip_to_post_credits">Skip to Post-Credits</string>
     <string name="display_mode_refresh">Refresh</string>
     <string name="display_mode_resolution">Resolution</string>
     <string name="search_keyboard_hint">Press Done on the keyboard to search</string>
