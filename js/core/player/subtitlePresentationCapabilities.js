@@ -9,16 +9,32 @@ const SUBTITLE_STYLE_CONTROL_IDS = [
   "verticalOffset",
   "reset"
 ];
+const ASS_STYLE_CONTROL_IDS = [
+  "fontSize",
+  "bold",
+  "textColor",
+  "textOpacity",
+  "outlineEnabled",
+  "outlineColor",
+  "verticalOffset",
+  "reset"
+];
 
 export function resolveSubtitleStyleControlAvailability({
   isTizenAvPlay = false,
   isWebOsNative = false,
   rendererMode = "none",
-  supportsExternalDelay = false
+  supportsExternalDelay = false,
+  preserveAssStyles = false
 } = {}) {
   const availability = Object.fromEntries(
     SUBTITLE_STYLE_CONTROL_IDS.map((controlId) => [controlId, true])
   );
+  if (preserveAssStyles) {
+    ASS_STYLE_CONTROL_IDS.forEach((controlId) => {
+      availability[controlId] = false;
+    });
+  }
   if (isWebOsNative && !["html", "html-callback"].includes(rendererMode)) {
     availability.textOpacity = false;
   }
@@ -41,7 +57,7 @@ export function resolveSubtitleStyleControlAvailability({
       availability[controlId] = false;
     });
     availability.delay = Boolean(supportsExternalDelay);
-    availability.reset = availability.delay;
+    availability.reset = preserveAssStyles ? false : availability.delay;
   }
   return availability;
 }

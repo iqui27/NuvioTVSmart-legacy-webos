@@ -6426,7 +6426,21 @@ export const SettingsScreen = {
         ${Platform.isWebOS() ? this.renderToggleRow({ focusKey: "playback:minimalBufferingUi", title: t("playback_minimal_buffering_ui", {}, "Minimal buffering UI"), subtitle: t("playback_minimal_buffering_ui_sub", {}, "Show only the spinner when playback buffers after it has started"), checked: Boolean(model.player.minimalBufferingUiEnabled) }) : ""}
         ${this.renderToggleRow({ focusKey: "playback:pauseOverlay", title: t("playback_pause_overlay"), subtitle: t("playback_pause_overlay_sub"), checked: model.player.pauseOverlayEnabled !== false })}
         ${this.renderToggleRow({ focusKey: "playback:parentalGuide", title: t("playback_parental_guide"), subtitle: t("playback_parental_guide_sub"), checked: model.player.parentalGuideEnabled !== false })}
-        ${["intro", "recap", "outro", "movie-credits"].map((type) => this.renderToggleRow({ focusKey: `playback:autoSkip:${type}`, title: t(`auto_skip_${type}`, {}, `Auto-skip ${type}`), subtitle: t(`auto_skip_${type}_sub`, {}, `Skip ${type} segments automatically`), checked: model.player.autoSkipSegmentTypes?.includes(type) })).join("")}
+        ${["intro", "recap", "outro", "movie-credits"]
+          .map((type) => {
+            const translationType = type.replace(/-/g, "_");
+            return this.renderToggleRow({
+              focusKey: `playback:autoSkip:${type}`,
+              title: t(`auto_skip_${translationType}`, {}, `Auto-skip ${type}`),
+              subtitle: t(
+                `auto_skip_${translationType}_sub`,
+                {},
+                `Skip ${type} segments automatically`
+              ),
+              checked: model.player.autoSkipSegmentTypes?.includes(type)
+            });
+          })
+          .join("")}
         ${this.renderToggleRow({
           focusKey: "playback:osdClock",
           title: t("playback_osd_clock", {}, "OSD Clock"),

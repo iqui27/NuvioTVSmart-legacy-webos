@@ -20118,6 +20118,21 @@ export const PlayerScreen = {
 
   getSubtitleStyleControls() {
     const style = this.subtitleStyleSettings || {};
+    const selectedEmbeddedTrack = this.webOsEmbeddedTextSubtitleTrack;
+    const embeddedAssStyleManaged = Boolean(
+      Environment.isWebOS() &&
+      Number(this.selectedEmbeddedSubtitleTrackIndex) >= 0 &&
+      selectedEmbeddedTrack &&
+      (isAssSubtitleCodec(selectedEmbeddedTrack.codec) ||
+        isAssSubtitleCodec(selectedEmbeddedTrack.codec_name) ||
+        isAssSubtitleCodec(selectedEmbeddedTrack.codecId) ||
+        /\bASS\b|\bSSA\b/i.test(String(selectedEmbeddedTrack.name || "")))
+    );
+    const assStylesManaged = Boolean(
+      this.webOsEmbeddedTextSubtitleUsingAss ||
+      this.isAssAddonSubtitleActive() ||
+      embeddedAssStyleManaged
+    );
     const htmlRendererActive = Boolean(
       this.webOsEmbeddedTextSubtitleUsingAss ||
       this.isAssAddonSubtitleActive() ||
@@ -20136,11 +20151,18 @@ export const PlayerScreen = {
       isTizenAvPlay: usingTizenAvPlay,
       isWebOsNative: usingWebOsNative,
       rendererMode,
-      supportsExternalDelay: PlayerController.supportsAvPlayExternalSubtitleDelay?.() === true
+      supportsExternalDelay: PlayerController.supportsAvPlayExternalSubtitleDelay?.() === true,
+      preserveAssStyles: assStylesManaged
     });
-    const unavailableValue = TizenCapabilities.isAdvancedSubtitleStylingLimited()
-      ? t("player_subtitle_tizen_advanced_unavailable_short", {}, "Not fully supported on this TV")
-      : t("subtitle_style_unavailable_native", {}, "Unavailable with native subtitles");
+    const unavailableValue = assStylesManaged
+      ? t("subtitle_style_preserves_ass", {}, "ASS/SSA styles are preserved")
+      : TizenCapabilities.isAdvancedSubtitleStylingLimited()
+        ? t(
+            "player_subtitle_tizen_advanced_unavailable_short",
+            {},
+            "Not fully supported on this TV"
+          )
+        : t("subtitle_style_unavailable_native", {}, "Unavailable with native subtitles");
     return [
       {
         id: "delay",
