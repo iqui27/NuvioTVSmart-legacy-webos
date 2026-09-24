@@ -250,7 +250,8 @@ function testModelsAndSecurity() {
     method: "PATCH"
   });
   assert.equal(normalizedPatch.ok, true);
-  assert.equal(normalizedPatch.method, "GET");
+  assert.equal(normalizedPatch.method, "PATCH");
+  assert.equal(normalizedPatch.headers["Content-Type"], "application/json");
   assert.equal(
     validatePluginFetchRequest(
       { url: "https://example.com", body: "123456789" },
