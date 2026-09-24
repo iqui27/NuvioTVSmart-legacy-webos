@@ -24,6 +24,8 @@ let pushAgainRequested = false;
 const pushStateByProfile = new Map();
 let lastPullStatus = "idle";
 let lastPullHadUnsynced = false;
+let lastPullChangedHomeInputs = false;
+let homeInputChangeRevision = 0;
 
 function pushStateForProfile(profileId) {
   const key = String(profileId || "1");
@@ -70,6 +72,10 @@ function progressContentSignature(item = {}) {
   ]);
 }
 
+function homeProgressSnapshotSignature(items = []) {
+  return buildPushSignature(buildRemoteProgressEntries(coalesceSyncItems(items)));
+}
+
 function itemsByProgressKey(items = []) {
   return new Map(normalizeProgressItems(items).map((item) => [progressKey(item), item]));
 }
@@ -104,29 +110,83 @@ function readSyncState() {
   return state && typeof state === "object" ? state : {};
 }
 
-function readBaselineItems(profileId) {
+function readProfileSyncState(profileId) {
   const state = readSyncState();
   const profileState = state[String(profileId)] || {};
-  return normalizeProgressItems(profileState.remoteSnapshot || []);
+  return profileState && typeof profileState === "object" ? profileState : {};
 }
 
-function writeBaselineItems(profileId, items = []) {
+function readPendingDeleteKeys(profileId) {
+  const profileState = readProfileSyncState(profileId);
+  return new Set(
+    (Array.isArray(profileState.pendingDeleteKeys) ? profileState.pendingDeleteKeys : [])
+      .map((key) => String(key || "").trim())
+      .filter(Boolean)
+  );
+}
+
+function writeProfileSyncState(profileId, patch = {}) {
   const state = readSyncState();
-  state[String(profileId)] = {
-    remoteSnapshot: normalizeProgressItems(items),
+  const profileKey = String(profileId);
+  state[profileKey] = {
+    ...(state[profileKey] || {}),
+    ...patch,
     updatedAt: Date.now()
   };
   LocalStore.set(SYNC_STATE_KEY, state);
 }
 
-function mergeProgressItems(localItems = [], remoteItems = [], baselineItems = []) {
+function writePendingDeleteKeys(profileId, keys = []) {
+  writeProfileSyncState(profileId, {
+    pendingDeleteKeys: Array.from(
+      new Set(keys.map((key) => String(key || "").trim()).filter(Boolean))
+    )
+  });
+}
+
+function addPendingDeleteKeys(profileId, keys = []) {
+  const pending = readPendingDeleteKeys(profileId);
+  keys.forEach((key) => {
+    const normalized = String(key || "").trim();
+    if (normalized) {
+      pending.add(normalized);
+    }
+  });
+  writePendingDeleteKeys(profileId, Array.from(pending));
+}
+
+function removePendingDeleteKeys(profileId, keys = []) {
+  const pending = readPendingDeleteKeys(profileId);
+  keys.forEach((key) => pending.delete(String(key || "").trim()));
+  writePendingDeleteKeys(profileId, Array.from(pending));
+}
+
+function readBaselineItems(profileId) {
+  const profileState = readProfileSyncState(profileId);
+  return normalizeProgressItems(profileState.remoteSnapshot || []);
+}
+
+function writeBaselineItems(profileId, items = []) {
+  writeProfileSyncState(profileId, { remoteSnapshot: normalizeProgressItems(items) });
+}
+
+function mergeProgressItems(
+  localItems = [],
+  remoteItems = [],
+  baselineItems = [],
+  pendingDeleteKeys = []
+) {
   const localByKey = itemsByProgressKey(localItems);
   const remoteByKey = itemsByProgressKey(remoteItems);
   const baselineByKey = itemsByProgressKey(baselineItems);
+  const pendingDeleteSet = new Set(pendingDeleteKeys);
   const keys = new Set([...localByKey.keys(), ...remoteByKey.keys(), ...baselineByKey.keys()]);
   const merged = [];
 
   keys.forEach((key) => {
+    if (pendingDeleteSet.has(key)) {
+      return;
+    }
     const localItem = localByKey.get(key) || null;
     const remoteItem = remoteByKey.get(key) || null;
     const baselineItem = baselineByKey.get(key) || null;
@@ -155,12 +215,12 @@ function mergeProgressItems(localItems = [], remoteItems = [], baselineItems = [
     }
 
     if (remoteItem && !localItem) {
-      const remoteChanged =
-        baselineItem &&
-        progressContentSignature(remoteItem) !== progressContentSignature(baselineItem);
-      if (!baselineItem || remoteChanged) {
-        merged.push(remoteItem);
-      }
+      // Android rehydrates every row returned by the remote snapshot when the
+      // local entry is missing. The baseline is only the last observed remote
+      // snapshot; treating an unchanged row as a local deletion loses progress
+      // after a local store reset or partial corruption. Explicit deletions are
+      // protected by a pending-delete key until their remote mutation succeeds.
+      merged.push(remoteItem);
       return;
     }
 
@@ -460,6 +520,26 @@ function buildDeleteKeys(items = []) {
   return Array.from(keys);
 }
 
+async function deleteRemoteProgressKeys(keys = [], profileId = null) {
+  const normalizedKeys = Array.from(
+    new Set(
+      (Array.isArray(keys) ? keys : []).map((key) => String(key || "").trim()).filter(Boolean)
+    )
+  );
+  if (!normalizedKeys.length) {
+    return;
+  }
+  await SupabaseApi.rpc(
+    DELETE_RPC,
+    {
+      p_profile_id: resolveProfileId(profileId),
+      p_keys: normalizedKeys,
+      p_origin_client_id: getSyncClientId()
+    },
+    true
+  );
+}
+
 function buildPushSignature(rows = []) {
   return JSON.stringify(
     (Array.isArray(rows) ? rows : []).map((row) => [
@@ -481,9 +561,20 @@ async function pushOnce(profileId = null) {
     if (!AuthManager.isAuthenticated) {
       return false;
     }
-    const items = coalesceSyncItems(await watchProgressRepository.getAll(resolvedProfileId)).filter(
-      (item) => isSyncableProgressItem(item)
-    );
+    const localItems = coalesceSyncItems(await watchProgressRepository.getAll(resolvedProfileId));
+    const localKeys = new Set(localItems.map((item) => progressKey(item)));
+    const pendingDeleteKeys = readPendingDeleteKeys(resolvedProfileId);
+    const canceledDeleteKeys = Array.from(pendingDeleteKeys).filter((key) => localKeys.has(key));
+    if (canceledDeleteKeys.length) {
+      canceledDeleteKeys.forEach((key) => pendingDeleteKeys.delete(key));
+      writePendingDeleteKeys(resolvedProfileId, Array.from(pendingDeleteKeys));
+    }
+    const retryDeleteKeys = Array.from(pendingDeleteKeys);
+    if (retryDeleteKeys.length) {
+      await deleteRemoteProgressKeys(retryDeleteKeys, resolvedProfileId);
+      removePendingDeleteKeys(resolvedProfileId, retryDeleteKeys);
+    }
+    const items = localItems.filter((item) => isSyncableProgressItem(item));
     const rows = buildRemoteProgressEntries(items);
     pushSignature = buildPushSignature(rows);
     if (!rows.length) {
@@ -537,6 +628,18 @@ export const WatchProgressSyncService = {
     return lastPullHadUnsynced;
   },
 
+  getLastPullChangedHomeInputs() {
+    return lastPullChangedHomeInputs;
+  },
+
+  getHomeInputChangeRevision() {
+    return homeInputChangeRevision;
+  },
+
+  resetLastPullChangedHomeInputs() {
+    lastPullChangedHomeInputs = false;
+  },
+
   async pull(profileId = null) {
     if (isSyncBackoffActive()) {
       lastPullStatus = "deferred";
@@ -557,6 +660,22 @@ export const WatchProgressSyncService = {
       }
       const resolvedProfileId = resolveProfileId(profileId);
       localItems = await watchProgressRepository.getAll(resolvedProfileId);
+      const pendingDeleteKeys = readPendingDeleteKeys(resolvedProfileId);
+      const localKeys = new Set(localItems.map((item) => progressKey(item)));
+      const canceledDeleteKeys = Array.from(pendingDeleteKeys).filter((key) => localKeys.has(key));
+      if (canceledDeleteKeys.length) {
+        canceledDeleteKeys.forEach((key) => pendingDeleteKeys.delete(key));
+        writePendingDeleteKeys(resolvedProfileId, Array.from(pendingDeleteKeys));
+      }
+      const retryDeleteKeys = Array.from(pendingDeleteKeys);
+      if (retryDeleteKeys.length) {
+        try {
+          await deleteRemoteProgressKeys(retryDeleteKeys, resolvedProfileId);
+          removePendingDeleteKeys(resolvedProfileId, retryDeleteKeys);
+        } catch (error) {
+          console.warn("Watch progress pending delete retry failed", error);
+        }
+      }
       const rows = await SupabaseApi.rpc(PULL_RPC, { p_profile_id: resolvedProfileId }, true);
       if (!Array.isArray(rows)) {
         const error = new Error("Watch progress sync returned an invalid snapshot");
@@ -583,14 +702,31 @@ export const WatchProgressSyncService = {
         lastPullHadUnsynced = false;
         return localItems;
       }
+      const remoteKeys = new Set(snapshotItems.map((item) => progressKey(item)));
+      const confirmedDeleteKeys = Array.from(readPendingDeleteKeys(resolvedProfileId)).filter(
+        (key) => !remoteKeys.has(key)
+      );
+      if (confirmedDeleteKeys.length) {
+        removePendingDeleteKeys(resolvedProfileId, confirmedDeleteKeys);
+      }
       const baselineItems = readBaselineItems(resolvedProfileId);
-      const mergedItems = mergeProgressItems(localItems, snapshotItems, baselineItems);
+      const mergedItems = mergeProgressItems(
+        localItems,
+        snapshotItems,
+        baselineItems,
+        readPendingDeleteKeys(resolvedProfileId)
+      );
       const remoteSignature = buildPushSignature(
         buildRemoteProgressEntries(coalesceSyncItems(snapshotItems))
       );
       const mergedSignature = buildPushSignature(
         buildRemoteProgressEntries(coalesceSyncItems(mergedItems))
       );
+      const didChangeHomeInputs = homeProgressSnapshotSignature(localItems) !== mergedSignature;
+      lastPullChangedHomeInputs = lastPullChangedHomeInputs || didChangeHomeInputs;
+      if (didChangeHomeInputs) {
+        homeInputChangeRevision += 1;
+      }
       lastPullHadUnsynced = mergedSignature !== remoteSignature;
       writeBaselineItems(resolvedProfileId, snapshotItems);
       pushStateForProfile(resolvedProfileId).lastSuccessfulPushSignature = remoteSignature;
@@ -599,6 +735,7 @@ export const WatchProgressSyncService = {
       return mergedItems;
     } catch (error) {
       lastPullStatus = "error";
+      lastPullChangedHomeInputs = true;
       console.warn("Watch progress sync pull failed", error);
       return localItems;
     }
@@ -628,8 +765,10 @@ export const WatchProgressSyncService = {
 
   async deleteItems(items = [], profileId = null) {
     try {
-      if (isSyncBackoffActive()) {
-        return false;
+      const resolvedProfileId = resolveProfileId(profileId);
+      const keys = buildDeleteKeys(items);
+      if (!keys.length) {
+        return true;
       }
       if (!AuthManager.isAuthenticated) {
         return false;
@@ -637,20 +776,12 @@ export const WatchProgressSyncService = {
       if (!shouldUseSupabaseWatchProgressSync()) {
         return true;
       }
-      const resolvedProfileId = resolveProfileId(profileId);
-      const keys = buildDeleteKeys(items);
-      if (!keys.length) {
-        return true;
+      addPendingDeleteKeys(resolvedProfileId, keys);
+      if (isSyncBackoffActive()) {
+        return false;
       }
-      await SupabaseApi.rpc(
-        DELETE_RPC,
-        {
-          p_profile_id: resolvedProfileId,
-          p_keys: keys,
-          p_origin_client_id: getSyncClientId()
-        },
-        true
-      );
+      await deleteRemoteProgressKeys(keys, resolvedProfileId);
+      removePendingDeleteKeys(resolvedProfileId, keys);
       const baselineByKey = itemsByProgressKey(readBaselineItems(resolvedProfileId));
       normalizeProgressItems(items).forEach((item) => {
         baselineByKey.delete(progressKey(item));

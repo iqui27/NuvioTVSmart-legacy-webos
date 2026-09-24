@@ -217,11 +217,10 @@ function isAddonRemoteMode() {
 }
 
 async function shouldShowProfileSelection() {
-  const [, pinStates] = await Promise.all([
-    ProfileSyncService.pull(),
+  const [profiles, pinStates] = await Promise.all([
+    ProfileManager.getProfiles(),
     ProfileSyncService.pullProfileLockStates()
   ]);
-  const profiles = await ProfileManager.getProfiles();
   const activeProfileId = ProfileManager.getActiveProfileId();
   const activeProfileHasPin = Boolean(
     pinStates?.[String(activeProfileId)] || pinStates?.[Number(activeProfileId)]

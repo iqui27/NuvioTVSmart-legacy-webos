@@ -1,0 +1,8 @@
+@@ -529,6 +529,7 @@
+   pushTimers: new Map(),
+   completedInitialPullTokens: new Set(),
+   syncGeneration: 0,
++  lastPullFailed: false,
+   ...createHomeCatalogSettingsSyncServiceMethods01()
+ };
+ 
