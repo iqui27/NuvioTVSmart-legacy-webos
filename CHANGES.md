@@ -4,10 +4,14 @@ Required by the GNU General Public License v3.0, §5(a): a modified work must
 carry prominent notices stating that it was changed, and the date of the change.
 
 - **Upstream project:** [NuvioMedia/NuvioTVSmart](https://github.com/NuvioMedia/NuvioTVSmart)
-- **Base version:** upstream tag `0.3.42` (merged 2026-08-24)
-- **Earlier base:** upstream tag `0.3.38-beta` (commit `0d74fc6`)
+- **Base version:** upstream tag `1.2.0` (ported 2026-09-24). From `1.1.3` on,
+  upstream releases are ported selectively — fixes, performance and features —
+  and the `1.1.4` module split is not absorbed; fixes written against the split
+  files are mapped back onto this fork's single-file modules.
+- **Earlier bases:** upstream tags `0.3.42` (merged 2026-08-24) and `0.3.38-beta`
+  (commit `0d74fc6`)
 - **Modified by:** hrocha
-- **Dates of modification:** 2026-08-22 to 2026-08-24
+- **Dates of modification:** 2026-08-22 to 2026-09-25
 - **License:** unchanged, GPL-3.0. `LICENSE` is byte-identical to upstream.
 
 Everything below was measured on an **LG OLED65C9PSA**, firmware `05.50.00`,
